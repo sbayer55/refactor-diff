@@ -13,7 +13,11 @@ const state = {
   filters: { hidden: new Set(), hideDocs: false, exclude: [] },
   view: null, // the report as filtered by state.filters; see applyFilters()
   fileDiffs: new Map(), // path -> Promise of the whole-file diff (see /api/report/{id}/file)
+  split: false, // side-by-side diffs (preference; see splitActive())
 };
+
+// Side-by-side needs room for two code columns; narrower windows always get unified diffs.
+const narrowQuery = window.matchMedia("(max-width: 760px)");
 
 const CTX_STEP = 10; // lines revealed per "show more" click
 const CTX_PAD = 5; // lines of context shown when context is first opened
@@ -202,6 +206,8 @@ function renderFilters() {
       <input id="exclude-input" type="text" spellcheck="false" value="${esc(f.exclude.join(", "))}"
         placeholder="globs, e.g. migrations, *_pb2.py, src/legacy/**">
     </label>
+    <span class="spacer"></span>
+    ${layoutToggle()}
     ${filtersActive() ? `<span class="hidden-note">${plural(v.hiddenUnits, "change")} hidden</span>
       <button type="button" class="link" id="reset-filters">Reset</button>` : ""}`;
 
@@ -213,6 +219,7 @@ function renderFilters() {
       rerender();
     });
   }
+  bindLayoutToggle(el);
   $("#docs-toggle").addEventListener("click", () => {
     f.hideDocs = !f.hideDocs;
     saveFilters();
@@ -455,27 +462,130 @@ function hunkRows(h) {
 
 // Rows for a list of diff lines ({t, o, n, text, unit, hl}). Lines of units that a pattern
 // explains (or that filters hide) are dimmed, except the units in `focus`.
-function diffRows(lines, { tags = false, focus = null } = {}) {
-  const r = state.report;
+function diffRows(lines, opts = {}) {
+  return splitActive() ? splitRows(lines, opts) : unifiedRows(lines, opts);
+}
+
+function lineState(ln, focus) {
+  const unit = ln.unit ? state.report.units[ln.unit] : null;
+  const hidden = Boolean(unit) && !state.view.units.has(unit.id);
+  const focused = Boolean(unit && focus && focus.has(unit.id));
+  return {
+    unit,
+    hidden,
+    focused,
+    cls: ln.t === "-" ? "del" : ln.t === "+" ? "add" : "ctx",
+    dim: Boolean(unit) && !focused && (unit.explained || hidden),
+  };
+}
+
+// Pattern tags go above the first line of each unit that isn't dimmed-out or focused.
+// `lead` empty cells line the tags up with the code column, which spans `span` columns.
+function tagRow(st, tagged, lead, span) {
+  if (!st.unit || st.hidden || st.focused || tagged.has(st.unit.id)) return "";
+  tagged.add(st.unit.id);
+  const t = unitTags(st.unit);
+  return t ? `<tr class="tags">${"<td></td>".repeat(lead)}<td colspan="${span}">${t}</td></tr>` : "";
+}
+
+// `anchors` adds data-o / data-n line attributes and marks where each run of changes starts
+// (used by the file viewer for jumping to a line and between changes).
+function unifiedRows(lines, { tags = false, focus = null, anchors = false } = {}) {
   const tagged = new Set();
   let rows = "";
+  let prevChanged = false;
   for (const ln of lines) {
-    const unit = ln.unit ? r.units[ln.unit] : null;
-    const hidden = unit && !state.view.units.has(unit.id);
-    const focused = unit && focus && focus.has(unit.id);
-    if (tags && unit && !hidden && !focused && !tagged.has(unit.id)) {
-      tagged.add(unit.id);
-      const t = unitTags(unit);
-      if (t) rows += `<tr class="tags"><td></td><td></td><td></td><td>${t}</td></tr>`;
-    }
-    const cls = ln.t === "-" ? "del" : ln.t === "+" ? "add" : "ctx";
-    const dim = unit && !focused && (unit.explained || hidden) ? " explained" : "";
-    rows += `<tr class="${cls}${dim}${focused ? " focus" : ""}">
+    const st = lineState(ln, focus);
+    if (tags) rows += tagRow(st, tagged, 3, 1);
+    const changed = ln.t !== " ";
+    const attrs = anchors ? anchorAttrs(ln.o, ln.n) : "";
+    rows += `<tr class="${st.cls}${st.dim ? " explained" : ""}${st.focused ? " focus" : ""}${
+      anchors && changed && !prevChanged ? " chg-start" : ""}"${attrs}>
       <td class="no">${ln.o ?? ""}</td><td class="no">${ln.n ?? ""}</td>
       <td class="sign">${ln.t === " " ? "" : ln.t}</td>
       <td class="text">${highlight(ln.text, ln.hl)}</td></tr>`;
+    prevChanged = changed;
   }
   return rows;
+}
+
+// Side by side: removed lines on the left, added lines on the right, paired in order within
+// each block of changes; unchanged lines appear on both sides.
+function splitRows(lines, { tags = false, focus = null, anchors = false } = {}) {
+  const tagged = new Set();
+  let rows = "";
+  let prevChanged = false;
+  const cell = (ln, side) => {
+    if (!ln) return `<td class="no"></td><td class="side empty"></td>`;
+    const st = lineState(ln, focus);
+    return `<td class="no">${side === "old" ? ln.o : ln.n}</td><td class="side ${st.cls}${
+      st.dim ? " explained" : ""}${st.focused ? " focus" : ""}">${highlight(ln.text, ln.hl)}</td>`;
+  };
+  for (const [left, right] of pairLines(lines)) {
+    if (tags) {
+      for (const ln of left === right ? [left] : [left, right].filter(Boolean)) {
+        rows += tagRow(lineState(ln, focus), tagged, 1, 3);
+      }
+    }
+    const changed = left !== right;
+    const attrs = anchors ? anchorAttrs(left?.o, right?.n) : "";
+    rows += `<tr class="split-row${anchors && changed && !prevChanged ? " chg-start" : ""}"${attrs}>${
+      cell(left, "old")}${cell(right, "new")}</tr>`;
+    prevChanged = changed;
+  }
+  return rows;
+}
+
+function pairLines(lines) {
+  const pairs = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (lines[i].t === " ") {
+      pairs.push([lines[i], lines[i]]);
+      i++;
+      continue;
+    }
+    const dels = [], adds = [];
+    while (i < lines.length && lines[i].t === "-") dels.push(lines[i++]);
+    while (i < lines.length && lines[i].t === "+") adds.push(lines[i++]);
+    for (let k = 0; k < Math.max(dels.length, adds.length); k++) pairs.push([dels[k] || null, adds[k] || null]);
+  }
+  return pairs;
+}
+
+function anchorAttrs(o, n) {
+  return `${o ? ` data-o="${o}"` : ""}${n ? ` data-n="${n}"` : ""}`;
+}
+
+// ---------- diff layout (unified / side by side) ----------
+
+function splitActive() {
+  return state.split && !narrowQuery.matches;
+}
+
+function loadLayout() {
+  try { state.split = localStorage.getItem("refactor-diff:layout") === "split"; } catch {}
+}
+
+function setSplit(on) {
+  state.split = on;
+  try { localStorage.setItem("refactor-diff:layout", on ? "split" : "unified"); } catch {}
+  rerender();
+}
+
+function layoutToggle() {
+  const narrow = narrowQuery.matches;
+  const split = splitActive();
+  return `<div class="layout-toggle" role="group" aria-label="Diff layout">
+    <button type="button" data-layout="unified" aria-pressed="${!split}">Unified</button>
+    <button type="button" data-layout="split" aria-pressed="${split}" ${narrow ? 'disabled title="Window too narrow for side-by-side"' : 'title="Side-by-side diff"'}>Split</button>
+  </div>`;
+}
+
+function bindLayoutToggle(root) {
+  for (const b of root.querySelectorAll("[data-layout]")) {
+    b.addEventListener("click", () => setSplit(b.dataset.layout === "split"));
+  }
 }
 
 // ---------- whole-file diffs: context, original and new versions ----------
@@ -724,17 +834,14 @@ async function renderFileView(path, mode, line) {
   const counts = mode === "old" ? plural(fd.old_lines, "line") : mode === "new" ? plural(fd.new_lines, "line")
     : `<span class="adds">+${fd.lines.filter((l) => l.t === "+").length}</span> <span class="dels">−${fd.lines.filter((l) => l.t === "-").length}</span>`;
 
-  let body = "";
+  let body = mode === "diff" ? diffRows(rows, { anchors: true }) : "";
   let prevChanged = false;
-  for (const ln of rows) {
+  for (const ln of mode === "diff" ? [] : rows) {
     const changed = ln.t !== " ";
-    const num = mode === "old" ? ln.o : mode === "new" ? ln.n : null;
+    const num = mode === "old" ? ln.o : ln.n;
     const cls = ln.t === "-" ? "del" : ln.t === "+" ? "add" : "ctx";
-    const unit = ln.unit ? state.report.units[ln.unit] : null;
-    const dim = mode === "diff" && unit && (unit.explained || !state.view.units.has(unit.id)) ? " explained" : "";
-    const anchor = `${ln.o ? ` data-o="${ln.o}"` : ""}${ln.n ? ` data-n="${ln.n}"` : ""}`;
-    body += `<tr class="${cls}${dim}${changed && !prevChanged ? " chg-start" : ""}"${anchor}>
-      ${mode === "diff" ? `<td class="no">${ln.o ?? ""}</td><td class="no">${ln.n ?? ""}</td>` : `<td class="no">${num}</td>`}
+    body += `<tr class="${cls}${changed && !prevChanged ? " chg-start" : ""}"${anchorAttrs(ln.o, ln.n)}>
+      <td class="no">${num}</td>
       <td class="sign">${ln.t === " " ? "" : ln.t}</td>
       <td class="text">${highlight(ln.text, ln.hl)}</td></tr>`;
     prevChanged = changed;
@@ -752,6 +859,7 @@ async function renderFileView(path, mode, line) {
     </div>
     <div class="viewer-bar">
       <nav class="tabs" aria-label="File version">${tabs}</nav>
+      ${mode === "diff" ? layoutToggle() : ""}
       <span class="spacer"></span>
       <button type="button" class="toggle" data-jump="prev" title="Previous change (p)">↑ Prev change</button>
       <button type="button" class="toggle" data-jump="next" title="Next change (n)">↓ Next change</button>
@@ -759,6 +867,7 @@ async function renderFileView(path, mode, line) {
     ${empty || `<section class="file viewer"><table class="diff">${body}</table></section>`}`;
 
   $("#back-btn").addEventListener("click", () => history.back());
+  bindLayoutToggle(content);
   for (const b of content.querySelectorAll("[data-jump]")) {
     b.addEventListener("click", () => jumpChange(b.dataset.jump === "next" ? 1 : -1));
   }
@@ -810,6 +919,8 @@ async function init() {
   }
   $("#source-form").addEventListener("submit", runAnalysis);
   $("#content").addEventListener("click", onContentClick);
+  loadLayout();
+  narrowQuery.addEventListener("change", () => { if (state.report) rerender(); });
   window.addEventListener("hashchange", route);
 
   let defaults = {};

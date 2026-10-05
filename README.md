@@ -68,6 +68,10 @@ refactor-diff main..HEAD --hide tests,comments --exclude migrations
   whole-file viewer at that line. Switch between the base version, the head version and the
   complete diff of the file; the line stays in view. Use **↑ Prev change / ↓ Next change** or
   the `p` / `n` keys to move between changes.
+- **Unified / Split**: switch every diff on the page (review hunks, pattern occurrences,
+  context and the full-file diff) between unified and side-by-side layout. The toggle is at
+  the right of the filter bar and in the file viewer. Your choice is remembered; windows
+  narrower than 760px always use unified.
 
 ### Filtering
 
