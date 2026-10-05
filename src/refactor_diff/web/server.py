@@ -17,12 +17,14 @@ from starlette.staticfiles import StaticFiles
 
 from refactor_diff import sources
 from refactor_diff.engine import analyze
+from refactor_diff.fileview import file_diff
+from refactor_diff.model import Report
 
 STATIC = Path(__file__).parent / "static"
 
 
 def create_app(repo: Path, defaults: dict | None = None) -> Starlette:
-    reports: dict[str, dict] = {}
+    reports: dict[str, Report] = {}
 
     async def index(request: Request):
         return FileResponse(STATIC / "index.html")
@@ -51,16 +53,23 @@ def create_app(repo: Path, defaults: dict | None = None) -> Starlette:
             )
         except sources.SourceError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
-        data = report.to_dict()
-        reports[report.id] = data
-        return JSONResponse(data)
+        reports[report.id] = report
+        return JSONResponse(report.to_dict())
 
     async def get_report(request: Request):
-        data = reports.get(request.path_params["report_id"])
+        report = reports.get(request.path_params["report_id"])
+        if report is None:
+            return _unknown_report()
+        return JSONResponse(report.to_dict())
+
+    async def get_file(request: Request):
+        """Whole-file diff of one changed file in a report (``?path=``)."""
+        report = reports.get(request.path_params["report_id"])
+        if report is None:
+            return _unknown_report()
+        data = file_diff(report, request.query_params.get("path", ""))
         if data is None:
-            return JSONResponse(
-                {"error": "Unknown report; run the analysis again."}, status_code=404
-            )
+            return JSONResponse({"error": "That file is not part of this diff."}, status_code=404)
         return JSONResponse(data)
 
     return Starlette(
@@ -70,6 +79,11 @@ def create_app(repo: Path, defaults: dict | None = None) -> Starlette:
             Route("/api/sources", list_sources),
             Route("/api/analyze", run_analysis, methods=["POST"]),
             Route("/api/report/{report_id}", get_report),
+            Route("/api/report/{report_id}/file", get_file),
             Mount("/static", StaticFiles(directory=STATIC), name="static"),
         ]
     )
+
+
+def _unknown_report() -> JSONResponse:
+    return JSONResponse({"error": "Unknown report; run the analysis again."}, status_code=404)

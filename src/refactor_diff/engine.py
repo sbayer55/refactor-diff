@@ -45,6 +45,7 @@ def analyze(
     units: dict[str, ChangeUnit] = {}
     hunks: dict[str, Hunk] = {}
     head_analyses: dict[str, FileAnalysis] = {}
+    texts: dict[str, tuple[str, str]] = {}
 
     for change in sorted(changes, key=lambda c: c.path):
         analyzer = analyzer_for(change.path)
@@ -59,6 +60,7 @@ def analyze(
             category=categorize(change.path, analyzed=analyzer is not None),
         )
         files.append(summary)
+        texts[change.path] = (change.old_text, change.new_text)
         if analyzer is None:
             for group in diff_hunks(old_lines, new_lines):
                 for tag, i1, i2, j1, j2 in group:
@@ -92,6 +94,7 @@ def analyze(
         hunks=hunks,
         residual_hunk_ids=residual,
         warnings=warnings,
+        texts=texts,
     )
 
 

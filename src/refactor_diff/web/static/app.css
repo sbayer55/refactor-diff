@@ -239,7 +239,41 @@ button.link:hover { text-decoration: underline; }
 }
 .tag.unique { background: var(--warn-bg); color: var(--warn-fg); }
 .occurrence + .occurrence { border-top: 1px solid var(--border); }
-.occurrence .note { padding: 3px 12px 5px; font-size: 12px; }
+.occ-actions {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; justify-content: flex-end;
+  padding: 3px 12px 4px; font-size: 12px; border-top: 1px dashed var(--border);
+}
+.occ-actions .badge-link { margin-right: auto; }
+
+/* file links in headers and occurrences */
+.file-links { display: inline-flex; gap: 10px; font-family: var(--sans); font-size: 12px; }
+.file > header .file-links { margin-left: 8px; }
+
+/* hunks and context windows */
+.hunk + .hunk { border-top: 1px solid var(--border); }
+.hunk-bar {
+  display: flex; gap: 12px; align-items: center; padding: 2px 12px; background: var(--surface-2);
+  color: var(--muted); font-family: var(--mono); font-size: 11px;
+}
+.hunk-bar .link { font-family: var(--sans); font-size: 12px; }
+.diff tr.expand td { background: var(--surface-2); padding: 2px 12px; font-family: var(--sans); font-size: 12px; }
+.diff tr.focus td.text { box-shadow: inset 2px 0 0 var(--accent); }
+.diff tr.target td { background: var(--warn-bg); }
+.diff tr.target.add td, .diff tr.target.del td { box-shadow: inset 0 0 0 1px var(--warn-fg); }
+
+/* file viewer */
+.viewer-head h2 { font-size: 15px; overflow-wrap: anywhere; }
+.viewer-bar {
+  position: sticky; top: 56px; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 8px 0; margin-bottom: 8px; background: var(--bg);
+}
+.viewer-bar .spacer { flex: 1; }
+.tabs { display: inline-flex; background: var(--surface-2); border-radius: var(--radius); padding: 2px; }
+.tabs .tab { padding: 4px 12px; border-radius: 6px; color: var(--muted); font-size: 13px; text-decoration: none; }
+.tabs .tab[aria-current="page"] { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgb(0 0 0 / 0.12); }
+.tabs .tab.disabled { opacity: 0.45; cursor: not-allowed; }
+.file.viewer { overflow-x: auto; }
+@media (max-width: 860px) { .viewer-bar { top: 0; } }
 .badge-link { font-size: 11px; color: var(--warn-fg); background: var(--warn-bg); padding: 1px 6px; border-radius: 4px; }
 
 .warning {

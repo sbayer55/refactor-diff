@@ -59,6 +59,16 @@ refactor-diff main..HEAD --hide tests,comments --exclude migrations
 - **Warnings**: places where the refactor may be incomplete or inconsistent (see below).
 - **Files**: every changed file, with its status, kind and whether it was analyzed.
 
+### Context and file versions
+
+- **Show context**: in a pattern's occurrence or a Needs review hunk, show the surrounding
+  lines. Use the ↑/↓ controls to reveal 10 more lines at a time, or jump to the start or
+  end of the file. The window never cuts a change in half.
+- **Original / New / Full diff**: links on every file header and occurrence open a
+  whole-file viewer at that line. Switch between the base version, the head version and the
+  complete diff of the file; the line stays in view. Use **↑ Prev change / ↓ Next change** or
+  the `p` / `n` keys to move between changes.
+
 ### Filtering
 
 The filter bar under the summary narrows everything on the page to what you care about. The
@@ -134,6 +144,7 @@ Layout (`src/refactor_diff/`):
 | `grouping.py` | grouping, mechanical threshold, warnings |
 | `categories.py` | file kinds (source, tests, docs, config, other) for filtering |
 | `engine.py` | `analyze()`, which turns a source into a `Report` |
+| `fileview.py` | whole-file diff of one changed file, for context and the old/new viewer |
 | `model.py` | serializable report model with stable IDs |
 | `web/` | Starlette server and the vanilla-JS single-page UI |
 

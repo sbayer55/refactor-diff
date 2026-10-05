@@ -157,6 +157,9 @@ class Report:
     hunks: dict[str, Hunk]
     residual_hunk_ids: list[str]
     warnings: list[Warning]
+    # (old_text, new_text) per path, exactly as analyzed. Kept server-side for the file viewer
+    # so it always lines up with the units (not serialized in to_dict).
+    texts: dict[str, tuple[str, str]] = field(default_factory=dict)
 
     def stats(self) -> dict:
         total = len(self.units)

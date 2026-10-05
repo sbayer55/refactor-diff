@@ -61,3 +61,31 @@ def test_pr_source_uses_gh(rename_repo):
     assert data["source"]["pr"]["number"] == 7
     assert data["source"]["label"] == "#7 Rename get_user"
     assert data["stats"]["residual_units"] == 1
+
+
+def test_file_diff_endpoint(rename_repo):
+    client = TestClient(create_app(rename_repo))
+    report = client.post("/api/analyze", json={"base": "main", "head": "feature"}).json()
+    data = client.get(f"/api/report/{report['id']}/file", params={"path": "api.py"}).json()
+
+    old = [ln["text"] for ln in data["lines"] if ln["t"] != "+"]
+    new = [ln["text"] for ln in data["lines"] if ln["t"] != "-"]
+    main_api = subprocess.run(
+        ["git", "-C", str(rename_repo), "show", "main:api.py"], capture_output=True, text=True
+    ).stdout
+    assert old == main_api.splitlines()
+    assert new == (rename_repo / "api.py").read_text().splitlines()
+    assert len(old) == data["old_lines"] and len(new) == data["new_lines"]
+
+    # Changed lines point at the report's units and carry their highlights.
+    changed = [ln for ln in data["lines"] if ln["t"] != " "]
+    assert changed and all(ln["unit"] in report["units"] for ln in changed)
+    first_add = next(ln for ln in changed if ln["t"] == "+")
+    assert first_add["text"] == "from users import fetch_user" and first_add["hl"] == [[18, 28]]
+
+
+def test_file_diff_unknown_path_is_404(rename_repo):
+    client = TestClient(create_app(rename_repo))
+    report = client.post("/api/analyze", json={"base": "main", "head": "feature"}).json()
+    res = client.get(f"/api/report/{report['id']}/file", params={"path": "nope.py"})
+    assert res.status_code == 404

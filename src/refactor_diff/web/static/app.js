@@ -12,7 +12,11 @@ const state = {
   shown: PAGE,
   filters: { hidden: new Set(), hideDocs: false, exclude: [] },
   view: null, // the report as filtered by state.filters; see applyFilters()
+  fileDiffs: new Map(), // path -> Promise of the whole-file diff (see /api/report/{id}/file)
 };
+
+const CTX_STEP = 10; // lines revealed per "show more" click
+const CTX_PAD = 5; // lines of context shown when context is first opened
 
 const CATEGORIES = [
   ["source", "Source"],
@@ -277,6 +281,7 @@ async function runAnalysis(evt) {
     state.report = report;
     state.groupsByKey = new Map(report.groups.map((g) => [g.key, g]));
     state.shown = PAGE;
+    state.fileDiffs = new Map();
     loadReviewed();
     applyFilters();
     renderSummary();
@@ -378,8 +383,12 @@ function renderSidebar() {
 
 function route(opts) {
   if (!state.report) return;
-  const [view, id] = location.hash.replace(/^#/, "").split("/");
+  const [view, id, ...rest] = location.hash.replace(/^#/, "").split("/");
   renderSidebar();
+  if (view === "file") {
+    renderFileView(decodeURIComponent(id || ""), rest[0] || "diff", rest[1] || "");
+    return;
+  }
   if (view === "group") renderGroup(id);
   else if (view === "warnings") renderWarnings();
   else if (view === "files") renderFiles();
@@ -426,49 +435,151 @@ function renderReview() {
     const residual = hunks.reduce((n, h) =>
       n + h.unit_ids.filter((u) => v.units.has(u) && !r.units[u].explained).length, 0);
     html += `<section class="file"><header><span class="path">${esc(path)}</span>
-      <span class="meta">${plural(residual, "change")}</span></header><table class="diff">`;
-    hunks.forEach((h, i) => {
-      if (i > 0 || h.old_start > 1) html += `<tr class="sep"><td colspan="4">@@ line ${h.new_start} @@</td></tr>`;
-      html += hunkRows(h);
-    });
-    html += "</table></section>";
+      <span class="meta">${plural(residual, "change")}</span>${fileLinks(path)}</header>`;
+    for (const h of hunks) {
+      html += `<div class="hunk" data-hunk="${h.id}">
+        <div class="hunk-bar"><span>@@ line ${h.new_start} @@</span>
+          <button type="button" class="link" data-hunk-context>Show context</button></div>
+        <table class="diff">${hunkRows(h)}</table></div>`;
+    }
+    html += "</section>";
   }
   content.innerHTML = html;
 }
 
 function hunkRows(h) {
+  return diffRows(h.lines.map((ln) => ({
+    t: ln.type, o: ln.old_no, n: ln.new_no, text: ln.text, unit: ln.unit, hl: ln.hl,
+  })), { tags: true });
+}
+
+// Rows for a list of diff lines ({t, o, n, text, unit, hl}). Lines of units that a pattern
+// explains (or that filters hide) are dimmed, except the units in `focus`.
+function diffRows(lines, { tags = false, focus = null } = {}) {
   const r = state.report;
   const tagged = new Set();
   let rows = "";
-  for (const ln of h.lines) {
+  for (const ln of lines) {
     const unit = ln.unit ? r.units[ln.unit] : null;
     const hidden = unit && !state.view.units.has(unit.id);
-    if (unit && !hidden && !tagged.has(unit.id)) {
+    const focused = unit && focus && focus.has(unit.id);
+    if (tags && unit && !hidden && !focused && !tagged.has(unit.id)) {
       tagged.add(unit.id);
-      const tags = unitTags(unit);
-      if (tags) rows += `<tr class="tags"><td></td><td></td><td></td><td>${tags}</td></tr>`;
+      const t = unitTags(unit);
+      if (t) rows += `<tr class="tags"><td></td><td></td><td></td><td>${t}</td></tr>`;
     }
-    const cls = ln.type === "-" ? "del" : ln.type === "+" ? "add" : "ctx";
-    const explained = unit && (unit.explained || hidden) ? " explained" : "";
-    rows += `<tr class="${cls}${explained}">
-      <td class="no">${ln.old_no ?? ""}</td><td class="no">${ln.new_no ?? ""}</td>
-      <td class="sign">${ln.type === " " ? "" : ln.type}</td>
+    const cls = ln.t === "-" ? "del" : ln.t === "+" ? "add" : "ctx";
+    const dim = unit && !focused && (unit.explained || hidden) ? " explained" : "";
+    rows += `<tr class="${cls}${dim}${focused ? " focus" : ""}">
+      <td class="no">${ln.o ?? ""}</td><td class="no">${ln.n ?? ""}</td>
+      <td class="sign">${ln.t === " " ? "" : ln.t}</td>
       <td class="text">${highlight(ln.text, ln.hl)}</td></tr>`;
   }
   return rows;
 }
 
-function unitRows(u) {
+// ---------- whole-file diffs: context, original and new versions ----------
+
+function loadFileDiff(path) {
+  if (!state.fileDiffs.has(path)) {
+    const url = `/api/report/${state.report.id}/file?path=${encodeURIComponent(path)}`;
+    state.fileDiffs.set(path, api(url).catch((e) => { state.fileDiffs.delete(path); throw e; }));
+  }
+  return state.fileDiffs.get(path);
+}
+
+// line is "o12" (old line 12) or "n12" (new line 12)
+function fileHref(path, mode, line) {
+  return `#file/${encodeURIComponent(path)}/${mode}${line ? "/" + line : ""}`;
+}
+
+function fileLinks(path, { oldLine, newLine } = {}) {
+  const f = state.report.files.find((x) => x.path === path);
+  const links = [];
+  if (f && f.status !== "A") links.push(`<a href="${fileHref(path, "old", oldLine && "o" + oldLine)}">Original</a>`);
+  if (f && f.status !== "D") links.push(`<a href="${fileHref(path, "new", newLine && "n" + newLine)}">New</a>`);
+  const at = newLine ? "n" + newLine : oldLine ? "o" + oldLine : "";
+  links.push(`<a href="${fileHref(path, "diff", at)}">Full diff</a>`);
+  return `<span class="file-links">${links.join("")}</span>`;
+}
+
+// A context window: a slice [lo, hi) of a file's whole diff that grows with "show more".
+function renderCtx(box, fd) {
+  // Widen the window so it never cuts through a block of changed lines.
+  const changed = (i) => fd.lines[i] && fd.lines[i].t !== " ";
+  let lo = Number(box.dataset.lo), hi = Number(box.dataset.hi);
+  while (lo > 0 && changed(lo) && changed(lo - 1)) lo--;
+  while (hi < fd.lines.length && changed(hi) && changed(hi - 1)) hi++;
+  box.dataset.lo = lo;
+  box.dataset.hi = hi;
+  const focus = new Set((box.dataset.focus || "").split(",").filter(Boolean));
+  const more = (dir, n) => `<button type="button" class="link" data-expand="${dir}">${dir === "up" ? "↑" : "↓"} ${plural(n, "more line")}</button>`;
+  const all = (dir, n) => `<button type="button" class="link" data-expand="${dir}-all">${dir === "up" ? "to start" : "to end"} (${n})</button>`;
   let rows = "";
-  u.old.forEach((ln, k) => {
-    rows += `<tr class="del"><td class="no">${u.old_start + k}</td><td class="sign">-</td>
-      <td class="text">${highlight(ln.text, ln.hl)}</td></tr>`;
-  });
-  u.new.forEach((ln, k) => {
-    rows += `<tr class="add"><td class="no">${u.new_start + k}</td><td class="sign">+</td>
-      <td class="text">${highlight(ln.text, ln.hl)}</td></tr>`;
-  });
-  return rows;
+  if (lo > 0) rows += `<tr class="expand"><td colspan="4">${more("up", Math.min(CTX_STEP, lo))}${lo > CTX_STEP ? " · " + all("up", lo) : ""}</td></tr>`;
+  rows += diffRows(fd.lines.slice(lo, hi), { tags: !focus.size, focus });
+  const rest = fd.lines.length - hi;
+  if (rest > 0) rows += `<tr class="expand"><td colspan="4">${more("down", Math.min(CTX_STEP, rest))}${rest > CTX_STEP ? " · " + all("down", rest) : ""}</td></tr>`;
+  box.querySelector("table").innerHTML = rows;
+}
+
+async function openCtx(box, path, lo, hi) {
+  const fd = await loadFileDiff(path);
+  box.classList.add("ctx");
+  box.dataset.path = path;
+  box.dataset.lo = Math.max(0, lo(fd));
+  box.dataset.hi = Math.min(fd.lines.length, hi(fd));
+  renderCtx(box, fd);
+}
+
+async function onContentClick(e) {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  try {
+    if (btn.dataset.expand) {
+      const box = btn.closest(".ctx");
+      const fd = await loadFileDiff(box.dataset.path);
+      const lo = Number(box.dataset.lo), hi = Number(box.dataset.hi);
+      const dir = btn.dataset.expand;
+      if (dir === "up") box.dataset.lo = Math.max(0, lo - CTX_STEP);
+      if (dir === "up-all") box.dataset.lo = 0;
+      if (dir === "down") box.dataset.hi = Math.min(fd.lines.length, hi + CTX_STEP);
+      if (dir === "down-all") box.dataset.hi = fd.lines.length;
+      renderCtx(box, fd);
+    } else if ("unitContext" in btn.dataset) {
+      const box = btn.closest(".occurrence");
+      const u = state.report.units[box.dataset.unit];
+      if (box.classList.contains("ctx")) {
+        box.classList.remove("ctx");
+        box.querySelector("table").innerHTML = unitRows(u);
+        btn.textContent = "Show context";
+        return;
+      }
+      box.dataset.focus = u.id;
+      await openCtx(box, u.path,
+        (fd) => fd.lines.findIndex((ln) => ln.unit === u.id) - CTX_PAD,
+        (fd) => fd.lines.findLastIndex((ln) => ln.unit === u.id) + 1 + CTX_PAD);
+      btn.textContent = "Hide context";
+    } else if ("hunkContext" in btn.dataset) {
+      const box = btn.closest(".hunk");
+      const h = state.report.hunks[box.dataset.hunk];
+      const first = h.lines[0];
+      const start = (fd) => fd.lines.findIndex((ln) =>
+        ln.t === first.type && ln.o === first.old_no && ln.n === first.new_no);
+      await openCtx(box, h.path, (fd) => start(fd) - CTX_STEP,
+        (fd) => start(fd) + h.lines.length + CTX_STEP);
+      btn.remove();
+    }
+  } catch (err) {
+    showError(err.message);
+  }
+}
+
+function unitRows(u) {
+  return diffRows([
+    ...u.old.map((ln, k) => ({ t: "-", o: u.old_start + k, n: null, text: ln.text, unit: u.id, hl: ln.hl })),
+    ...u.new.map((ln, k) => ({ t: "+", o: null, n: u.new_start + k, text: ln.text, unit: u.id, hl: ln.hl })),
+  ], { focus: new Set([u.id]) });
 }
 
 function renderGroup(id) {
@@ -508,13 +619,15 @@ function renderGroup(id) {
   }
   for (const [path, us] of byFile) {
     html += `<section class="file"><header><span class="path">${esc(path)}</span>
-      <span class="meta">×${us.length}</span></header>`;
+      <span class="meta">×${us.length}</span>${fileLinks(path)}</header>`;
     for (const u of us) {
-      html += `<div class="occurrence"><table class="diff">${unitRows(u)}</table>`;
-      if (!u.explained) {
-        html += `<div class="note"><a class="badge-link" href="#review">also has other changes — see Needs review</a></div>`;
-      }
-      html += "</div>";
+      const where = { oldLine: u.old.length ? u.old_start : null, newLine: u.new.length ? u.new_start : null };
+      html += `<div class="occurrence" data-unit="${u.id}"><table class="diff">${unitRows(u)}</table>
+        <div class="occ-actions">
+          ${u.explained ? "" : `<a class="badge-link" href="#review">also has other changes — see Needs review</a>`}
+          <button type="button" class="link" data-unit-context>Show context</button>
+          ${fileLinks(path, where)}
+        </div></div>`;
     }
     html += "</section>";
   }
@@ -546,7 +659,7 @@ function renderWarnings() {
     for (const loc of w.locations) {
       const text = loc.text.trimStart();
       const ranges = re ? [...text.matchAll(re)].map((m) => [m.index, m.index + m[0].length]) : [];
-      locs += `<tr><td class="where">${esc(loc.path)}:${loc.line}</td>
+      locs += `<tr><td class="where"><a href="${fileHref(loc.path, "new", "n" + loc.line)}">${esc(loc.path)}:${loc.line}</a></td>
         <td class="text">${highlight(text, ranges)}</td></tr>`;
     }
     const unlisted = w.total - w.locations.length - (w.filteredOut || 0);
@@ -573,7 +686,7 @@ function renderFiles() {
   for (const f of r.files) {
     html += `<tr class="${v.fileVisible(f.path) ? "" : "filtered"}">
       <td><span class="status" title="${label[f.status] || f.status}">${esc(f.status)}</span></td>
-      <td class="path">${f.old_path ? esc(f.old_path) + " → " : ""}${esc(f.path)}</td>
+      <td class="path"><a href="${fileHref(f.path, "diff")}">${f.old_path ? esc(f.old_path) + " → " : ""}${esc(f.path)}</a></td>
       <td><span class="cat">${esc(f.category)}</span></td>
       <td class="num"><span class="adds">+${f.additions}</span> <span class="dels">−${f.deletions}</span></td>
       <td class="num">${f.analyzed ? `${f.residual_units} / ${f.units ?? ""}` : "—"}</td>
@@ -582,6 +695,113 @@ function renderFiles() {
   content.innerHTML = html + "</tbody></table>";
 }
 
+// ---------- file viewer ----------
+
+const MODES = [["diff", "Diff"], ["old", "Original"], ["new", "New"]];
+
+async function renderFileView(path, mode, line) {
+  const content = $("#content");
+  const hash = location.hash;
+  content.innerHTML = `<div class="empty"><span class="spinner"></span> Loading ${esc(path)}…</div>`;
+  let fd;
+  try {
+    fd = await loadFileDiff(path);
+  } catch (e) {
+    showError(e.message);
+    return;
+  }
+  if (location.hash !== hash) return; // navigated away while loading
+
+  const rows = mode === "old" ? fd.lines.filter((ln) => ln.t !== "+")
+    : mode === "new" ? fd.lines.filter((ln) => ln.t !== "-")
+    : fd.lines;
+  const tabs = MODES.map(([m, label]) => {
+    const disabled = (m === "old" && fd.status === "A") || (m === "new" && fd.status === "D");
+    return disabled ? `<span class="tab disabled">${label}</span>`
+      : `<a class="tab" href="${fileHref(path, m, line)}" ${m === mode ? 'aria-current="page"' : ""}>${label}</a>`;
+  }).join("");
+  const title = { diff: "Full diff", old: "Original", new: "New" }[mode];
+  const counts = mode === "old" ? plural(fd.old_lines, "line") : mode === "new" ? plural(fd.new_lines, "line")
+    : `<span class="adds">+${fd.lines.filter((l) => l.t === "+").length}</span> <span class="dels">−${fd.lines.filter((l) => l.t === "-").length}</span>`;
+
+  let body = "";
+  let prevChanged = false;
+  for (const ln of rows) {
+    const changed = ln.t !== " ";
+    const num = mode === "old" ? ln.o : mode === "new" ? ln.n : null;
+    const cls = ln.t === "-" ? "del" : ln.t === "+" ? "add" : "ctx";
+    const unit = ln.unit ? state.report.units[ln.unit] : null;
+    const dim = mode === "diff" && unit && (unit.explained || !state.view.units.has(unit.id)) ? " explained" : "";
+    const anchor = `${ln.o ? ` data-o="${ln.o}"` : ""}${ln.n ? ` data-n="${ln.n}"` : ""}`;
+    body += `<tr class="${cls}${dim}${changed && !prevChanged ? " chg-start" : ""}"${anchor}>
+      ${mode === "diff" ? `<td class="no">${ln.o ?? ""}</td><td class="no">${ln.n ?? ""}</td>` : `<td class="no">${num}</td>`}
+      <td class="sign">${ln.t === " " ? "" : ln.t}</td>
+      <td class="text">${highlight(ln.text, ln.hl)}</td></tr>`;
+    prevChanged = changed;
+  }
+  const empty = !rows.length
+    ? `<div class="empty"><p>${mode === "old" ? "This file was added; there is no original version."
+      : mode === "new" ? "This file was deleted; there is no new version." : "Empty file."}</p></div>` : "";
+
+  content.innerHTML = `
+    <div class="page-head viewer-head">
+      <h2 class="code">${fd.old_path ? esc(fd.old_path) + " → " : ""}${esc(path)}</h2>
+      <span class="spacer"></span>
+      <button type="button" class="toggle" id="back-btn">← Back</button>
+      <p>${title} · ${counts} · <span class="cat">${esc(fd.category)}</span></p>
+    </div>
+    <div class="viewer-bar">
+      <nav class="tabs" aria-label="File version">${tabs}</nav>
+      <span class="spacer"></span>
+      <button type="button" class="toggle" data-jump="prev" title="Previous change (p)">↑ Prev change</button>
+      <button type="button" class="toggle" data-jump="next" title="Next change (n)">↓ Next change</button>
+    </div>
+    ${empty || `<section class="file viewer"><table class="diff">${body}</table></section>`}`;
+
+  $("#back-btn").addEventListener("click", () => history.back());
+  for (const b of content.querySelectorAll("[data-jump]")) {
+    b.addEventListener("click", () => jumpChange(b.dataset.jump === "next" ? 1 : -1));
+  }
+  const target = line && nearestRow(content, line[0], Number(line.slice(1)));
+  if (target) {
+    target.classList.add("target");
+    target.scrollIntoView({ block: "center" });
+  } else {
+    window.scrollTo({ top: 0 });
+  }
+}
+
+// The row for old ("o") or new ("n") line `num`, or the closest one when that line doesn't exist
+// in this version (e.g. a line added in the new file, viewed in the original).
+function nearestRow(root, side, num) {
+  let best = null, bestDist = Infinity;
+  for (const tr of root.querySelectorAll(`tr[data-${side}]`)) {
+    const dist = Math.abs(Number(tr.dataset[side]) - num);
+    if (dist < bestDist) { best = tr; bestDist = dist; }
+    if (dist === 0) break;
+  }
+  return best;
+}
+
+function jumpChange(dir) {
+  const starts = [...document.querySelectorAll("#content tr.chg-start")];
+  if (!starts.length) return;
+  const mid = window.innerHeight / 3;
+  const tops = starts.map((el) => el.getBoundingClientRect().top);
+  const i = dir > 0 ? tops.findIndex((t) => t > mid + 2)
+    : tops.findLastIndex((t) => t < mid - 2);
+  const el = starts[i === -1 ? (dir > 0 ? starts.length - 1 : 0) : i];
+  el.scrollIntoView({ block: "start" });
+  window.scrollBy({ top: -mid });
+}
+
+document.addEventListener("keydown", (e) => {
+  if (!location.hash.startsWith("#file/") || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.target.closest?.("input, textarea, select")) return;
+  if (e.key === "n") jumpChange(1);
+  if (e.key === "p") jumpChange(-1);
+});
+
 // ---------- boot ----------
 
 async function init() {
@@ -589,6 +809,7 @@ async function init() {
     b.addEventListener("click", () => setMode(b.dataset.mode));
   }
   $("#source-form").addEventListener("submit", runAnalysis);
+  $("#content").addEventListener("click", onContentClick);
   window.addEventListener("hashchange", route);
 
   let defaults = {};
