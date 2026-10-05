@@ -243,7 +243,7 @@ def load_changes(repo: Path, src: ResolvedSource) -> list[FileChange]:
             wanted.append(f"{src.base_sha}:{old}")
         if status != "D" and src.head_sha:
             wanted.append(f"{src.head_sha}:{new}")
-    blobs = _read_blobs(repo, wanted)
+    blobs = read_blobs(repo, wanted)
 
     changes: list[FileChange] = []
     for status, old, new in entries:
@@ -271,14 +271,20 @@ def load_changes(repo: Path, src: ResolvedSource) -> list[FileChange]:
 
 def read_file_at(repo: Path, src: ResolvedSource, paths: list[str]) -> dict[str, str]:
     """Head-side contents of arbitrary files (used for repo-wide leftover checks)."""
-    if src.head_sha is None:
+    return read_files(repo, src.head_sha, paths)
+
+
+def read_files(repo: Path, sha: str | None, paths: list[str]) -> dict[str, str]:
+    """Contents of ``paths`` at commit ``sha``, or in the working tree when ``sha`` is None.
+    Missing files are left out."""
+    if sha is None:
         out = {}
         for p in paths:
             f = repo / p
-            if f.is_file():
+            if f.is_file() and f.resolve().is_relative_to(repo.resolve()):
                 out[p] = f.read_text(errors="replace")
         return out
-    blobs = _read_blobs(repo, [f"{src.head_sha}:{p}" for p in paths])
+    blobs = read_blobs(repo, [f"{sha}:{p}" for p in paths])
     return {k.split(":", 1)[1]: v.decode("utf-8", errors="replace") for k, v in blobs.items()}
 
 
@@ -296,7 +302,7 @@ def grep_files(repo: Path, src: ResolvedSource, word: str, pathspec: list[str]) 
     return files
 
 
-def _read_blobs(repo: Path, specs: list[str]) -> dict[str, bytes]:
+def read_blobs(repo: Path, specs: list[str]) -> dict[str, bytes]:
     if not specs:
         return {}
     out = git(repo, "cat-file", "--batch", input=("\n".join(specs) + "\n").encode())

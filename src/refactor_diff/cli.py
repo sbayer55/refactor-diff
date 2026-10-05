@@ -41,6 +41,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=[],
         help="pre-set filters: hide files matching GLOB (repeatable), e.g. 'migrations'",
     )
+    p.add_argument(
+        "--python",
+        metavar="PATH",
+        help="Python interpreter or virtualenv used to resolve imports for code navigation "
+        "(default: .venv, venv or env in the repository)",
+    )
     p.add_argument("--repo", type=Path, default=Path.cwd(), help="git repository (default: cwd)")
     p.add_argument("--port", type=int, default=0, help="port to listen on (default: random)")
     p.add_argument("--no-browser", action="store_true", help="don't open a browser window")
@@ -99,4 +105,9 @@ def main(argv: list[str] | None = None) -> None:
     print(f"refactor-diff: serving {repo} at {url} (Ctrl+C to stop)")
     if not args.no_browser:
         threading.Timer(0.8, webbrowser.open, [url]).start()
-    uvicorn.run(create_app(repo, defaults_from(args)), host=HOST, port=port, log_level="warning")
+    uvicorn.run(
+        create_app(repo, defaults_from(args), args.python),
+        host=HOST,
+        port=port,
+        log_level="warning",
+    )

@@ -47,6 +47,7 @@ refactor-diff --pr 123                 # a GitHub pull request
 refactor-diff --worktree main          # uncommitted changes vs main
 refactor-diff --repo ../other --port 8000 --no-browser
 refactor-diff main..HEAD --hide tests,comments --exclude migrations
+refactor-diff main..HEAD --python ~/.virtualenvs/myproject   # environment for code navigation
 ```
 
 ### What you see
@@ -92,6 +93,28 @@ repository.
 
 To pre-set filters from the command line, use `--hide` (any of `source`, `tests`, `docs`,
 `config`, `other`, `comments`) and `--exclude GLOB` (repeatable).
+
+### Code navigation
+
+**⌘-click** (Ctrl-click on Linux/Windows) a name in any diff or file view to go to its
+definition. **⌘⇧-click** finds every reference to it. Holding ⌘ underlines the name under
+the pointer.
+
+- **Each side resolves in its own revision.** A name on a removed line is looked up in the
+  base commit, and a name on an added or unchanged line in the head (or your working tree).
+  So clicking a function that the diff deleted still finds where it used to be defined.
+- **Results:** a single definition opens directly at its line. Multiple definitions, and all
+  references, open in a side panel grouped by file. Definitions can lead to files the diff
+  doesn't touch, to installed packages (shown read-only), or to standard-library stubs.
+- **Environment:** imports of installed packages are resolved with your project's virtualenv:
+  `.venv`, `venv` or `env` in the repository, or the one given with `--python`. Without one,
+  navigation within the repository still works, but jumps into third-party packages won't.
+
+Navigation uses [Jedi](https://github.com/davidhalter/jedi). For a branch or PR, the Python
+files of each revision are written to a temporary snapshot on first use (well under a second
+for a ~1,300-file repo) and deleted when the server stops. If the virtualenv has the project
+installed in editable mode, its paths are pointed at the snapshot, so imports resolve to the
+code at that revision rather than your current checkout.
 
 ## How it works
 
@@ -149,6 +172,8 @@ Layout (`src/refactor_diff/`):
 | `categories.py` | file kinds (source, tests, docs, config, other) for filtering |
 | `engine.py` | `analyze()`, which turns a source into a `Report` |
 | `fileview.py` | whole-file diff of one changed file, for context and the old/new viewer |
+| `snapshots.py` | Python sources of a revision written to a temp dir, for navigation |
+| `navigation.py` | go-to-definition / find-references with Jedi |
 | `model.py` | serializable report model with stable IDs |
 | `web/` | Starlette server and the vanilla-JS single-page UI |
 

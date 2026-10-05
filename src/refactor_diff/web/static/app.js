@@ -396,6 +396,10 @@ function route(opts) {
     renderFileView(decodeURIComponent(id || ""), rest[0] || "diff", rest[1] || "");
     return;
   }
+  if (view === "lib") {
+    renderLibraryView(decodeURIComponent(id || ""), Number(rest[0]) || 0);
+    return;
+  }
   if (view === "group") renderGroup(id);
   else if (view === "warnings") renderWarnings();
   else if (view === "files") renderFiles();
@@ -437,7 +441,8 @@ function renderReview() {
     byFile.get(h.path).push(h);
   }
   let html = `<div class="page-head"><h2>Needs review</h2>
-    <p>Changes that don't belong to a repeated pattern. Lines already explained by a pattern are dimmed.</p></div>`;
+    <p>Changes that don't belong to a repeated pattern. Lines already explained by a pattern are dimmed.</p></div>
+    ${navHint()}`;
   for (const [path, hunks] of byFile) {
     const residual = hunks.reduce((n, h) =>
       n + h.unit_ids.filter((u) => v.units.has(u) && !r.units[u].explained).length, 0);
@@ -491,7 +496,7 @@ function tagRow(st, tagged, lead, span) {
 
 // `anchors` adds data-o / data-n line attributes and marks where each run of changes starts
 // (used by the file viewer for jumping to a line and between changes).
-function unifiedRows(lines, { tags = false, focus = null, anchors = false } = {}) {
+function unifiedRows(lines, { tags = false, focus = null, anchors = false, path = null } = {}) {
   const tagged = new Set();
   let rows = "";
   let prevChanged = false;
@@ -504,7 +509,8 @@ function unifiedRows(lines, { tags = false, focus = null, anchors = false } = {}
       anchors && changed && !prevChanged ? " chg-start" : ""}"${attrs}>
       <td class="no">${ln.o ?? ""}</td><td class="no">${ln.n ?? ""}</td>
       <td class="sign">${ln.t === " " ? "" : ln.t}</td>
-      <td class="text">${highlight(ln.text, ln.hl)}</td></tr>`;
+      <td class="text"${ln.t === "-" ? navAttrs(path, "o", ln.o) : navAttrs(path, "n", ln.n)}>${
+        highlight(ln.text, ln.hl)}</td></tr>`;
     prevChanged = changed;
   }
   return rows;
@@ -512,15 +518,17 @@ function unifiedRows(lines, { tags = false, focus = null, anchors = false } = {}
 
 // Side by side: removed lines on the left, added lines on the right, paired in order within
 // each block of changes; unchanged lines appear on both sides.
-function splitRows(lines, { tags = false, focus = null, anchors = false } = {}) {
+function splitRows(lines, { tags = false, focus = null, anchors = false, path = null } = {}) {
   const tagged = new Set();
   let rows = "";
   let prevChanged = false;
   const cell = (ln, side) => {
     if (!ln) return `<td class="no"></td><td class="side empty"></td>`;
     const st = lineState(ln, focus);
-    return `<td class="no">${side === "old" ? ln.o : ln.n}</td><td class="side ${st.cls}${
-      st.dim ? " explained" : ""}${st.focused ? " focus" : ""}">${highlight(ln.text, ln.hl)}</td>`;
+    const num = side === "old" ? ln.o : ln.n;
+    return `<td class="no">${num}</td><td class="side ${st.cls}${st.dim ? " explained" : ""}${
+      st.focused ? " focus" : ""}"${navAttrs(path, side === "old" ? "o" : "n", num)}>${
+      highlight(ln.text, ln.hl)}</td>`;
   };
   for (const [left, right] of pairLines(lines)) {
     if (tags) {
@@ -552,6 +560,11 @@ function pairLines(lines) {
     for (let k = 0; k < Math.max(dels.length, adds.length); k++) pairs.push([dels[k] || null, adds[k] || null]);
   }
   return pairs;
+}
+
+// Marks a code cell as navigable: Cmd/Ctrl+click resolves names on that side of the diff.
+function navAttrs(path, side, line) {
+  return path && line ? ` data-p="${esc(path)}" data-s="${side}" data-l="${line}"` : "";
 }
 
 function anchorAttrs(o, n) {
@@ -823,6 +836,7 @@ function renderFiles() {
 const MODES = [["diff", "Diff"], ["old", "Original"], ["new", "New"]];
 
 async function renderFileView(path, mode, line) {
+  if (!state.report.files.some((f) => f.path === path)) return renderBrowseView(path, mode, line);
   const content = $("#content");
   const hash = location.hash;
   content.innerHTML = `<div class="empty"><span class="spinner"></span> Loading ${esc(path)}…</div>`;
@@ -856,7 +870,7 @@ async function renderFileView(path, mode, line) {
     body += `<tr class="${cls}${changed && !prevChanged ? " chg-start" : ""}"${anchorAttrs(ln.o, ln.n)}>
       <td class="no">${num}</td>
       <td class="sign">${ln.t === " " ? "" : ln.t}</td>
-      <td class="text">${highlight(ln.text, ln.hl)}</td></tr>`;
+      <td class="text"${navAttrs(path, mode === "old" ? "o" : "n", num)}>${highlight(ln.text, ln.hl)}</td></tr>`;
     prevChanged = changed;
   }
   const empty = !rows.length
@@ -867,16 +881,17 @@ async function renderFileView(path, mode, line) {
     <div class="page-head viewer-head">
       <h2 class="code">${fd.old_path ? esc(fd.old_path) + " → " : ""}${esc(path)}</h2>
       <span class="spacer"></span>
-      <button type="button" class="toggle" id="back-btn">← Back</button>
       <p>${title} · ${counts} · <span class="cat">${esc(fd.category)}</span></p>
     </div>
     <div class="viewer-bar">
+      ${backButton()}
       <nav class="tabs" aria-label="File version">${tabs}</nav>
       ${mode === "diff" ? layoutToggle(path) : ""}
       <span class="spacer"></span>
       <button type="button" class="toggle" data-jump="prev" title="Previous change (p)">↑ Prev change</button>
       <button type="button" class="toggle" data-jump="next" title="Next change (n)">↓ Next change</button>
     </div>
+    ${navHint()}
     ${empty || `<section class="file viewer"><table class="diff">${body}</table></section>`}`;
 
   $("#back-btn").addEventListener("click", () => history.back());
@@ -891,6 +906,11 @@ async function renderFileView(path, mode, line) {
   } else {
     window.scrollTo({ top: 0 });
   }
+}
+
+// Lives in the sticky viewer bar so it stays reachable while scrolling a long file.
+function backButton() {
+  return `<button type="button" class="toggle" id="back-btn" title="Back">← Back</button>`;
 }
 
 // The row for old ("o") or new ("n") line `num`, or the closest one when that line doesn't exist
@@ -924,6 +944,321 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "p") jumpChange(-1);
 });
 
+// ---------- code navigation (go to definition / find references) ----------
+
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+const MOD_KEY = IS_MAC ? "⌘" : "Ctrl";
+const modDown = (e) => (IS_MAC ? e.metaKey : e.ctrlKey);
+const ID_CHAR = /[\p{L}\p{N}_]/u;
+
+function navHint() {
+  return `<p class="nav-hint"><kbd>${MOD_KEY}</kbd>-click a name to go to its definition ·
+    <kbd>${MOD_KEY}</kbd><kbd>⇧</kbd>-click to find references</p>`;
+}
+
+// Character offset of the point (x, y) within a code cell's text, or null.
+function caretOffset(cell, x, y) {
+  let node = null, offset = 0;
+  if (document.caretPositionFromPoint) {
+    const pos = document.caretPositionFromPoint(x, y);
+    if (pos) ({ offsetNode: node, offset } = pos);
+  } else if (document.caretRangeFromPoint) {
+    const range = document.caretRangeFromPoint(x, y);
+    if (range) ({ startContainer: node, startOffset: offset } = range);
+  }
+  if (!node || !cell.contains(node)) return null;
+  let col = 0;
+  const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (n === node) return col + offset;
+    col += n.length;
+  }
+  return null;
+}
+
+// The identifier at (or just before) `offset` in `text`.
+function wordAt(text, offset) {
+  let i = offset;
+  if (!ID_CHAR.test(text[i] ?? "") && ID_CHAR.test(text[i - 1] ?? "")) i--;
+  if (!ID_CHAR.test(text[i] ?? "")) return null;
+  let start = i, end = i;
+  while (start > 0 && ID_CHAR.test(text[start - 1])) start--;
+  while (end < text.length && ID_CHAR.test(text[end])) end++;
+  if (/^\p{N}/u.test(text[start])) return null; // a number, not a name
+  return { start, end, word: text.slice(start, end) };
+}
+
+function wordUnder(e) {
+  const cell = e.target.closest?.("[data-l]");
+  if (!cell) return null;
+  const offset = caretOffset(cell, e.clientX, e.clientY);
+  const w = offset == null ? null : wordAt(cell.textContent, offset);
+  return w && { cell, ...w };
+}
+
+// Underline the name under the pointer while the modifier is held (CSS Custom Highlight API;
+// skipped where unsupported).
+const hoverHighlight = window.CSS?.highlights && typeof Highlight === "function";
+function setHoverWord(hit) {
+  if (!hoverHighlight) return;
+  if (!hit) { CSS.highlights.delete("nav-word"); return; }
+  const range = document.createRange();
+  let pos = 0, started = false;
+  const walker = document.createTreeWalker(hit.cell, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (!started && hit.start < pos + n.length) { range.setStart(n, hit.start - pos); started = true; }
+    if (started && hit.end <= pos + n.length) { range.setEnd(n, hit.end - pos); break; }
+    pos += n.length;
+  }
+  CSS.highlights.set("nav-word", new Highlight(range));
+}
+
+let hoverFrame = 0;
+function onCodeMouseMove(e) {
+  if (!modDown(e)) { document.body.classList.remove("nav-armed"); setHoverWord(null); return; }
+  cancelAnimationFrame(hoverFrame);
+  hoverFrame = requestAnimationFrame(() => {
+    const hit = wordUnder(e);
+    document.body.classList.toggle("nav-armed", Boolean(hit));
+    setHoverWord(hit);
+  });
+}
+
+function onCodeMouseDown(e) {
+  if (modDown(e) && e.target.closest?.("[data-l]")) e.preventDefault(); // no text selection
+}
+
+function onCodeClick(e) {
+  if (!modDown(e)) return;
+  const hit = wordUnder(e);
+  if (!hit) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const query = {
+    path: hit.cell.dataset.p,
+    side: hit.cell.dataset.s === "o" ? "old" : "new",
+    line: Number(hit.cell.dataset.l),
+    col: [...hit.cell.textContent.slice(0, hit.start)].length, // code points, like Python
+    word: hit.word,
+  };
+  runNavigation(e.shiftKey ? "references" : "definition", query);
+}
+
+async function runNavigation(action, query) {
+  const what = action === "definition" ? `Finding the definition of ${query.word}`
+    : `Finding references to ${query.word}`;
+  toast(`${what}…`, { busy: true, sticky: true });
+  let res;
+  try {
+    res = await api(`/api/report/${state.report.id}/navigate`, { action, ...query });
+  } catch (e) {
+    toast(e.message, { error: true });
+    return;
+  }
+  const locs = res.locations;
+  if (action === "references") {
+    hideToast();
+    showNavPanel(action, query, res);
+    return;
+  }
+  if (!locs.length) {
+    toast(`No definition found for ${query.word}.`, { error: true });
+  } else if (locs.length === 1 && locs[0].kind !== "builtin") {
+    hideNavPanel();
+    toast(`${query.word} → ${shortPath(locs[0].path)}:${locs[0].line}`);
+    location.hash = locHref(locs[0], res.side);
+  } else if (locs.length === 1) {
+    toast(`${query.word} is a builtin (${locs[0].path}); there's no source to show.`);
+  } else {
+    hideToast();
+    showNavPanel(action, query, res);
+  }
+}
+
+function locHref(loc, side) {
+  if (loc.kind === "library") return `#lib/${encodeURIComponent(loc.path)}/${loc.line ?? ""}`;
+  let path = loc.path;
+  if (side === "old") {
+    // A renamed file's old path: open it by its new path so the diff-aware viewer is used.
+    const renamed = state.report.files.find((f) => f.old_path === path);
+    if (renamed) path = renamed.path;
+  }
+  return fileHref(path, side, `${side === "old" ? "o" : "n"}${loc.line}`);
+}
+
+function shortPath(p) {
+  const i = p.lastIndexOf("/site-packages/");
+  if (i >= 0) return p.slice(i + "/site-packages/".length);
+  const t = p.lastIndexOf("/typeshed/");
+  return t >= 0 ? p.slice(t + 1) : p;
+}
+
+// ---- results panel ----
+
+function showNavPanel(action, query, res) {
+  const panel = $("#nav-panel");
+  const locs = res.locations;
+  const sideName = res.side === "old" ? "original (base)" : state.report.source.head_sha ? "new (head)" : "working tree";
+  const byFile = new Map();
+  for (const loc of locs) {
+    const key = `${loc.kind}:${loc.path}`;
+    if (!byFile.has(key)) byFile.set(key, []);
+    byFile.get(key).push(loc);
+  }
+  let list = "";
+  for (const [, items] of byFile) {
+    const first = items[0];
+    const label = first.kind === "repo" ? esc(first.path)
+      : `<span class="lib-badge">${first.kind === "builtin" ? "builtin" : "library"}</span> ${esc(shortPath(first.path))}`;
+    list += `<div class="nav-file"><div class="nav-file-head">${label}<span class="n">${items.length}</span></div>`;
+    for (const loc of items) {
+      const text = loc.text.trimStart();
+      const cut = loc.text.length - text.length;
+      const hl = loc.col == null ? [] : [[loc.col - cut, loc.col - cut + loc.name.length]];
+      const body = `<span class="ln">${loc.line ?? ""}</span><code>${highlight(text, hl) || esc(loc.name)}</code>${
+        loc.is_definition && action === "references" ? '<span class="def-badge">def</span>' : ""}`;
+      list += loc.kind === "builtin"
+        ? `<div class="nav-item-row disabled">${body}</div>`
+        : `<a class="nav-item-row" href="${locHref(loc, res.side)}">${body}</a>`;
+    }
+    list += "</div>";
+  }
+  const files = byFile.size;
+  const title = action === "definition"
+    ? `Definitions of <code>${esc(query.word)}</code>`
+    : `References to <code>${esc(query.word)}</code>`;
+  panel.innerHTML = `
+    <header>
+      <div>
+        <h3>${title}</h3>
+        <p>${plural(locs.length, "result")} in ${plural(files, "file")} · ${sideName}</p>
+      </div>
+      <button type="button" class="close" aria-label="Close" id="nav-close">×</button>
+    </header>
+    ${action === "definition" ? `<div class="nav-actions"><button type="button" class="toggle" id="nav-refs">Find references</button></div>` : ""}
+    <div class="nav-list">${list || '<p class="muted">Nothing found.</p>'}</div>`;
+  panel.hidden = false;
+  $("#nav-close").addEventListener("click", hideNavPanel);
+  $("#nav-refs")?.addEventListener("click", () => runNavigation("references", query));
+  for (const a of panel.querySelectorAll("a.nav-item-row")) {
+    a.addEventListener("click", () => {
+      for (const x of panel.querySelectorAll(".nav-item-row.current")) x.classList.remove("current");
+      a.classList.add("current");
+    });
+  }
+}
+
+function hideNavPanel() {
+  $("#nav-panel").hidden = true;
+}
+
+// ---- toast ----
+
+let toastTimer = 0;
+function toast(message, { busy = false, error = false, sticky = false } = {}) {
+  const el = $("#toast");
+  el.innerHTML = `${busy ? '<span class="spinner"></span> ' : ""}${esc(message)}`;
+  el.classList.toggle("error", error);
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  if (!sticky) toastTimer = setTimeout(hideToast, error ? 5000 : 2500);
+}
+function hideToast() {
+  $("#toast").hidden = true;
+}
+
+// ---- viewers for files outside the diff ----
+
+function loadSource(path, side) {
+  const key = `${side}:${path}`;
+  if (!state.fileDiffs.has(key)) {
+    const url = `/api/report/${state.report.id}/source?side=${side}&path=${encodeURIComponent(path)}`;
+    state.fileDiffs.set(key, api(url).catch((e) => { state.fileDiffs.delete(key); throw e; }));
+  }
+  return state.fileDiffs.get(key);
+}
+
+function plainRows(lines, { path = null, side = null } = {}) {
+  return lines.map((text, i) => `<tr class="ctx"${side ? anchorAttrs(side === "o" ? i + 1 : null, side === "n" ? i + 1 : null) : ""}>
+    <td class="no">${i + 1}</td><td class="text"${navAttrs(path, side, i + 1)}>${esc(text)}</td></tr>`).join("");
+}
+
+function showTarget(content, side, line) {
+  const target = line && nearestRow(content, side, line);
+  if (target) {
+    target.classList.add("target");
+    target.scrollIntoView({ block: "center" });
+  } else {
+    window.scrollTo({ top: 0 });
+  }
+}
+
+// A repository file the diff doesn't touch (reached via navigation): same at base and head
+// unless it only exists on one side.
+async function renderBrowseView(path, mode, line) {
+  const content = $("#content");
+  const hash = location.hash;
+  const side = mode === "old" ? "old" : "new";
+  content.innerHTML = `<div class="empty"><span class="spinner"></span> Loading ${esc(path)}…</div>`;
+  let src = null, error = null;
+  try { src = await loadSource(path, side); } catch (e) { error = e.message; }
+  if (location.hash !== hash) return;
+  const tok = line || "";
+  const tabs = `<span class="tab disabled" title="This file has no changes in this diff">Diff</span>
+    <a class="tab" href="${fileHref(path, "old", tok)}" ${side === "old" ? 'aria-current="page"' : ""}>Original</a>
+    <a class="tab" href="${fileHref(path, "new", tok)}" ${side === "new" ? 'aria-current="page"' : ""}>New</a>`;
+  const s = side === "old" ? "o" : "n";
+  content.innerHTML = `
+    <div class="page-head viewer-head">
+      <h2 class="code">${esc(path)}</h2>
+      <span class="spacer"></span>
+      <p>${side === "old" ? "Original" : "New"}${src ? ` · ${plural(src.lines.length, "line")}` : ""} · unchanged in this diff</p>
+    </div>
+    <div class="viewer-bar">${backButton()}<nav class="tabs" aria-label="File version">${tabs}</nav></div>
+    ${navHint()}
+    ${error ? `<div class="empty"><p>${esc(error)}</p></div>`
+      : `<section class="file viewer"><table class="diff">${plainRows(src.lines, { path, side: s })}</table></section>`}`;
+  $("#back-btn").addEventListener("click", () => history.back());
+  showTarget(content, s, Number(tok.slice(1)));
+}
+
+async function renderLibraryView(path, line) {
+  const content = $("#content");
+  const hash = location.hash;
+  content.innerHTML = `<div class="empty"><span class="spinner"></span> Loading ${esc(shortPath(path))}…</div>`;
+  let src;
+  try {
+    src = await api(`/api/library?path=${encodeURIComponent(path)}`);
+  } catch (e) {
+    showError(e.message);
+    return;
+  }
+  if (location.hash !== hash) return;
+  content.innerHTML = `
+    <div class="page-head viewer-head">
+      <h2 class="code">${esc(shortPath(path))}</h2>
+      <span class="spacer"></span>
+      <p><span class="lib-badge">library</span> ${esc(path)} · read-only; navigation isn't available in library files</p>
+    </div>
+    <div class="viewer-bar">${backButton()}</div>
+    <section class="file viewer"><table class="diff">${plainRows(src.lines, { side: "n" })}</table></section>`;
+  $("#back-btn").addEventListener("click", () => history.back());
+  showTarget(content, "n", line);
+}
+
+// The top bar wraps onto more lines in narrower windows; sticky elements below it need its
+// actual height rather than a fixed guess.
+function trackTopbarHeight() {
+  const bar = $(".topbar");
+  const update = () => {
+    const sticky = getComputedStyle(bar).position === "sticky";
+    document.documentElement.style.setProperty("--topbar-h", `${sticky ? bar.offsetHeight : 0}px`);
+  };
+  new ResizeObserver(update).observe(bar);
+  window.addEventListener("resize", update);
+  update();
+}
+
 // ---------- boot ----------
 
 async function init() {
@@ -932,7 +1267,15 @@ async function init() {
   }
   $("#source-form").addEventListener("submit", runAnalysis);
   $("#content").addEventListener("click", onContentClick);
+  $("#content").addEventListener("click", onCodeClick, true);
+  $("#content").addEventListener("mousedown", onCodeMouseDown);
+  $("#content").addEventListener("mousemove", onCodeMouseMove);
+  document.addEventListener("keyup", (e) => {
+    if (e.key === "Meta" || e.key === "Control") { document.body.classList.remove("nav-armed"); setHoverWord(null); }
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideNavPanel(); });
   loadLayout();
+  trackTopbarHeight();
   narrowQuery.addEventListener("change", () => { if (state.report) rerender(); });
   window.addEventListener("hashchange", route);
 
