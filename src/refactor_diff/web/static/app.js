@@ -500,6 +500,7 @@ function tagRow(st, tagged, lead, span) {
 // (used by the file viewer for jumping to a line and between changes).
 function unifiedRows(lines, { tags = false, focus = null, anchors = false, path = null, syntax = null } = {}) {
   const sx = syntax || syntaxSpans(lines, path);
+  const plain = oneSided(path);
   const tagged = new Set();
   let rows = "";
   let prevChanged = false;
@@ -512,8 +513,8 @@ function unifiedRows(lines, { tags = false, focus = null, anchors = false, path 
       anchors && changed && !prevChanged ? " chg-start" : ""}"${attrs}>
       <td class="no">${ln.o ?? ""}</td><td class="no">${ln.n ?? ""}</td>
       <td class="sign">${ln.t === " " ? "" : ln.t}</td>
-      <td class="text"${ln.t === "-" ? navAttrs(path, "o", ln.o) : navAttrs(path, "n", ln.n)}>${
-        codeHtml(ln, sx)}</td></tr>`;
+      <td class="text${plain ? " plain" : ""}"${ln.t === "-" ? navAttrs(path, "o", ln.o) : navAttrs(path, "n", ln.n)}>${
+        codeHtml(ln, sx, plain)}</td></tr>`;
     prevChanged = changed;
   }
   return rows;
@@ -577,12 +578,13 @@ function anchorAttrs(o, n) {
 
 // ---------- syntax highlighting ----------
 
-// Unchanged lines are always syntax-colored (there's no diff to show on them); changed lines
-// show the diff's token highlights unless syntax mode is on. The gutter (line numbers and
-// sign) always carries the diff colors.
-function codeHtml(ln, sx) {
-  if (ln.t === "-" || ln.t === "+") {
-    if (!state.syntax) return highlight(ln.text, ln.hl);
+// Unchanged lines are always syntax-colored (there's no diff to show on them), and so is every
+// line of an added or deleted file (`plain`): the whole file is one change, so token-level diff
+// highlights carry no information. Other changed lines show the diff's token highlights unless
+// syntax mode is on. The gutter (line numbers and sign) always carries the diff colors.
+function codeHtml(ln, sx, plain = false) {
+  if ((ln.t === "-" || ln.t === "+") && !plain && !state.syntax) {
+    return highlight(ln.text, ln.hl);
   }
   const spans = sx && sx.get(ln);
   return spans ? paint(ln.text, spans) : esc(ln.text);
@@ -946,6 +948,7 @@ async function renderFileView(path, mode, line) {
   let body = mode === "diff" ? diffRows(rows, { anchors: true, path }) : "";
   let prevChanged = false;
   const sx = syntaxSpans(rows, path);
+  const plain = oneSided(path);
   for (const ln of mode === "diff" ? [] : rows) {
     const changed = ln.t !== " ";
     const num = mode === "old" ? ln.o : ln.n;
@@ -953,7 +956,7 @@ async function renderFileView(path, mode, line) {
     body += `<tr class="${cls}${changed && !prevChanged ? " chg-start" : ""}"${anchorAttrs(ln.o, ln.n)}>
       <td class="no">${num}</td>
       <td class="sign">${ln.t === " " ? "" : ln.t}</td>
-      <td class="text"${navAttrs(path, mode === "old" ? "o" : "n", num)}>${codeHtml(ln, sx)}</td></tr>`;
+      <td class="text${plain ? " plain" : ""}"${navAttrs(path, mode === "old" ? "o" : "n", num)}>${codeHtml(ln, sx, plain)}</td></tr>`;
     prevChanged = changed;
   }
   const empty = !rows.length

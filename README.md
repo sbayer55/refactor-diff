@@ -96,9 +96,10 @@ To pre-set filters from the command line, use `--hide` (any of `source`, `tests`
 
 ### Highlighting
 
-- **Diff** (default): changed lines show exactly which tokens changed. Unchanged lines have no
-  diff to show, so they're always syntax-colored, as are whole files viewed outside the diff
-  (unchanged files reached by navigation, and library code).
+- **Diff** (default): changed lines show exactly which tokens changed. Wherever there's no
+  diff to show, code is always syntax-colored: unchanged lines, added and deleted files (the
+  whole file is one change), and files viewed outside the diff (unchanged files reached by
+  navigation, and library code).
 - **Syntax**: all code is syntax-colored on a plain background.
 
 In both modes the gutter (line numbers and the `-`/`+` sign) is tinted red or green for removed

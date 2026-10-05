@@ -429,3 +429,5 @@ a.nav-item-row:hover { background: var(--surface-2); text-decoration: none; }
 /* Syntax mode: code keeps a plain background so the syntax colors read; the gutter marks changes. */
 body.syntax-mode .diff tr.del td.text, body.syntax-mode .diff tr.add td.text,
 body.syntax-mode .diff td.side.del, body.syntax-mode .diff td.side.add { background: var(--surface); }
+/* Added/deleted files are one big change: plain code background, the gutter says it all. */
+.diff tr.del td.text.plain, .diff tr.add td.text.plain { background: var(--surface); }
