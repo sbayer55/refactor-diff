@@ -14,6 +14,7 @@ const state = {
   view: null, // the report as filtered by state.filters; see applyFilters()
   fileDiffs: new Map(), // path -> Promise of the whole-file diff (see /api/report/{id}/file)
   split: false, // side-by-side diffs (preference; see splitActive())
+  syntax: false, // syntax-color changed lines too (unchanged lines always are)
 };
 
 // Side-by-side needs room for two code columns; narrower windows always get unified diffs.
@@ -207,6 +208,7 @@ function renderFilters() {
         placeholder="globs, e.g. migrations, *_pb2.py, src/legacy/**">
     </label>
     <span class="spacer"></span>
+    ${highlightToggle()}
     ${layoutToggle()}
     ${filtersActive() ? `<span class="hidden-note">${plural(v.hiddenUnits, "change")} hidden</span>
       <button type="button" class="link" id="reset-filters">Reset</button>` : ""}`;
@@ -496,7 +498,8 @@ function tagRow(st, tagged, lead, span) {
 
 // `anchors` adds data-o / data-n line attributes and marks where each run of changes starts
 // (used by the file viewer for jumping to a line and between changes).
-function unifiedRows(lines, { tags = false, focus = null, anchors = false, path = null } = {}) {
+function unifiedRows(lines, { tags = false, focus = null, anchors = false, path = null, syntax = null } = {}) {
+  const sx = syntax || syntaxSpans(lines, path);
   const tagged = new Set();
   let rows = "";
   let prevChanged = false;
@@ -510,7 +513,7 @@ function unifiedRows(lines, { tags = false, focus = null, anchors = false, path 
       <td class="no">${ln.o ?? ""}</td><td class="no">${ln.n ?? ""}</td>
       <td class="sign">${ln.t === " " ? "" : ln.t}</td>
       <td class="text"${ln.t === "-" ? navAttrs(path, "o", ln.o) : navAttrs(path, "n", ln.n)}>${
-        highlight(ln.text, ln.hl)}</td></tr>`;
+        codeHtml(ln, sx)}</td></tr>`;
     prevChanged = changed;
   }
   return rows;
@@ -518,7 +521,8 @@ function unifiedRows(lines, { tags = false, focus = null, anchors = false, path 
 
 // Side by side: removed lines on the left, added lines on the right, paired in order within
 // each block of changes; unchanged lines appear on both sides.
-function splitRows(lines, { tags = false, focus = null, anchors = false, path = null } = {}) {
+function splitRows(lines, { tags = false, focus = null, anchors = false, path = null, syntax = null } = {}) {
+  const sx = syntax || syntaxSpans(lines, path);
   const tagged = new Set();
   let rows = "";
   let prevChanged = false;
@@ -526,9 +530,9 @@ function splitRows(lines, { tags = false, focus = null, anchors = false, path = 
     if (!ln) return `<td class="no"></td><td class="side empty"></td>`;
     const st = lineState(ln, focus);
     const num = side === "old" ? ln.o : ln.n;
-    return `<td class="no">${num}</td><td class="side ${st.cls}${st.dim ? " explained" : ""}${
+    return `<td class="no ${st.cls}">${num}</td><td class="side ${st.cls}${st.dim ? " explained" : ""}${
       st.focused ? " focus" : ""}"${navAttrs(path, side === "old" ? "o" : "n", num)}>${
-      highlight(ln.text, ln.hl)}</td>`;
+      codeHtml(ln, sx)}</td>`;
   };
   for (const [left, right] of pairLines(lines)) {
     if (tags) {
@@ -569,6 +573,79 @@ function navAttrs(path, side, line) {
 
 function anchorAttrs(o, n) {
   return `${o ? ` data-o="${o}"` : ""}${n ? ` data-n="${n}"` : ""}`;
+}
+
+// ---------- syntax highlighting ----------
+
+// Unchanged lines are always syntax-colored (there's no diff to show on them); changed lines
+// show the diff's token highlights unless syntax mode is on. The gutter (line numbers and
+// sign) always carries the diff colors.
+function codeHtml(ln, sx) {
+  if (ln.t === "-" || ln.t === "+") {
+    if (!state.syntax) return highlight(ln.text, ln.hl);
+  }
+  const spans = sx && sx.get(ln);
+  return spans ? paint(ln.text, spans) : esc(ln.text);
+}
+
+function paint(text, spans) {
+  let out = "", pos = 0;
+  for (const [start, end, cls] of spans) {
+    if (start < pos) continue;
+    out += esc(text.slice(pos, start)) + `<span class="${cls}">${esc(text.slice(start, end))}</span>`;
+    pos = end;
+  }
+  return out + esc(text.slice(pos));
+}
+
+// Spans for each line, keyed by line object. Old and new sides are highlighted as separate
+// streams (each line continues the state of the previous line on its side), with unchanged
+// lines advancing both.
+function syntaxSpans(lines, path) {
+  const lang = Syntax.forPath(path);
+  if (!lang) return null;
+  const out = new Map();
+  let oldState = lang.start(), newState = lang.start();
+  for (const ln of lines) {
+    if (ln.t === "-") {
+      const r = lang.line(ln.text, oldState);
+      oldState = r.state;
+      out.set(ln, r.spans);
+    } else {
+      const r = lang.line(ln.text, newState);
+      newState = r.state;
+      out.set(ln, r.spans);
+      if (ln.t !== "+") oldState = lang.line(ln.text, oldState).state;
+    }
+  }
+  return out;
+}
+
+const fileSyntaxCache = new WeakMap();
+function fileSyntax(fd) {
+  if (!fileSyntaxCache.has(fd)) fileSyntaxCache.set(fd, syntaxSpans(fd.lines, fd.path));
+  return fileSyntaxCache.get(fd);
+}
+
+function loadSyntax() {
+  try { state.syntax = localStorage.getItem("refactor-diff:highlight") === "syntax"; } catch {}
+  document.body.classList.toggle("syntax-mode", state.syntax);
+}
+
+function setSyntax(on) {
+  state.syntax = on;
+  try { localStorage.setItem("refactor-diff:highlight", on ? "syntax" : "diff"); } catch {}
+  document.body.classList.toggle("syntax-mode", on);
+  rerender();
+}
+
+function highlightToggle() {
+  return `<div class="layout-toggle" role="group" aria-label="Highlighting">
+    <button type="button" data-highlight="diff" aria-pressed="${!state.syntax}"
+      title="Changed lines show what changed; unchanged lines are syntax-colored">Diff</button>
+    <button type="button" data-highlight="syntax" aria-pressed="${state.syntax}"
+      title="Syntax-color all code; changes are marked in the gutter">Syntax</button>
+  </div>`;
 }
 
 // ---------- diff layout (unified / side by side) ----------
@@ -612,6 +689,9 @@ function bindLayoutToggle(root) {
   for (const b of root.querySelectorAll("[data-layout]")) {
     b.addEventListener("click", () => setSplit(b.dataset.layout === "split"));
   }
+  for (const b of root.querySelectorAll("[data-highlight]")) {
+    b.addEventListener("click", () => setSyntax(b.dataset.highlight === "syntax"));
+  }
 }
 
 // ---------- whole-file diffs: context, original and new versions ----------
@@ -653,7 +733,9 @@ function renderCtx(box, fd) {
   const all = (dir, n) => `<button type="button" class="link" data-expand="${dir}-all">${dir === "up" ? "to start" : "to end"} (${n})</button>`;
   let rows = "";
   if (lo > 0) rows += `<tr class="expand"><td colspan="4">${more("up", Math.min(CTX_STEP, lo))}${lo > CTX_STEP ? " · " + all("up", lo) : ""}</td></tr>`;
-  rows += diffRows(fd.lines.slice(lo, hi), { tags: !focus.size, focus, path: box.dataset.path });
+  rows += diffRows(fd.lines.slice(lo, hi), {
+    tags: !focus.size, focus, path: box.dataset.path, syntax: fileSyntax(fd),
+  });
   const rest = fd.lines.length - hi;
   if (rest > 0) rows += `<tr class="expand"><td colspan="4">${more("down", Math.min(CTX_STEP, rest))}${rest > CTX_STEP ? " · " + all("down", rest) : ""}</td></tr>`;
   box.querySelector("table").innerHTML = rows;
@@ -863,6 +945,7 @@ async function renderFileView(path, mode, line) {
 
   let body = mode === "diff" ? diffRows(rows, { anchors: true, path }) : "";
   let prevChanged = false;
+  const sx = syntaxSpans(rows, path);
   for (const ln of mode === "diff" ? [] : rows) {
     const changed = ln.t !== " ";
     const num = mode === "old" ? ln.o : ln.n;
@@ -870,7 +953,7 @@ async function renderFileView(path, mode, line) {
     body += `<tr class="${cls}${changed && !prevChanged ? " chg-start" : ""}"${anchorAttrs(ln.o, ln.n)}>
       <td class="no">${num}</td>
       <td class="sign">${ln.t === " " ? "" : ln.t}</td>
-      <td class="text"${navAttrs(path, mode === "old" ? "o" : "n", num)}>${highlight(ln.text, ln.hl)}</td></tr>`;
+      <td class="text"${navAttrs(path, mode === "old" ? "o" : "n", num)}>${codeHtml(ln, sx)}</td></tr>`;
     prevChanged = changed;
   }
   const empty = !rows.length
@@ -886,6 +969,7 @@ async function renderFileView(path, mode, line) {
     <div class="viewer-bar">
       ${backButton()}
       <nav class="tabs" aria-label="File version">${tabs}</nav>
+      ${highlightToggle()}
       ${mode === "diff" ? layoutToggle(path) : ""}
       <span class="spacer"></span>
       <button type="button" class="toggle" data-jump="prev" title="Previous change (p)">↑ Prev change</button>
@@ -1178,9 +1262,13 @@ function loadSource(path, side) {
   return state.fileDiffs.get(key);
 }
 
-function plainRows(lines, { path = null, side = null } = {}) {
-  return lines.map((text, i) => `<tr class="ctx"${side ? anchorAttrs(side === "o" ? i + 1 : null, side === "n" ? i + 1 : null) : ""}>
-    <td class="no">${i + 1}</td><td class="text"${navAttrs(path, side, i + 1)}>${esc(text)}</td></tr>`).join("");
+// A file with no diff (unchanged, or a library): always syntax-highlighted. `lang` names the
+// file for language detection when `path` (which also enables navigation) isn't given.
+function plainRows(lines, { path = null, side = null, lang = path } = {}) {
+  const rows = lines.map((text) => ({ t: " ", text }));
+  const sx = syntaxSpans(rows, lang);
+  return rows.map((ln, i) => `<tr class="ctx"${side ? anchorAttrs(side === "o" ? i + 1 : null, side === "n" ? i + 1 : null) : ""}>
+    <td class="no">${i + 1}</td><td class="text"${navAttrs(path, side, i + 1)}>${codeHtml(ln, sx)}</td></tr>`).join("");
 }
 
 function showTarget(content, side, line) {
@@ -1241,7 +1329,7 @@ async function renderLibraryView(path, line) {
       <p><span class="lib-badge">library</span> ${esc(path)} · read-only; navigation isn't available in library files</p>
     </div>
     <div class="viewer-bar">${backButton()}</div>
-    <section class="file viewer"><table class="diff">${plainRows(src.lines, { side: "n" })}</table></section>`;
+    <section class="file viewer"><table class="diff">${plainRows(src.lines, { side: "n", lang: path })}</table></section>`;
   $("#back-btn").addEventListener("click", () => history.back());
   showTarget(content, "n", line);
 }
@@ -1275,6 +1363,7 @@ async function init() {
   });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideNavPanel(); });
   loadLayout();
+  loadSyntax();
   trackTopbarHeight();
   narrowQuery.addEventListener("change", () => { if (state.report) rerender(); });
   window.addEventListener("hashchange", route);

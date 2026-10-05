@@ -21,6 +21,17 @@
   --kind-replace: #0f7b6c;
   --kind-formatting: #6b6a65;
   --kind-docs: #a0522d;
+  --del-gutter: #f9d0d0;
+  --add-gutter: #c8ecd4;
+  --sx-kw: #cf222e;
+  --sx-str: #0a3069;
+  --sx-num: #0550ae;
+  --sx-com: #6e7781;
+  --sx-fn: #8250df;
+  --sx-type: #953800;
+  --sx-builtin: #0550ae;
+  --sx-self: #953800;
+  --sx-deco: #8250df;
   --radius: 8px;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -50,6 +61,17 @@
     --kind-replace: #5fd3c0;
     --kind-formatting: #9b9a93;
     --kind-docs: #e3a07a;
+    --del-gutter: #5a2626;
+    --add-gutter: #1f4a2c;
+    --sx-kw: #ff7b72;
+    --sx-str: #a5d6ff;
+    --sx-num: #79c0ff;
+    --sx-com: #8b949e;
+    --sx-fn: #d2a8ff;
+    --sx-type: #ffa657;
+    --sx-builtin: #79c0ff;
+    --sx-self: #ffa657;
+    --sx-deco: #d2a8ff;
     color-scheme: dark;
   }
 }
@@ -387,3 +409,23 @@ a.nav-item-row:hover { background: var(--surface-2); text-decoration: none; }
 }
 .toast[hidden] { display: none; }
 .toast.error { background: var(--del-fg); color: #fff; }
+
+/* ---- syntax highlighting ---- */
+.sx-kw { color: var(--sx-kw); }
+.sx-str { color: var(--sx-str); }
+.sx-num, .sx-const { color: var(--sx-num); }
+.sx-com { color: var(--sx-com); font-style: italic; }
+.sx-fn { color: var(--sx-fn); }
+.sx-fn-def { color: var(--sx-fn); font-weight: 600; }
+.sx-type { color: var(--sx-type); }
+.sx-builtin { color: var(--sx-builtin); }
+.sx-self { color: var(--sx-self); font-style: italic; }
+.sx-deco { color: var(--sx-deco); }
+
+/* The gutter always shows the diff: removed/added line numbers and sign in a stronger tint. */
+.diff tr.del td.no, .diff tr.del td.sign, .diff td.no.del { background: var(--del-gutter); color: var(--del-fg); }
+.diff tr.add td.no, .diff tr.add td.sign, .diff td.no.add { background: var(--add-gutter); color: var(--add-fg); }
+
+/* Syntax mode: code keeps a plain background so the syntax colors read; the gutter marks changes. */
+body.syntax-mode .diff tr.del td.text, body.syntax-mode .diff tr.add td.text,
+body.syntax-mode .diff td.side.del, body.syntax-mode .diff td.side.add { background: var(--surface); }

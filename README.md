@@ -94,6 +94,18 @@ repository.
 To pre-set filters from the command line, use `--hide` (any of `source`, `tests`, `docs`,
 `config`, `other`, `comments`) and `--exclude GLOB` (repeatable).
 
+### Highlighting
+
+- **Diff** (default): changed lines show exactly which tokens changed. Unchanged lines have no
+  diff to show, so they're always syntax-colored, as are whole files viewed outside the diff
+  (unchanged files reached by navigation, and library code).
+- **Syntax**: all code is syntax-colored on a plain background.
+
+In both modes the gutter (line numbers and the `-`/`+` sign) is tinted red or green for removed
+and added lines, so changes stay visible. The Diff | Syntax toggle sits next to Unified |
+Split in the filter bar and the file viewer, and is remembered per browser. Highlighting is
+done in the browser (`web/static/syntax.js`); Python is the only language for now.
+
 ### Code navigation
 
 **⌘-click** (Ctrl-click on Linux/Windows) a name in any diff or file view to go to its
