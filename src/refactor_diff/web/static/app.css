@@ -298,6 +298,22 @@ button.link:hover { text-decoration: underline; }
   color: var(--muted); font-family: var(--mono); font-size: 11px;
 }
 .hunk-bar .link { font-family: var(--sans); font-size: 12px; }
+.hunk-bar .spacer { flex: 1; }
+.review-box { display: inline-flex; align-items: center; cursor: pointer; }
+.review-box input { margin: 0; accent-color: var(--accent); }
+.hunk.done .hunk-bar { opacity: 0.7; }
+.hunk.done:not(.open) .diff { display: none; }
+.hunk.done:not(.open) [data-hunk-context] { display: none; }
+.badge-new {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 1px 6px; border-radius: 4px; background: var(--accent-soft); color: var(--accent);
+}
+.banner {
+  margin: 0 0 14px; padding: 10px 14px; border-radius: var(--radius); font-size: 13px;
+  background: var(--accent-soft); border: 1px solid var(--accent); color: var(--text);
+}
+.banner .link { font-size: 13px; margin-left: 6px; }
+.summary .metric .of { font-size: 16px; color: var(--muted); }
 /* side-by-side rows: [old no][old code][new no][new code] */
 .diff td.side { width: 50%; }
 .diff td.side.del { background: var(--del-bg); }

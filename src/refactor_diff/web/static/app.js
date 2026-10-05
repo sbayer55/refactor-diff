@@ -8,9 +8,11 @@ const state = {
   sources: null,
   report: null,
   groupsByKey: new Map(),
-  reviewed: new Set(),
+  reviewed: new Set(), // reviewed group ids
+  reviewedHunks: new Set(), // reviewed hunk fingerprints
+  delta: { prevHead: null, newHunks: new Set(), changed: [] }, // since the previous analysis
   shown: PAGE,
-  filters: { hidden: new Set(), hideDocs: false, exclude: [], nearOnly: false },
+  filters: { hidden: new Set(), hideDocs: false, exclude: [], nearOnly: false, newOnly: false },
   view: null, // the report as filtered by state.filters; see applyFilters()
   fileDiffs: new Map(), // path -> Promise of the whole-file diff (see /api/report/{id}/file)
   split: false, // side-by-side diffs (preference; see splitActive())
@@ -66,23 +68,47 @@ async function api(path, body) {
   return data;
 }
 
-// Reviewed marks are per-viewer conveniences, so localStorage is fine (and may be unavailable).
-function storageKey() {
-  const s = state.report.source;
-  return `refactor-diff:reviewed:${s.base_sha}..${s.head_sha || "worktree"}`;
+// ---------- review state ----------
+// Reviewed marks live on the server (in ~/.config/refactor-diff), keyed by what is being
+// compared rather than by commit, so they survive restarts and new commits. Hunks are tracked
+// by content fingerprint; see /api/report/{id}/review.
+
+function setReview(review) {
+  state.reviewed = new Set(review.groups);
+  state.reviewedHunks = new Set(review.hunks);
+  state.delta = {
+    prevHead: review.delta.prev_head,
+    newHunks: new Set(review.delta.new),
+    changed: review.delta.changed_reviewed,
+  };
 }
-function loadReviewed() {
+
+async function postReview(changes) {
   try {
-    state.reviewed = new Set(JSON.parse(localStorage.getItem(storageKey()) || "[]"));
-  } catch { state.reviewed = new Set(); }
+    setReview(await api(`/api/report/${state.report.id}/review`, changes));
+  } catch (e) {
+    toast(`Couldn't save the review mark: ${e.message}`, { error: true });
+  }
 }
-function saveReviewed() {
-  try { localStorage.setItem(storageKey(), JSON.stringify([...state.reviewed])); } catch {}
-}
+
 function toggleReviewed(id, on) {
   if (on) state.reviewed.add(id); else state.reviewed.delete(id);
-  saveReviewed();
   renderSidebar();
+  postReview({ groups: { [on ? "add" : "remove"]: [id] } });
+}
+
+function markHunks(fingerprints, on) {
+  for (const fp of fingerprints) {
+    if (on) state.reviewedHunks.add(fp); else state.reviewedHunks.delete(fp);
+  }
+  applyFilters();
+  renderSummary();
+  renderSidebar();
+  postReview({ hunks: { [on ? "add" : "remove"]: fingerprints } });
+}
+
+function hunkIsNew(h) {
+  return state.delta.newHunks.has(h.fingerprint);
 }
 
 // ---------- filters ----------
@@ -113,6 +139,7 @@ function loadFilters(cliDefaults) {
     hideDocs: Boolean(f.hideDocs),
     exclude: f.exclude || [],
     nearOnly: false,
+    newOnly: false,
   };
 }
 function saveFilters() {
@@ -125,7 +152,7 @@ function saveFilters() {
 }
 function filtersActive() {
   const f = state.filters;
-  return f.hidden.size > 0 || f.hideDocs || f.exclude.length > 0 || f.nearOnly;
+  return f.hidden.size > 0 || f.hideDocs || f.exclude.length > 0 || f.nearOnly || f.newOnly;
 }
 
 function applyFilters() {
@@ -140,7 +167,8 @@ function applyFilters() {
   };
   const docsOnly = (u) => u.signatures.length > 0 && u.signatures.every((k) => k === "docs");
   const unitVisible = (u) => fileVisible(u.path) && !(f.hideDocs && docsOnly(u))
-    && !(f.nearOnly && !u.explained && !(u.near && u.near.length));
+    && !(f.nearOnly && !u.explained && !(u.near && u.near.length))
+    && !(f.newOnly && !hunkIsNew(r.hunks[u.hunk_id]));
 
   const units = new Set(Object.values(r.units).filter(unitVisible).map((u) => u.id));
   const groups = r.groups
@@ -156,6 +184,7 @@ function applyFilters() {
   }
   const files = r.files.filter((x) => fileVisible(x.path));
   const explained = [...units].filter((id) => r.units[id].explained).length;
+  const hunksDone = residualHunks.filter((hid) => state.reviewedHunks.has(r.hunks[hid].fingerprint)).length;
 
   state.view = {
     units,
@@ -177,6 +206,8 @@ function applyFilters() {
       mechanical_groups: groups.filter((g) => g.mechanical).length,
       verified_units: [...units].filter((id) => r.units[id].verified).length,
       moves: groups.filter((g) => g.kind === "move").length,
+      hunks: residualHunks.length,
+      hunks_done: hunksDone,
     },
   };
 }
@@ -210,6 +241,9 @@ function renderFilters() {
     ${v.nearUnits ? `<button type="button" class="filter-chip mode" id="near-toggle" aria-pressed="${f.nearOnly}"
       title="Only leftover changes that almost match a mechanical pattern (likely typos)">
       Only near misses <span class="n">${v.nearUnits}</span></button>` : ""}
+    ${state.delta.newHunks.size ? `<button type="button" class="filter-chip mode" id="new-toggle" aria-pressed="${f.newOnly}"
+      title="Only changes that weren't in the diff last time you analyzed it">
+      New since ${esc(state.delta.prevHead.slice(0, 7))} <span class="n">${state.delta.newHunks.size}</span></button>` : ""}
     <label class="exclude">
       <span class="filter-label">Exclude</span>
       <input id="exclude-input" type="text" spellcheck="false" value="${esc(f.exclude.join(", "))}"
@@ -239,6 +273,10 @@ function renderFilters() {
     f.nearOnly = !f.nearOnly;
     rerender();
   });
+  $("#new-toggle")?.addEventListener("click", () => {
+    f.newOnly = !f.newOnly;
+    rerender();
+  });
   const input = $("#exclude-input");
   input.addEventListener("change", () => {
     f.exclude = input.value.split(",").map((s) => s.trim()).filter(Boolean);
@@ -247,7 +285,7 @@ function renderFilters() {
   });
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") input.blur(); });
   $("#reset-filters")?.addEventListener("click", () => {
-    state.filters = { hidden: new Set(), hideDocs: false, exclude: [], nearOnly: false };
+    state.filters = { hidden: new Set(), hideDocs: false, exclude: [], nearOnly: false, newOnly: false };
     saveFilters();
     rerender();
   });
@@ -303,7 +341,7 @@ async function runAnalysis(evt) {
     state.groupsByKey = new Map(report.groups.map((g) => [g.key, g]));
     state.shown = PAGE;
     state.fileDiffs = new Map();
-    loadReviewed();
+    setReview(report.review);
     applyFilters();
     renderSummary();
     renderFilters();
@@ -338,9 +376,14 @@ function renderSummary() {
     </div>
     <div class="metric"><span class="big">${stats.residual_units}</span>
       <span>${stats.residual_units === 1 ? "change" : "changes"} to review</span></div>
+    <div class="metric">
+      <span class="big">${stats.hunks_done}<span class="of">/${stats.hunks}</span></span>
+      <span>${stats.hunks === 1 ? "hunk" : "hunks"} reviewed</span>
+      <div class="meter"><div style="width:${stats.hunks ? Math.round((100 * stats.hunks_done) / stats.hunks) : 0}%"></div></div>
+    </div>
     <div class="metric"><span class="big">${stats.mechanical_groups}</span>
       <span>mechanical ${stats.mechanical_groups === 1 ? "pattern" : "patterns"}</span></div>
-    <div class="metric"><span class="big">${stats.files_analyzed}<span style="font-size:16px;color:var(--muted)">/${stats.files_changed}</span></span>
+    <div class="metric"><span class="big">${stats.files_analyzed}<span class="of">/${stats.files_changed}</span></span>
       <span>files analyzed</span></div>
     <div class="source">
       <div><strong>${esc(source.label)}</strong></div>
@@ -362,7 +405,7 @@ function renderSidebar() {
     <div class="nav-section">
       <a class="nav-item${active("#review")}" href="#review">
         <span class="label"><strong>Needs review</strong></span>
-        <span class="pill ${v.stats.residual_units ? "attention" : "ok"}">${v.stats.residual_units}</span>
+        <span class="pill ${v.stats.hunks - v.stats.hunks_done ? "attention" : "ok"}" title="${v.stats.hunks_done} of ${v.stats.hunks} hunks reviewed">${v.stats.hunks - v.stats.hunks_done}</span>
       </a>
       <a class="nav-item${active("#warnings")}" href="#warnings">
         <span class="label">Warnings</span>
@@ -381,11 +424,13 @@ function renderSidebar() {
   }
   for (const g of mech) {
     const isDone = state.reviewed.has(g.id);
+    const fresh = g.visible.filter((uid) => hunkIsNew(r.hunks[r.units[uid].hunk_id])).length;
     html += `
-      <a class="nav-item${active("#group/" + g.id)}${isDone ? " done" : ""}" href="#group/${g.id}" title="${esc(g.label)}">
+      <a class="nav-item${active("#group/" + g.id)}${isDone && !fresh ? " done" : ""}" href="#group/${g.id}" title="${esc(g.label)}${isDone && fresh ? ` — reviewed, but ${fresh} new since` : ""}">
         <input type="checkbox" data-review="${g.id}" ${isDone ? "checked" : ""} aria-label="Mark reviewed">
         <span class="kind ${g.kind}">${g.kind}</span>
         <span class="label code">${esc(g.label)}</span>
+        ${fresh ? `<span class="badge-new">+${fresh}</span>` : ""}
         <span class="count">×${g.visible.length}</span>
       </a>`;
   }
@@ -458,9 +503,10 @@ function renderReview() {
   const v = state.view;
   const content = $("#content");
   if (!v.residualHunks.length) {
-    content.innerHTML = `<div class="empty"><h2>Nothing left to review</h2>
-      <p>Every changed line in the ${filtersActive() ? "visible" : "analyzed"} files matched a
-      mechanical pattern. Skim the patterns in the sidebar and check the warnings.</p></div>`;
+    const why = state.filters.newOnly ? "Nothing new since last time in the visible files."
+      : `Every changed line in the ${filtersActive() ? "visible" : "analyzed"} files matched a
+      mechanical pattern. Skim the patterns in the sidebar and check the warnings.`;
+    content.innerHTML = `<div class="empty"><h2>Nothing left to review</h2><p>${why}</p></div>`;
     return;
   }
   const byFile = new Map();
@@ -470,22 +516,54 @@ function renderReview() {
     byFile.get(h.path).push(h);
   }
   let html = `<div class="page-head"><h2>Needs review</h2>
-    <p>Changes that don't belong to a repeated pattern. Lines already explained by a pattern are dimmed.</p></div>
+    <p>Changes that don't belong to a repeated pattern. Lines already explained by a pattern are dimmed.
+    Tick a hunk when you've read it; ticked hunks fold up and stay ticked across restarts and new commits.</p></div>
+    ${deltaBanner()}
     ${navHint()}`;
   for (const [path, hunks] of byFile) {
     const residual = hunks.reduce((n, h) =>
       n + h.unit_ids.filter((u) => v.units.has(u) && !r.units[u].explained).length, 0);
+    const left = hunks.filter((h) => !state.reviewedHunks.has(h.fingerprint)).length;
     html += `<section class="file"><header><span class="path">${esc(path)}</span>
-      <span class="meta">${plural(residual, "change")}</span>${fileLinks(path)}</header>`;
-    for (const h of hunks) {
-      html += `<div class="hunk" data-hunk="${h.id}">
-        <div class="hunk-bar"><span>@@ line ${h.new_start} @@</span>
-          <button type="button" class="link" data-hunk-context>Show context</button></div>
-        <table class="diff">${hunkRows(h)}</table></div>`;
-    }
+      <span class="meta">${plural(residual, "change")}</span>
+      ${left ? `<button type="button" class="link" data-review-file="${esc(path)}">Mark all ${hunks.length > 1 ? `${left} ` : ""}reviewed</button>` : ""}
+      ${fileLinks(path)}</header>`;
+    for (const h of hunks) html += hunkHtml(h);
     html += "</section>";
   }
   content.innerHTML = html;
+}
+
+function hunkHtml(h) {
+  const done = state.reviewedHunks.has(h.fingerprint);
+  return `<div class="hunk${done ? " done" : ""}" data-hunk="${h.id}">
+    <div class="hunk-bar">
+      <label class="review-box" title="Reviewed (x)"><input type="checkbox" data-review-hunk="${h.fingerprint}" ${done ? "checked" : ""}></label>
+      <span>@@ line ${h.new_start} @@</span>
+      ${hunkIsNew(h) ? `<span class="badge-new" title="Not in the diff last time">new</span>` : ""}
+      <span class="spacer"></span>
+      <button type="button" class="link" data-hunk-open>${done ? "Show" : "Hide"}</button>
+      <button type="button" class="link" data-hunk-context>Show context</button></div>
+    <table class="diff">${hunkRows(h)}</table></div>`;
+}
+
+// What changed since the previous analysis of the same comparison (new commits pushed).
+function deltaBanner() {
+  const d = state.delta;
+  if (!d.prevHead || (!d.newHunks.size && !d.changed.length)) return "";
+  const r = state.report;
+  const visibleNew = state.view.residualHunks.filter((hid) => hunkIsNew(r.hunks[hid])).length;
+  const parts = [];
+  if (d.newHunks.size) parts.push(`${plural(d.newHunks.size, "new change")}${visibleNew !== d.newHunks.size ? ` (${visibleNew} to review)` : ""}`);
+  if (d.changed.length) {
+    const files = [...new Set(d.changed.map((c) => c.path))];
+    parts.push(`${plural(d.changed.length, "change")} you had reviewed ${d.changed.length === 1 ? "was" : "were"} modified (${files.map(esc).join(", ")}) and ${d.changed.length === 1 ? "is" : "are"} unmarked`);
+  }
+  const f = state.filters;
+  return `<div class="banner">
+    <strong>Since ${esc(d.prevHead.slice(0, 7))}:</strong> ${parts.join(" · ")}.
+    ${d.newHunks.size ? `<button type="button" class="link" id="banner-new">${f.newOnly ? "Show everything" : "Show only what's new"}</button>` : ""}
+  </div>`;
 }
 
 function hunkRows(h) {
@@ -801,6 +879,17 @@ async function openCtx(box, path, lo, hi) {
   renderCtx(box, fd);
 }
 
+function onContentChange(e) {
+  const box = e.target.closest("[data-review-hunk]");
+  if (!box) return;
+  const hunk = box.closest(".hunk");
+  hunk.classList.toggle("done", box.checked);
+  hunk.classList.remove("open");
+  const open = hunk.querySelector("[data-hunk-open]");
+  if (open) open.textContent = box.checked ? "Show" : "Hide";
+  markHunks([box.dataset.reviewHunk], box.checked);
+}
+
 async function onContentClick(e) {
   const btn = e.target.closest("button");
   if (!btn) return;
@@ -838,6 +927,20 @@ async function onContentClick(e) {
       await openCtx(box, h.path, (fd) => start(fd) - CTX_STEP,
         (fd) => start(fd) + h.lines.length + CTX_STEP);
       btn.remove();
+    } else if ("hunkOpen" in btn.dataset) {
+      const box = btn.closest(".hunk");
+      box.classList.toggle("open");
+      btn.textContent = box.classList.contains("done") && !box.classList.contains("open") ? "Show" : "Hide";
+    } else if (btn.dataset.reviewFile) {
+      const r = state.report;
+      const fps = state.view.residualHunks.map((hid) => r.hunks[hid])
+        .filter((h) => h.path === btn.dataset.reviewFile && !state.reviewedHunks.has(h.fingerprint))
+        .map((h) => h.fingerprint);
+      markHunks(fps, true);
+      route({ keepScroll: true });
+    } else if (btn.id === "banner-new") {
+      state.filters.newOnly = !state.filters.newOnly;
+      rerender();
     }
   } catch (err) {
     showError(err.message);
@@ -911,6 +1014,7 @@ function renderGroup(id) {
       const from = u === moved ? partnerOf(u) : null;
       html += `<div class="occurrence" data-unit="${u.id}"><table class="diff">${unitRows(u)}</table>
         <div class="occ-actions">
+          ${hunkIsNew(r.hunks[u.hunk_id]) ? `<span class="badge-new" title="Not in the diff last time">new</span>` : ""}
           ${u.explained ? "" : `<a class="badge-link" href="#review">also has other changes — see Needs review</a>`}
           ${from ? `<span class="meta">moved from ${esc(from.path)}:${from.old_start}</span>${fileLinks(from.path, { oldLine: from.old_start })}` : ""}
           <button type="button" class="link" data-unit-context>Show context</button>
@@ -1428,6 +1532,7 @@ async function init() {
   }
   $("#source-form").addEventListener("submit", runAnalysis);
   $("#content").addEventListener("click", onContentClick);
+  $("#content").addEventListener("change", onContentChange);
   $("#content").addEventListener("click", onCodeClick, true);
   $("#content").addEventListener("mousedown", onCodeMouseDown);
   $("#content").addEventListener("mousemove", onCodeMouseMove);

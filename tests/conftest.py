@@ -53,3 +53,11 @@ def rename_repo(tmp_path: Path) -> Path:
         shutil.copy(f, repo / f.name)
     _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "after")
     return repo
+
+
+@pytest.fixture(autouse=True)
+def isolated_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Keep review state written by tests out of the real ~/.config."""
+    cfg = tmp_path / "config"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(cfg))
+    return cfg

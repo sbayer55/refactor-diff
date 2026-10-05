@@ -54,9 +54,11 @@ refactor-diff main..HEAD --python ~/.virtualenvs/myproject   # environment for c
 
 - **Summary**: how much of the diff was collapsed, and how many changes are left to review.
 - **Needs review**: the hunks that contain changes not explained by a repeated pattern.
-  Lines that a pattern does explain are dimmed and tagged, so you keep the context.
+  Lines that a pattern does explain are dimmed and tagged, so you keep the context. Tick a
+  hunk once you've read it: it folds up, and the summary shows `done / total` hunks.
+  **Mark all reviewed** on a file header ticks every hunk in that file.
 - **Mechanical patterns**: one entry per repeated edit, listing every occurrence grouped by
-  file. Tick **Reviewed** as you go. The checkmarks are saved in your browser for that commit range.
+  file. Tick **Reviewed** as you go.
   A moved block is one pattern: its page shows the block as a diff from where it came from,
   followed by the import lines that changed because of the move.
 - **✓ verified**: a change whose enclosing statement is provably the same program on both
@@ -65,6 +67,20 @@ refactor-diff main..HEAD --python ~/.virtualenvs/myproject   # environment for c
   **Only near misses** filter shows just those.
 - **Warnings**: places where the refactor may be incomplete or inconsistent (see below).
 - **Files**: every changed file, with its status, kind and whether it was analyzed.
+
+### Review marks survive restarts and new commits
+
+Reviewed marks are stored in `~/.config/refactor-diff/` (or `$XDG_CONFIG_HOME/refactor-diff/`),
+one file per repository, keyed by *what* you compared — the PR number, or the branch names —
+rather than by commit. Hunks are identified by a fingerprint of their changed lines, so a
+reviewed hunk stays reviewed when lines above it shift.
+
+When you analyze the same comparison again after new commits, a banner at the top of
+**Needs review** says what happened since the previous head: how many changes are new
+(badged **new** on their hunk, and on pattern occurrences), and which reviewed hunks were
+modified — those lose their mark so you read them again. **Show only what's new** (also a
+filter chip) narrows everything to the new changes; a reviewed pattern that gained
+occurrences shows **+N** in the sidebar.
 
 ### Context and file versions
 

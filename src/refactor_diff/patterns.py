@@ -374,8 +374,8 @@ def _import_classification(a: _Side, b: _Side, ops, old_range, new_range) -> Cla
     * the same names from a different module -> ``import`` (``a`` -> ``b``), keyed on the
       module change so the same move/rename of a module groups across files;
     * a name added or removed -> ``import`` keyed on the binding;
-    * the same module importing a differently named thing -> None, so the ordinary rename
-      classification applies (it records the ``import`` context).
+    * the same module importing a differently named thing -> a ``rename`` with the ``import``
+      context, the same signature the token classifier would produce.
     """
     old_sites = _import_sites(a, old_range)
     new_sites = _import_sites(b, new_range)
@@ -387,6 +387,7 @@ def _import_classification(a: _Side, b: _Side, ops, old_range, new_range) -> Cla
     if not removed and not added:
         return None
     sigs: list[Signature] = []
+    unpaired = []
     for r in sorted(removed, key=lambda x: (x.alias, x.module)):
         same = [x for x in added if (x.name, x.alias) == (r.name, r.alias)]
         if same:
@@ -396,8 +397,25 @@ def _import_classification(a: _Side, b: _Side, ops, old_range, new_range) -> Cla
                 Signature(IMPORT, f"{IMPORT}\0{r.module}\0{n.module}", r.module, n.module, r.alias)
             )
             continue
-        if added:
-            return None  # a renamed name (or a rewrite): leave it to the token classifier
+        renamed = [
+            x
+            for x in added
+            if x.module == r.module
+            and x.name
+            and r.name
+            and x.alias == x.name
+            and r.alias == r.name
+        ]
+        if renamed:
+            n = renamed[0]
+            added.discard(n)
+            key = f"{RENAME}\0{r.name}\0{n.name}"
+            sigs.append(Signature(RENAME, key, r.name, n.name, "import"))
+            continue
+        unpaired.append(r)
+    if unpaired and added:
+        return None  # something else was rewritten: leave it to the token classifier
+    for r in unpaired:
         sigs.append(Signature(IMPORT, f"{IMPORT}\0{_dotted(r)}\0", _import_text(r), "", r.alias))
     for n in sorted(added, key=lambda x: (x.alias, x.module)):
         sigs.append(Signature(IMPORT, f"{IMPORT}\0\0{_dotted(n)}", "", _import_text(n), n.alias))

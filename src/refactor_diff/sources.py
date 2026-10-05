@@ -26,6 +26,16 @@ class ResolvedSource:
     head_sha: str | None  # None for the working tree
     pr: dict | None = None
 
+    @property
+    def identity(self) -> str:
+        """What the comparison *is*, independent of the commits it currently resolves to, so
+        review state keyed on it survives new commits: the PR, or the ref names."""
+        if self.pr is not None:
+            return f"pr:{self.pr['number']}"
+        if self.head == WORKTREE:
+            return f"worktree:{self.base}"
+        return f"refs:{self.base}:{self.head}"
+
     def to_dict(self) -> dict:
         return {
             "label": self.label,
@@ -34,6 +44,7 @@ class ResolvedSource:
             "base_sha": self.base_sha,
             "head_sha": self.head_sha,
             "pr": self.pr,
+            "identity": self.identity,
         }
 
 

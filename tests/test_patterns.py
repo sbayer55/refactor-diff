@@ -167,6 +167,16 @@ def test_import_module_and_name_change_falls_through():
     assert all(k != IMPORT for k, *_ in sigs("from a import x\n", "from b import y\n"))
 
 
+def test_import_block_with_rename_module_change_and_addition():
+    old = "from a import x\nfrom p import h\n"
+    new = "import logging\n\nfrom a import y\nfrom q import h\n"
+    assert set(sigs(old, new)) == {
+        (RENAME, "x", "y", "import"),
+        (IMPORT, "p", "q", "h"),
+        (IMPORT, "", "import logging", "logging"),
+    }
+
+
 def test_import_added_and_removed_names():
     assert sigs("import os\n", "import os\nimport sys\n") == [(IMPORT, "", "import sys", "sys")]
     assert sigs("from a import x, y\n", "from a import x\n") == [

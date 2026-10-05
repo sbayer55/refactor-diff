@@ -23,6 +23,7 @@ from refactor_diff.languages.base import split_lines
 from refactor_diff.model import Report
 from refactor_diff.navigation import NavigationError, Navigator, to_dict
 from refactor_diff.snapshots import Snapshots
+from refactor_diff.state import ReviewStore
 
 STATIC = Path(__file__).parent / "static"
 
@@ -30,10 +31,24 @@ STATIC = Path(__file__).parent / "static"
 SIDES = ("old", "new")
 
 
-def create_app(repo: Path, defaults: dict | None = None, python: str | None = None) -> Starlette:
+def create_app(
+    repo: Path,
+    defaults: dict | None = None,
+    python: str | None = None,
+    state_dir: Path | None = None,
+) -> Starlette:
     reports: dict[str, Report] = {}
     snapshots = Snapshots(repo)
     navigator = Navigator(repo, snapshots, python)
+    store = ReviewStore(repo, state_dir)
+
+    def hunks_of(report: Report) -> dict[str, str]:
+        return {h.fingerprint: h.path for h in report.hunks.values()}
+
+    def with_review(report: Report) -> dict:
+        return report.to_dict() | {
+            "review": store.review(report.source["identity"], hunks_of(report))
+        }
 
     async def index(request: Request):
         return FileResponse(STATIC / "index.html")
@@ -63,13 +78,44 @@ def create_app(repo: Path, defaults: dict | None = None, python: str | None = No
         except sources.SourceError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
         reports[report.id] = report
-        return JSONResponse(report.to_dict())
+        await run_in_threadpool(
+            store.record_analysis,
+            report.source["identity"],
+            report.source["head_sha"],
+            hunks_of(report),
+        )
+        return JSONResponse(with_review(report))
 
     async def get_report(request: Request):
         report = reports.get(request.path_params["report_id"])
         if report is None:
             return _unknown_report()
-        return JSONResponse(report.to_dict())
+        return JSONResponse(with_review(report))
+
+    async def get_review(request: Request):
+        report = reports.get(request.path_params["report_id"])
+        if report is None:
+            return _unknown_report()
+        return JSONResponse(store.review(report.source["identity"], hunks_of(report)))
+
+    async def mark_review(request: Request):
+        """Add/remove reviewed marks; body: ``{"groups": {"add", "remove"}, "hunks": {...}}``."""
+        report = reports.get(request.path_params["report_id"])
+        if report is None:
+            return _unknown_report()
+        body = await request.json()
+        changes = {}
+        for field in ("groups", "hunks"):
+            change = body.get(field)
+            if change is None:
+                continue
+            if not isinstance(change, dict) or not all(
+                isinstance(change.get(k, []), list) for k in ("add", "remove")
+            ):
+                return JSONResponse({"error": f"{field} must be {{add: [], remove: []}}."}, 400)
+            changes[field] = change
+        await run_in_threadpool(store.mark, report.source["identity"], **changes)
+        return JSONResponse(store.review(report.source["identity"], hunks_of(report)))
 
     async def get_file(request: Request):
         """Whole-file diff of one changed file in a report (``?path=``)."""
@@ -145,6 +191,8 @@ def create_app(repo: Path, defaults: dict | None = None, python: str | None = No
             Route("/api/analyze", run_analysis, methods=["POST"]),
             Route("/api/report/{report_id}", get_report),
             Route("/api/report/{report_id}/file", get_file),
+            Route("/api/report/{report_id}/review", get_review),
+            Route("/api/report/{report_id}/review", mark_review, methods=["POST"]),
             Route("/api/report/{report_id}/navigate", navigate, methods=["POST"]),
             Route("/api/report/{report_id}/source", get_source),
             Route("/api/library", get_library),
