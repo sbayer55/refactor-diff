@@ -1,13 +1,16 @@
 [project]
 name = "refactor-diff"
 version = "0.1.0"
-description = "Review refactor-heavy diffs and PRs by collapsing repeated mechanical edits (Python)."
+description = "Review refactor-heavy diffs and PRs by collapsing repeated mechanical edits (Python, TypeScript, JavaScript)."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Steven Bayer" }]
 dependencies = [
     "jedi>=0.19",
     "starlette>=0.37",
+    "tree-sitter>=0.26.0",
+    "tree-sitter-javascript>=0.25.0",
+    "tree-sitter-typescript>=0.23.2",
     "uvicorn>=0.29",
 ]
 

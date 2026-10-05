@@ -220,7 +220,8 @@ def _leftover_warnings(
         analyzers = {p: analyzer_for(p) for p in g.files}
         if any(a is not None and a.is_builtin(g.old) for a in analyzers.values()):
             continue
-        hits = sources.grep_files(repo, src, g.old, ["*.py", "*.pyi"])
+        globs = sorted({glob for a in analyzers.values() if a is not None for glob in a.globs})
+        hits = sources.grep_files(repo, src, g.old, globs)
         missing = [p for p in hits if p not in head_analyses and p not in extra]
         for path, text in sources.read_file_at(repo, src, missing).items():
             analyzer = analyzer_for(path)

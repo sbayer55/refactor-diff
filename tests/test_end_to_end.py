@@ -53,3 +53,29 @@ def test_no_missed_rename_warning_when_old_name_still_defined(rename_repo):
     )
     report = analyze(rename_repo, "main", ":worktree:")
     assert not [w for w in report.warnings if w.kind == "missed-rename"]
+
+
+def test_typescript_fixture_project(ts_rename_repo):
+    report = analyze(ts_rename_repo, "main", "feature")
+    groups = {(g.kind, g.old, g.new): g for g in report.groups if g.mechanical}
+
+    rename = groups[(RENAME, "getUser", "fetchUser")]
+    assert len(rename.unit_ids) == 8
+    assert rename.details == {"call": 4, "import": 3, "definition": 1}
+    assert groups[(RETYPE, "number", "string")].details == {
+        "param userId": 4,
+        "property ownerId": 1,
+        "param ownerId": 1,
+    }
+    assert (FORMATTING, "", "") in groups  # quote style and semicolons in reports.ts
+
+    residual = [u for u in report.units.values() if not u.explained]
+    assert [(u.path, u.new_start) for u in residual] == [("api.ts", 5)]
+
+    # legacy.js was never touched but still imports and calls the old name.
+    [missed] = [w for w in report.warnings if w.kind == "missed-rename"]
+    assert [(loc.path, loc.line) for loc in missed.locations] == [
+        ("legacy.js", 1),
+        ("legacy.js", 4),
+    ]
+    assert all(f.analyzed for f in report.files)

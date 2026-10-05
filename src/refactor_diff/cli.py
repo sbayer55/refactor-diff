@@ -47,6 +47,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Python interpreter or virtualenv used to resolve imports for code navigation "
         "(default: .venv, venv or env in the repository)",
     )
+    p.add_argument(
+        "--tsserver",
+        metavar="PATH",
+        help="tsserver (or TypeScript's tsserver.js) used for TypeScript/JavaScript code "
+        "navigation (default: node_modules/typescript in the repository, then PATH)",
+    )
     p.add_argument("--repo", type=Path, default=Path.cwd(), help="git repository (default: cwd)")
     p.add_argument("--port", type=int, default=0, help="port to listen on (default: random)")
     p.add_argument("--no-browser", action="store_true", help="don't open a browser window")
@@ -106,7 +112,7 @@ def main(argv: list[str] | None = None) -> None:
     if not args.no_browser:
         threading.Timer(0.8, webbrowser.open, [url]).start()
     uvicorn.run(
-        create_app(repo, defaults_from(args), args.python),
+        create_app(repo, defaults_from(args), args.python, args.tsserver),
         host=HOST,
         port=port,
         log_level="warning",

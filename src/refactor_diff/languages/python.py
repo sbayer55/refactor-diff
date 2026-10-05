@@ -21,6 +21,7 @@ from refactor_diff.languages.base import (
     FileAnalysis,
     Pos,
     Token,
+    char_col,
     split_lines,
 )
 
@@ -49,6 +50,7 @@ _FALLBACK_RE = re.compile(
 
 class PythonAnalyzer:
     name = "python"
+    globs = ("*.py", "*.pyi")
 
     def handles(self, path: str) -> bool:
         return path.endswith((".py", ".pyi"))
@@ -172,8 +174,8 @@ def _annotations(tree: ast.AST, lines: list[str]) -> list[Annotation]:
     def add(node: ast.expr | None, target: str) -> None:
         if node is None or getattr(node, "end_lineno", None) is None:
             return
-        start = (node.lineno, _char_col(lines, node.lineno, node.col_offset))
-        end = (node.end_lineno, _char_col(lines, node.end_lineno, node.end_col_offset))
+        start = (node.lineno, char_col(lines, node.lineno, node.col_offset))
+        end = (node.end_lineno, char_col(lines, node.end_lineno, node.end_col_offset))
         found.append(Annotation(start, end, ast.unparse(node), target))
 
     for node in ast.walk(tree):
@@ -199,15 +201,7 @@ def _docstrings(tree: ast.AST, lines: list[str]) -> list[tuple[Pos, Pos]]:
             and isinstance(node.value.value, str)
             and node.end_lineno is not None
         ):
-            start = (node.lineno, _char_col(lines, node.lineno, node.col_offset))
-            end = (node.end_lineno, _char_col(lines, node.end_lineno, node.end_col_offset))
+            start = (node.lineno, char_col(lines, node.lineno, node.col_offset))
+            end = (node.end_lineno, char_col(lines, node.end_lineno, node.end_col_offset))
             spans.append((start, end))
     return spans
-
-
-def _char_col(lines: list[str], lineno: int, byte_col: int) -> int:
-    """ast reports UTF-8 byte offsets; tokens use character offsets."""
-    if lineno - 1 >= len(lines):
-        return byte_col
-    line = lines[lineno - 1]
-    return len(line.encode("utf-8")[:byte_col].decode("utf-8", errors="replace"))

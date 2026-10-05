@@ -22,6 +22,8 @@ _CONFIG_FILES = [
     "*.toml", "*.cfg", "*.ini", "*.yaml", "*.yml", "*.json", "*.lock", "*.env*",
     "dockerfile*", "makefile", ".gitignore", ".gitattributes", ".pre-commit-config.yaml",
     "requirements*.txt", "pipfile", "tox.ini", "noxfile.py", "setup.py",
+    "*.config.js", "*.config.cjs", "*.config.mjs", "*.config.ts", "*.config.mts", ".eslintrc*",
+    ".prettierrc*", ".npmrc", ".nvmrc",
 ]  # fmt: skip
 
 
