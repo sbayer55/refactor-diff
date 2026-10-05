@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
 from refactor_diff.languages.base import (
+    COMMENT,
     NAME,
     NUMBER,
     OP,
@@ -26,7 +27,7 @@ from refactor_diff.languages.base import (
     LanguageAnalyzer,
     Token,
 )
-from refactor_diff.model import FORMATTING, RENAME, REPLACE, RETYPE, Signature
+from refactor_diff.model import DOCS, FORMATTING, RENAME, REPLACE, RETYPE, Signature
 
 MAX_LABEL = 160
 MAX_WRAP_GAP = 12  # unchanged tokens a bracket wrap may enclose
@@ -153,6 +154,9 @@ def _joinable(sig: Signature | None) -> bool:
 def _classify_op(analyzer: LanguageAnalyzer, a: _Side, b: _Side, op) -> Signature | None:
     tag, i1, i2, j1, j2 = op
     old_toks, new_toks = a.tokens[i1:i2], b.tokens[j1:j2]
+    if _is_docs(old_toks, a.analysis) and _is_docs(new_toks, b.analysis):
+        if any(t.kind != STRUCTURAL for t in old_toks + new_toks):
+            return Signature(DOCS, DOCS, "", "")
     retype = _retype_sig(a, b, i1, i2, j1, j2)
     if retype is not None:
         return retype
@@ -171,6 +175,16 @@ def _classify_op(analyzer: LanguageAnalyzer, a: _Side, b: _Side, op) -> Signatur
             RENAME, f"{RENAME}\x00{old_name}\x00{new_name}", old_name, new_name, detail
         )
     return None
+
+
+def _is_docs(tokens: list[Token], analysis: FileAnalysis) -> bool:
+    """Every token is a comment, a docstring, or layout."""
+    return all(
+        t.kind in (COMMENT, STRUCTURAL)
+        or t.kind == STRING
+        and any(s <= t.start and t.end <= e for s, e in analysis.docstrings)
+        for t in tokens
+    )
 
 
 def rename_context(analyzer: LanguageAnalyzer, tokens: list[Token], i: int) -> str:

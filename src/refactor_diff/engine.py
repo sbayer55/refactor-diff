@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from refactor_diff import sources
+from refactor_diff.categories import categorize
 from refactor_diff.grouping import (
     build_groups,
     find_leftovers,
@@ -55,6 +56,7 @@ def analyze(
             analyzed=analyzer is not None,
             additions=0,
             deletions=0,
+            category=categorize(change.path, analyzed=analyzer is not None),
         )
         files.append(summary)
         if analyzer is None:

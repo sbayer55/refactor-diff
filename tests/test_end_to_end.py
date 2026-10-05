@@ -32,6 +32,8 @@ def test_fixture_project(rename_repo):
 
     files = {f.path: f for f in report.files}
     assert not files["README.txt"].analyzed
+    assert files["README.txt"].category == "docs"
+    assert files["users.py"].category == "source"
     assert files["api.py"].residual_units == 1
 
 

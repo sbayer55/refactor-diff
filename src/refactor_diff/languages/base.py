@@ -45,6 +45,7 @@ class FileAnalysis:
     lines: list[str]
     tokens: list[Token]
     annotations: list[Annotation] = field(default_factory=list)
+    docstrings: list[tuple[Pos, Pos]] = field(default_factory=list)  # (start, end) spans
     parsed: bool = True  # False when the analyzer had to fall back to a rough tokenizer
 
 

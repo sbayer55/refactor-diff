@@ -19,6 +19,7 @@ from refactor_diff.languages.base import (
     STRUCTURAL,
     Annotation,
     FileAnalysis,
+    Pos,
     Token,
     split_lines,
 )
@@ -73,11 +74,19 @@ class PythonAnalyzer:
             tokens = _fallback_tokenize(text)
             parsed = False
         try:
-            annotations = _annotations(ast.parse(text), lines)
+            tree = ast.parse(text)
+            annotations = _annotations(tree, lines)
+            docstrings = _docstrings(tree, lines)
         except (SyntaxError, ValueError):
-            annotations = []
+            annotations, docstrings = [], []
             parsed = False
-        return FileAnalysis(lines=lines, tokens=tokens, annotations=annotations, parsed=parsed)
+        return FileAnalysis(
+            lines=lines,
+            tokens=tokens,
+            annotations=annotations,
+            docstrings=docstrings,
+            parsed=parsed,
+        )
 
 
 def _tokenize(text: str) -> list[Token]:
@@ -177,6 +186,23 @@ def _annotations(tree: ast.AST, lines: list[str]) -> list[Annotation]:
         elif isinstance(node, ast.AnnAssign):
             add(node.annotation, f"variable {ast.unparse(node.target)}")
     return found
+
+
+def _docstrings(tree: ast.AST, lines: list[str]) -> list[tuple[Pos, Pos]]:
+    """Spans of bare string statements: module/class/function docstrings and the
+    attribute docstrings that follow assignments."""
+    spans = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+            and node.end_lineno is not None
+        ):
+            start = (node.lineno, _char_col(lines, node.lineno, node.col_offset))
+            end = (node.end_lineno, _char_col(lines, node.end_lineno, node.end_col_offset))
+            spans.append((start, end))
+    return spans
 
 
 def _char_col(lines: list[str], lineno: int, byte_col: int) -> int:

@@ -6,7 +6,7 @@ from collections import Counter, defaultdict
 
 from refactor_diff.languages.base import NAME, FileAnalysis, LanguageAnalyzer
 from refactor_diff.model import (
-    FORMATTING,
+    ALWAYS_MECHANICAL,
     RENAME,
     ChangeUnit,
     Group,
@@ -45,7 +45,7 @@ def build_groups(units: list[ChangeUnit], min_count: int) -> list[Group]:
                 unit_ids=unit_ids,
                 files=sorted({u.path for u, _ in members}),
                 details=dict(details.most_common()),
-                mechanical=first.kind == FORMATTING or len(unit_ids) >= min_count,
+                mechanical=first.kind in ALWAYS_MECHANICAL or len(unit_ids) >= min_count,
             )
         )
 
@@ -53,7 +53,9 @@ def build_groups(units: list[ChangeUnit], min_count: int) -> list[Group]:
     for unit in units:
         unit.explained = bool(unit.signatures) and all(s.key in mechanical for s in unit.signatures)
 
-    groups.sort(key=lambda g: (not g.mechanical, g.kind == FORMATTING, -len(g.unit_ids), g.label))
+    groups.sort(
+        key=lambda g: (not g.mechanical, g.kind in ALWAYS_MECHANICAL, -len(g.unit_ids), g.label)
+    )
     return groups
 
 

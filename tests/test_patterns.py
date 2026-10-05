@@ -1,5 +1,5 @@
 from refactor_diff.languages.python import PythonAnalyzer
-from refactor_diff.model import FORMATTING, RENAME, REPLACE, RETYPE
+from refactor_diff.model import DOCS, FORMATTING, RENAME, REPLACE, RETYPE
 from refactor_diff.patterns import classify
 
 PY = PythonAnalyzer()
@@ -120,3 +120,26 @@ def test_unparseable_file_still_classifies():
     assert sigs("x = get_user(\n", "x = fetch_user(\n") == [
         (RENAME, "get_user", "fetch_user", "call")
     ]
+
+
+def test_comment_change_is_docs():
+    assert sigs("x = 1  # old note\n", "x = 1  # new note\n") == [(DOCS, "", "", "")]
+
+
+def test_added_comment_line_is_docs():
+    assert sigs("", "# explain the next line\n") == [(DOCS, "", "", "")]
+
+
+def test_docstring_change_is_docs():
+    old = 'def f():\n    """Old summary."""\n    return 1\n'
+    new = 'def f():\n    """New summary."""\n    return 1\n'
+    assert sigs(old, new) == [(DOCS, "", "", "")]
+
+
+def test_regular_string_change_is_not_docs():
+    assert sigs('x = "old"\n', 'x = "new"\n')[0][0] == REPLACE
+
+
+def test_comment_and_code_change_keeps_code_signature():
+    kinds = {s[0] for s in sigs("f(a)  # old\n", "g(a)  # new\n")}
+    assert kinds == {RENAME, DOCS}

@@ -14,6 +14,10 @@ FORMATTING = "formatting"
 RENAME = "rename"
 RETYPE = "retype"
 REPLACE = "replace"
+DOCS = "docs"  # comment / docstring only
+
+# Kinds that are never logic changes, so they count as mechanical even when they don't repeat.
+ALWAYS_MECHANICAL = {FORMATTING, DOCS}
 
 
 def short_hash(*parts: object) -> str:
@@ -46,6 +50,8 @@ class Signature:
     def label(self) -> str:
         if self.kind == FORMATTING:
             return "Whitespace / layout only"
+        if self.kind == DOCS:
+            return "Comments & docstrings"
         if self.kind == REPLACE and not self.old:
             return f"insert {self.new}"
         if self.kind == REPLACE and not self.new:
@@ -138,6 +144,7 @@ class FileSummary:
     units: int = 0
     residual_units: int = 0
     parse_ok: bool = True
+    category: str = "source"  # see categories.py
 
 
 @dataclass

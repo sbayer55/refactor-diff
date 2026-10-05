@@ -46,6 +46,7 @@ refactor-diff main..my-refactor        # compare branches
 refactor-diff --pr 123                 # a GitHub pull request
 refactor-diff --worktree main          # uncommitted changes vs main
 refactor-diff --repo ../other --port 8000 --no-browser
+refactor-diff main..HEAD --hide tests,comments --exclude migrations
 ```
 
 ### What you see
@@ -56,7 +57,27 @@ refactor-diff --repo ../other --port 8000 --no-browser
 - **Mechanical patterns**: one entry per repeated edit, listing every occurrence grouped by
   file. Tick **Reviewed** as you go. The checkmarks are saved in your browser for that commit range.
 - **Warnings**: places where the refactor may be incomplete or inconsistent (see below).
-- **Files**: every changed file, with its status and whether it was analyzed.
+- **Files**: every changed file, with its status, kind and whether it was analyzed.
+
+### Filtering
+
+The filter bar under the summary narrows everything on the page to what you care about. The
+summary, patterns, review list and warnings all recount for the visible changes. Filtering
+happens in the browser and never re-runs the analysis. Your filters are remembered per
+repository.
+
+- **Show files**: toggle files by kind. Each changed file is classified from its path:
+  - *tests*: `tests/` and `test/` directories, `test_*.py`, `*_test.py`, `conftest.py`
+  - *config*: `*.toml`, `*.yaml`, `*.json`, lock files, `requirements*.txt`, `.github/`, …
+  - *docs*: `docs/` directories, `*.md`, `*.rst`, `*.txt`, README, CHANGELOG, …
+  - *source*: other analyzed files; *other*: everything else
+- **Comment & docstring edits**: hide changes that only touch comments or docstrings. Even
+  when shown, these are collapsed into their own `docs` pattern, not listed under Needs review.
+- **Exclude**: comma-separated globs. A pattern without `/` matches any path segment
+  (`migrations`, `*_pb2.py`); a pattern with `/` matches the whole path (`src/legacy/**`).
+
+To pre-set filters from the command line, use `--hide` (any of `source`, `tests`, `docs`,
+`config`, `other`, `comments`) and `--exclude GLOB` (repeatable).
 
 ## How it works
 
@@ -74,6 +95,7 @@ refactor-diff --repo ../other --port 8000 --no-browser
    | `retype` | `def f(x: int)` → `def f(x: str)`, `-> List[int]` → `-> list[int]`, adding an annotation |
    | `replace` | any other repeated substitution, e.g. `cfg.get("timeout")` → `settings.timeout` |
    | `formatting` | only whitespace or layout changed (quote style, re-wrapping) |
+   | `docs` | only comments or docstrings changed |
 
    Nearby edits that belong together become one template instead of fragments. This
    applies when an edit opens a bracket that a later edit closes, or when two edits are
@@ -110,6 +132,7 @@ Layout (`src/refactor_diff/`):
 | `languages/` | language analyzers (`base.py` interface, `python.py`) |
 | `patterns.py` | token alignment, signature classification |
 | `grouping.py` | grouping, mechanical threshold, warnings |
+| `categories.py` | file kinds (source, tests, docs, config, other) for filtering |
 | `engine.py` | `analyze()`, which turns a source into a `Report` |
 | `model.py` | serializable report model with stable IDs |
 | `web/` | Starlette server and the vanilla-JS single-page UI |
