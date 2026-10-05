@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
+from refactor_diff.hunks import Opcode
 from refactor_diff.languages.base import (
     COMMENT,
     NAME,
@@ -27,7 +28,17 @@ from refactor_diff.languages.base import (
     LanguageAnalyzer,
     Token,
 )
-from refactor_diff.model import DOCS, FORMATTING, RENAME, REPLACE, RETYPE, Signature
+from refactor_diff.model import (
+    DOCS,
+    FORMATTING,
+    RENAME,
+    REPLACE,
+    RETYPE,
+    ChangeUnit,
+    Line,
+    Signature,
+    short_hash,
+)
 
 MAX_LABEL = 160
 MAX_WRAP_GAP = 12  # unchanged tokens a bracket wrap may enclose
@@ -106,6 +117,38 @@ def classify(
     return result
 
 
+def make_unit(
+    path: str,
+    hunk_id: str,
+    op: Opcode,
+    cls: Classification,
+    old_lines: list[str],
+    new_lines: list[str],
+) -> ChangeUnit:
+    old = [Line(old_lines[i], merge_ranges(cls.old_hl.get(i + 1, []))) for i in range(op.i1, op.i2)]
+    new = [Line(new_lines[j], merge_ranges(cls.new_hl.get(j + 1, []))) for j in range(op.j1, op.j2)]
+    return ChangeUnit(
+        id=short_hash(path, op.i1, op.i2, op.j1, op.j2),
+        path=path,
+        hunk_id=hunk_id,
+        old_start=op.i1 + 1,
+        new_start=op.j1 + 1,
+        old=old,
+        new=new,
+        signatures=cls.signatures,
+    )
+
+
+def merge_ranges(ranges: list[list[int]]) -> list[list[int]]:
+    merged: list[list[int]] = []
+    for start, end in sorted(ranges):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return merged
+
+
 def _add(result: Classification, sig: Signature) -> None:
     if all(s.key != sig.key for s in result.signatures):
         result.signatures.append(sig)
@@ -157,6 +200,8 @@ def _classify_op(analyzer: LanguageAnalyzer, a: _Side, b: _Side, op) -> Signatur
     if _is_docs(old_toks, a.analysis) and _is_docs(new_toks, b.analysis):
         if any(t.kind != STRUCTURAL for t in old_toks + new_toks):
             return Signature(DOCS, DOCS, "", "")
+        # Only indentation / logical-line structure changed (e.g. a block moved into a class).
+        return Signature(FORMATTING, FORMATTING, "", "")
     retype = _retype_sig(a, b, i1, i2, j1, j2)
     if retype is not None:
         return retype

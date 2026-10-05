@@ -10,7 +10,7 @@ const state = {
   groupsByKey: new Map(),
   reviewed: new Set(),
   shown: PAGE,
-  filters: { hidden: new Set(), hideDocs: false, exclude: [] },
+  filters: { hidden: new Set(), hideDocs: false, exclude: [], nearOnly: false },
   view: null, // the report as filtered by state.filters; see applyFilters()
   fileDiffs: new Map(), // path -> Promise of the whole-file diff (see /api/report/{id}/file)
   split: false, // side-by-side diffs (preference; see splitActive())
@@ -112,6 +112,7 @@ function loadFilters(cliDefaults) {
     hidden: new Set(f.hidden || []),
     hideDocs: Boolean(f.hideDocs),
     exclude: f.exclude || [],
+    nearOnly: false,
   };
 }
 function saveFilters() {
@@ -124,7 +125,7 @@ function saveFilters() {
 }
 function filtersActive() {
   const f = state.filters;
-  return f.hidden.size > 0 || f.hideDocs || f.exclude.length > 0;
+  return f.hidden.size > 0 || f.hideDocs || f.exclude.length > 0 || f.nearOnly;
 }
 
 function applyFilters() {
@@ -138,7 +139,8 @@ function applyFilters() {
     return !excludes.some((re) => re.test(path));
   };
   const docsOnly = (u) => u.signatures.length > 0 && u.signatures.every((k) => k === "docs");
-  const unitVisible = (u) => fileVisible(u.path) && !(f.hideDocs && docsOnly(u));
+  const unitVisible = (u) => fileVisible(u.path) && !(f.hideDocs && docsOnly(u))
+    && !(f.nearOnly && !u.explained && !(u.near && u.near.length));
 
   const units = new Set(Object.values(r.units).filter(unitVisible).map((u) => u.id));
   const groups = r.groups
@@ -165,6 +167,7 @@ function applyFilters() {
     fileVisible,
     hiddenUnits: Object.keys(r.units).length - units.size,
     docsUnits: Object.values(r.units).filter((u) => fileVisible(u.path) && docsOnly(u)).length,
+    nearUnits: Object.values(r.units).filter((u) => fileVisible(u.path) && !u.explained && u.near && u.near.length).length,
     stats: {
       files_changed: files.length,
       files_analyzed: files.filter((x) => x.analyzed).length,
@@ -172,6 +175,8 @@ function applyFilters() {
       residual_units: units.size - explained,
       collapsed_pct: units.size ? Math.round((100 * explained) / units.size) : 0,
       mechanical_groups: groups.filter((g) => g.mechanical).length,
+      verified_units: [...units].filter((id) => r.units[id].verified).length,
+      moves: groups.filter((g) => g.kind === "move").length,
     },
   };
 }
@@ -202,6 +207,9 @@ function renderFilters() {
     <button type="button" class="filter-chip" id="docs-toggle" aria-pressed="${!f.hideDocs}"
       title="Changes that only touch comments or docstrings" ${docsTotal ? "" : "disabled"}>
       Comment &amp; docstring edits <span class="n">${docsTotal}</span></button>
+    ${v.nearUnits ? `<button type="button" class="filter-chip mode" id="near-toggle" aria-pressed="${f.nearOnly}"
+      title="Only leftover changes that almost match a mechanical pattern (likely typos)">
+      Only near misses <span class="n">${v.nearUnits}</span></button>` : ""}
     <label class="exclude">
       <span class="filter-label">Exclude</span>
       <input id="exclude-input" type="text" spellcheck="false" value="${esc(f.exclude.join(", "))}"
@@ -227,6 +235,10 @@ function renderFilters() {
     saveFilters();
     rerender();
   });
+  $("#near-toggle")?.addEventListener("click", () => {
+    f.nearOnly = !f.nearOnly;
+    rerender();
+  });
   const input = $("#exclude-input");
   input.addEventListener("change", () => {
     f.exclude = input.value.split(",").map((s) => s.trim()).filter(Boolean);
@@ -235,7 +247,7 @@ function renderFilters() {
   });
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") input.blur(); });
   $("#reset-filters")?.addEventListener("click", () => {
-    state.filters = { hidden: new Set(), hideDocs: false, exclude: [] };
+    state.filters = { hidden: new Set(), hideDocs: false, exclude: [], nearOnly: false };
     saveFilters();
     rerender();
   });
@@ -322,6 +334,7 @@ function renderSummary() {
       <span class="big">${stats.collapsed_pct}%</span>
       <span>of changed lines collapsed</span>
       <div class="meter"><div style="width:${stats.collapsed_pct}%"></div></div>
+      ${stats.verified_units ? `<span class="sub" title="${esc(VERIFIED_TITLE)}">✓ ${plural(stats.verified_units, "change")} verified by AST</span>` : ""}
     </div>
     <div class="metric"><span class="big">${stats.residual_units}</span>
       <span>${stats.residual_units === 1 ? "change" : "changes"} to review</span></div>
@@ -415,15 +428,29 @@ function shortLabel(label) {
   return label.length > TAG_LABEL_MAX ? label.slice(0, TAG_LABEL_MAX - 1) + "…" : label;
 }
 
+const VERIFIED_TITLE = "Verified: the enclosing statement parses to the same program on both sides "
+  + "once the diff's renames are applied (docstrings and type annotations ignored).";
+
 function unitTags(unit) {
-  return unit.signatures.map((key) => {
+  const tags = unit.signatures.map((key) => {
     const g = state.groupsByKey.get(key);
     if (!g || !state.view.groupsById.has(g.id)) return "";
     if (g.mechanical) {
       return `<a class="tag" href="#group/${g.id}">${esc(g.kind)}: <span class="code">${esc(shortLabel(g.label))}</span></a>`;
     }
     return `<span class="tag unique">unique ${esc(g.kind)}: <span class="code">${esc(shortLabel(g.label))}</span></span>`;
-  }).join("");
+  });
+  for (const n of unit.near || []) {
+    const g = state.view.groupsById.get(n.group_id);
+    if (g) tags.push(`<a class="tag near" href="#group/${g.id}" title="${esc(n.hint)}">≈ almost <span class="code">${esc(shortLabel(g.label))}</span></a>`);
+  }
+  if (unit.verified) tags.push(`<span class="tag verified" title="${esc(VERIFIED_TITLE)}">✓ verified</span>`);
+  return tags.join("");
+}
+
+// The other half of a move, for showing a moved block as a diff against where it came from.
+function partnerOf(unit) {
+  return unit && unit.partner ? state.report.units[unit.partner] : null;
 }
 
 function renderReview() {
@@ -462,9 +489,23 @@ function renderReview() {
 }
 
 function hunkRows(h) {
-  return diffRows(h.lines.map((ln) => ({
-    t: ln.type, o: ln.old_no, n: ln.new_no, text: ln.text, unit: ln.unit, hl: ln.hl,
-  })), { tags: true, path: h.path });
+  const lines = [];
+  const shown = new Set();
+  for (const ln of h.lines) {
+    // A block moved here from elsewhere: show the original above it so the reader sees a
+    // diff of the move rather than a bare insertion.
+    const unit = ln.type === "+" && ln.unit ? state.report.units[ln.unit] : null;
+    const from = unit && !shown.has(unit.id) ? partnerOf(unit) : null;
+    if (from && from.old.length) {
+      shown.add(unit.id);
+      lines.push({ t: " ", text: "", from: `moved from ${from.path}:${from.old_start}`, unit: unit.id });
+      lines.push(...from.old.map((l, k) => ({
+        t: "-", o: from.old_start + k, n: null, text: l.text, unit: unit.id, hl: l.hl, path: from.path,
+      })));
+    }
+    lines.push({ t: ln.type, o: ln.old_no, n: ln.new_no, text: ln.text, unit: ln.unit, hl: ln.hl });
+  }
+  return diffRows(lines, { tags: true, path: h.path });
 }
 
 // Rows for a list of diff lines ({t, o, n, text, unit, hl}) from the file at `opts.path`.
@@ -507,17 +548,24 @@ function unifiedRows(lines, { tags = false, focus = null, anchors = false, path 
   for (const ln of lines) {
     const st = lineState(ln, focus);
     if (tags) rows += tagRow(st, tagged, 3, 1);
+    if (ln.from) { rows += fromRow(ln, 3, 1); continue; }
     const changed = ln.t !== " ";
     const attrs = anchors ? anchorAttrs(ln.o, ln.n) : "";
+    const p = ln.path || path;
     rows += `<tr class="${st.cls}${st.dim ? " explained" : ""}${st.focused ? " focus" : ""}${
       anchors && changed && !prevChanged ? " chg-start" : ""}"${attrs}>
       <td class="no">${ln.o ?? ""}</td><td class="no">${ln.n ?? ""}</td>
       <td class="sign">${ln.t === " " ? "" : ln.t}</td>
-      <td class="text${plain ? " plain" : ""}"${ln.t === "-" ? navAttrs(path, "o", ln.o) : navAttrs(path, "n", ln.n)}>${
+      <td class="text${plain ? " plain" : ""}"${ln.t === "-" ? navAttrs(p, "o", ln.o) : navAttrs(p, "n", ln.n)}>${
         codeHtml(ln, sx, plain)}</td></tr>`;
     prevChanged = changed;
   }
   return rows;
+}
+
+// A label row above lines pulled in from elsewhere ("moved from a.py:12").
+function fromRow(ln, lead, span) {
+  return `<tr class="tags">${"<td></td>".repeat(lead)}<td colspan="${span}"><span class="from">↓ ${esc(ln.from)}</span></td></tr>`;
 }
 
 // Side by side: removed lines on the left, added lines on the right, paired in order within
@@ -532,7 +580,7 @@ function splitRows(lines, { tags = false, focus = null, anchors = false, path = 
     const st = lineState(ln, focus);
     const num = side === "old" ? ln.o : ln.n;
     return `<td class="no ${st.cls}">${num}</td><td class="side ${st.cls}${st.dim ? " explained" : ""}${
-      st.focused ? " focus" : ""}"${navAttrs(path, side === "old" ? "o" : "n", num)}>${
+      st.focused ? " focus" : ""}"${navAttrs(ln.path || path, side === "old" ? "o" : "n", num)}>${
       codeHtml(ln, sx)}</td>`;
   };
   for (const [left, right] of pairLines(lines)) {
@@ -541,6 +589,7 @@ function splitRows(lines, { tags = false, focus = null, anchors = false, path = 
         rows += tagRow(lineState(ln, focus), tagged, 1, 3);
       }
     }
+    if (left && left.from) { rows += fromRow(left, 1, 3); continue; }
     const changed = left !== right;
     const attrs = anchors ? anchorAttrs(left?.o, right?.n) : "";
     rows += `<tr class="split-row${anchors && changed && !prevChanged ? " chg-start" : ""}"${attrs}>${
@@ -796,10 +845,14 @@ async function onContentClick(e) {
 }
 
 function unitRows(u) {
-  return diffRows([
-    ...u.old.map((ln, k) => ({ t: "-", o: u.old_start + k, n: null, text: ln.text, unit: u.id, hl: ln.hl })),
-    ...u.new.map((ln, k) => ({ t: "+", o: null, n: u.new_start + k, text: ln.text, unit: u.id, hl: ln.hl })),
-  ], { focus: new Set([u.id]), path: u.path });
+  // A moved block is shown against the place it came from.
+  const from = u.new.length ? partnerOf(u) : null;
+  const lines = from ? [
+    { t: " ", text: "", from: `moved from ${from.path}:${from.old_start}`, unit: u.id },
+    ...from.old.map((ln, k) => ({ t: "-", o: from.old_start + k, n: null, text: ln.text, unit: u.id, hl: ln.hl, path: from.path })),
+  ] : u.old.map((ln, k) => ({ t: "-", o: u.old_start + k, n: null, text: ln.text, unit: u.id, hl: ln.hl }));
+  lines.push(...u.new.map((ln, k) => ({ t: "+", o: null, n: u.new_start + k, text: ln.text, unit: u.id, hl: ln.hl })));
+  return diffRows(lines, { focus: new Set([u.id]), path: u.path });
 }
 
 function renderGroup(id) {
@@ -813,38 +866,53 @@ function renderGroup(id) {
     return;
   }
 
-  const transform = g.kind === "formatting" || g.kind === "docs"
+  const transform = g.kind === "formatting" || g.kind === "docs" || g.kind === "move"
     ? `<span class="transform">${esc(g.label)}</span>`
     : `<span class="transform"><span class="old">${esc(g.old || "∅")}</span> → <span class="new">${esc(g.new || "∅")}</span></span>`;
   const isDone = state.reviewed.has(g.id);
   const warnCount = state.view.warnings.filter((w) => w.group_id === g.id).length;
   const files = new Set(g.visible.map((uid) => r.units[uid].path));
   const hiddenHere = g.unit_ids.length - g.visible.length;
+  let units = g.visible.map((uid) => r.units[uid]);
+  const verifiedCount = units.filter((u) => u.verified).length;
+  // A move is one occurrence shown as old block → new block; its deleted half isn't listed.
+  const moved = g.kind === "move" ? units.find((u) => u.new.length && u.partner) : null;
+  if (moved) units = units.filter((u) => u.id !== moved.partner);
+  const count = g.kind === "move" ? `moved block${units.length > 1 ? ` + ${plural(units.length - 1, "import edit")}` : ""}`
+    : `${plural(g.visible.length, "occurrence")} in ${plural(files.size, "file")}`;
   let html = `<div class="page-head">
       <h2><span class="kind ${g.kind}">${g.kind}</span>${transform}</h2>
       <span class="spacer"></span>
       <label class="toggle"><input type="checkbox" id="group-reviewed" ${isDone ? "checked" : ""}> Reviewed</label>
-      <p>${plural(g.visible.length, "occurrence")} in ${plural(files.size, "file")}${hiddenHere ? ` (${hiddenHere} hidden by filters)` : ""}${warnCount ? ` · <a href="#warnings">${plural(warnCount, "warning")}</a>` : ""}</p>
+      <p>${count}${hiddenHere ? ` (${hiddenHere} hidden by filters)` : ""}${
+        verifiedCount ? ` · <span class="tag verified" title="${esc(VERIFIED_TITLE)}">✓ ${g.kind === "move" ? "verified" : `${verifiedCount} of ${g.visible.length} verified`}</span>` : ""}${
+        warnCount ? ` · <a href="#warnings">${plural(warnCount, "warning")}</a>` : ""}</p>
     </div>`;
   const details = Object.entries(g.details);
-  if (details.length) {
+  if (details.length && g.kind !== "move") {
     html += `<div class="chips">${details.map(([d, n]) => `<span class="chip">${esc(d)} <b>×${n}</b></span>`).join("")}</div>`;
   }
 
-  const units = g.visible.map((uid) => r.units[uid]);
   const byFile = new Map();
   for (const u of units.slice(0, state.shown)) {
     if (!byFile.has(u.path)) byFile.set(u.path, []);
     byFile.get(u.path).push(u);
   }
+  let importsHead = false;
   for (const [path, us] of byFile) {
+    if (moved && !us.includes(moved) && !importsHead) {
+      importsHead = true;
+      html += `<h3 class="sub-head">Imports updated for this move</h3>`;
+    }
     html += `<section class="file"><header><span class="path">${esc(path)}</span>
       <span class="meta">×${us.length}</span>${fileLinks(path)}</header>`;
     for (const u of us) {
       const where = { oldLine: u.old.length ? u.old_start : null, newLine: u.new.length ? u.new_start : null };
+      const from = u === moved ? partnerOf(u) : null;
       html += `<div class="occurrence" data-unit="${u.id}"><table class="diff">${unitRows(u)}</table>
         <div class="occ-actions">
           ${u.explained ? "" : `<a class="badge-link" href="#review">also has other changes — see Needs review</a>`}
+          ${from ? `<span class="meta">moved from ${esc(from.path)}:${from.old_start}</span>${fileLinks(from.path, { oldLine: from.old_start })}` : ""}
           <button type="button" class="link" data-unit-context>Show context</button>
           ${fileLinks(path, where)}
         </div></div>`;
@@ -865,11 +933,13 @@ function renderWarnings() {
   const content = $("#content");
   if (!v.warnings.length) {
     content.innerHTML = `<div class="empty"><h2>No warnings</h2>
-      <p>No references to renamed definitions are left behind, and no symbol was renamed two different ways.</p></div>`;
+      <p>No references to renamed definitions are left behind, no symbol was renamed two different ways,
+      and no leftover change looks like a near miss of a pattern.</p></div>`;
     return;
   }
   let html = `<div class="page-head"><h2>Warnings</h2>
-    <p>Possible problems with the refactor: references to a renamed definition that no longer exists, or a symbol renamed two different ways.</p></div>`;
+    <p>Possible problems with the refactor: references to a renamed definition that no longer exists, a symbol
+    renamed two different ways, or a leftover change that almost matches a pattern (a likely typo).</p></div>`;
   for (const w of v.warnings) {
     const g = r.groups.find((x) => x.id === w.group_id);
     const re = g && g.kind === "rename"

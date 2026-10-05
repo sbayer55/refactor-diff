@@ -15,9 +15,12 @@ RENAME = "rename"
 RETYPE = "retype"
 REPLACE = "replace"
 DOCS = "docs"  # comment / docstring only
+MOVE = "move"  # a block deleted in one place and inserted in another
+ARGS = "args"  # a call's or def's argument list changed shape (added kwarg, ...)
+IMPORT = "import"  # an import changed module path or gained/lost a name
 
 # Kinds that are never logic changes, so they count as mechanical even when they don't repeat.
-ALWAYS_MECHANICAL = {FORMATTING, DOCS}
+ALWAYS_MECHANICAL = {FORMATTING, DOCS, MOVE}
 
 
 def short_hash(*parts: object) -> str:
@@ -52,9 +55,12 @@ class Signature:
             return "Whitespace / layout only"
         if self.kind == DOCS:
             return "Comments & docstrings"
-        if self.kind == REPLACE and not self.old:
+        if self.kind == MOVE:
+            where = f"within {self.old}" if self.old == self.new else f"{self.old} → {self.new}"
+            return f"moved {self.detail}: {where}"
+        if self.kind in (REPLACE, IMPORT) and not self.old:
             return f"insert {self.new}"
-        if self.kind == REPLACE and not self.new:
+        if self.kind in (REPLACE, IMPORT) and not self.new:
             return f"delete {self.old}"
         return f"{self.old} → {self.new}"
 
@@ -63,6 +69,15 @@ class Signature:
 class Line:
     text: str
     hl: list[list[int]] = field(default_factory=list)  # [[start_col, end_col], ...]
+
+
+@dataclass
+class NearMiss:
+    """A mechanical pattern this unit almost, but not quite, matches."""
+
+    group_id: str
+    score: float
+    hint: str
 
 
 @dataclass
@@ -76,6 +91,9 @@ class ChangeUnit:
     new: list[Line]
     signatures: list[Signature] = field(default_factory=list)
     explained: bool = False
+    partner: str | None = None  # the other half of a move (see moves.py)
+    verified: bool = False  # AST-identical after normalization (see verify.py)
+    near: list[NearMiss] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -101,6 +119,9 @@ class Hunk:
     new_start: int
     lines: list[HunkLine]
     unit_ids: list[str]
+    # Hash of the changed lines' text (context and line numbers excluded): the same edit keeps
+    # its fingerprint when lines above it shift, so review marks survive new commits.
+    fingerprint: str = ""
 
 
 @dataclass
@@ -172,6 +193,8 @@ class Report:
             "residual_units": total - explained,
             "collapsed_pct": round(100 * explained / total) if total else 0,
             "mechanical_groups": sum(1 for g in self.groups if g.mechanical),
+            "moves": sum(1 for g in self.groups if g.kind == MOVE),
+            "verified_units": sum(1 for u in self.units.values() if u.verified),
         }
 
     def to_dict(self) -> dict:

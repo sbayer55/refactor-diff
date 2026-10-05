@@ -40,6 +40,82 @@ class Annotation:
         return self.start <= tok.start and tok.end <= self.end
 
 
+@dataclass(frozen=True)
+class StmtSpan:
+    """A statement's line span (1-based, inclusive; decorators included). Top-level
+    statements recurse into class bodies to method level via ``children``."""
+
+    start: int
+    end: int
+    kind: str  # "def", "class", "stmt"
+    qualname: str  # "Cls.method" for methods, the def/class name, or "" for other statements
+    node: object = field(repr=False, compare=False)  # the language's AST node
+    children: tuple[StmtSpan, ...] = ()
+
+    def contains(self, first: int, last: int) -> bool:
+        return self.start <= first and last <= self.end
+
+
+Arg = tuple[Pos, Pos, str | None]  # (start, end, keyword); keyword None = positional, "*"/"**"
+
+
+@dataclass(frozen=True)
+class CallSite:
+    """A call expression: ``name`` is the callee text, ``args_*`` the span from the opening
+    parenthesis through the closing one."""
+
+    name: str
+    start: Pos
+    end: Pos
+    args_start: Pos
+    args_end: Pos
+    args: tuple[Arg, ...]
+
+    @property
+    def short_name(self) -> str:
+        return self.name.rsplit(".", 1)[-1]
+
+
+@dataclass(frozen=True)
+class Param:
+    name: str
+    kind: str  # "posonly" | "pos" | "vararg" | "kwonly" | "kwarg"
+    has_default: bool
+    start: Pos
+    end: Pos  # span of the whole parameter including annotation and default
+
+
+@dataclass(frozen=True)
+class DefSite:
+    name: str
+    start: Pos
+    end: Pos
+    params_start: Pos  # the parenthesised parameter list, parens included
+    params_end: Pos
+    params: tuple[Param, ...]
+
+    @property
+    def short_name(self) -> str:
+        return self.name
+
+
+@dataclass(frozen=True)
+class Binding:
+    """One name an import statement binds. ``name`` is None for ``import a.b``."""
+
+    module: str  # dotted module, prefixed with "." per relative level
+    name: str | None
+    alias: str  # the name bound in the importing module
+    level: int = 0
+
+
+@dataclass(frozen=True)
+class ImportSite:
+    start: int  # 1-based inclusive lines
+    end: int
+    bindings: tuple[Binding, ...]
+
+
 @dataclass
 class FileAnalysis:
     lines: list[str]
@@ -47,6 +123,12 @@ class FileAnalysis:
     annotations: list[Annotation] = field(default_factory=list)
     docstrings: list[tuple[Pos, Pos]] = field(default_factory=list)  # (start, end) spans
     parsed: bool = True  # False when the analyzer had to fall back to a rough tokenizer
+    # Structure from the parser; empty when the file didn't parse.
+    tree: object | None = field(default=None, repr=False, compare=False)
+    statements: list[StmtSpan] = field(default_factory=list)
+    calls: list[CallSite] = field(default_factory=list)
+    defs: list[DefSite] = field(default_factory=list)
+    imports: list[ImportSite] = field(default_factory=list)
 
 
 class LanguageAnalyzer(Protocol):
@@ -68,6 +150,18 @@ class LanguageAnalyzer(Protocol):
 
     def definition_keywords(self) -> frozenset[str]:
         """Tokens that introduce a named definition (def, class, ...)."""
+        ...
+
+    def parse_block(self, text: str) -> object | None:
+        """Parse a standalone block of code (dedented), or None if it doesn't parse."""
+        ...
+
+    def normalized_dump(
+        self, node: object, renames: dict[str, str], strip_annotations: bool
+    ) -> str:
+        """A canonical dump of an AST node with docstrings removed, identifiers mapped
+        through ``renames`` and, optionally, type annotations dropped. Equal dumps mean
+        the code is the same program."""
         ...
 
 

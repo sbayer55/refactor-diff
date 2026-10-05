@@ -10,6 +10,7 @@ from refactor_diff.grouping import (
     build_groups,
     find_leftovers,
     inconsistent_renames,
+    near_misses,
     still_defined,
 )
 from refactor_diff.hunks import Opcode, candidate_units, diff_hunks
@@ -23,12 +24,13 @@ from refactor_diff.model import (
     Group,
     Hunk,
     HunkLine,
-    Line,
     Report,
     Warning,
     short_hash,
 )
-from refactor_diff.patterns import Classification, classify
+from refactor_diff.moves import detect_moves, link_imports, resync_hunks
+from refactor_diff.patterns import Classification, classify, make_unit
+from refactor_diff.verify import verify_units
 
 
 def analyze(
@@ -44,7 +46,7 @@ def analyze(
     files: list[FileSummary] = []
     units: dict[str, ChangeUnit] = {}
     hunks: dict[str, Hunk] = {}
-    head_analyses: dict[str, FileAnalysis] = {}
+    analyses: dict[str, tuple[FileAnalysis, FileAnalysis]] = {}
     texts: dict[str, tuple[str, str]] = {}
 
     for change in sorted(changes, key=lambda c: c.path):
@@ -70,19 +72,27 @@ def analyze(
             continue
         old_an, new_an = analyzer.analyze(change.old_text), analyzer.analyze(change.new_text)
         summary.parse_ok = old_an.parsed and new_an.parsed
-        head_analyses[change.path] = new_an
+        analyses[change.path] = (old_an, new_an)
         file_units, file_hunks = _diff_file(change, analyzer, old_an, new_an, summary)
         units.update((u.id, u) for u in file_units)
         hunks.update((h.id, h) for h in file_hunks)
 
+    moves = detect_moves(units, hunks, analyses, analyzer_for)
+    link_imports(units, moves, analyses)
+    resync_hunks(hunks, units)
     groups = build_groups(list(units.values()), min_count)
+    verify_units(units, analyses, groups, analyzer_for)
+    by_path: dict[str, list[ChangeUnit]] = {}
+    for u in units.values():
+        by_path.setdefault(u.path, []).append(u)
     for f in files:
-        mine = [u for u in units.values() if u.path == f.path]
+        mine = by_path.get(f.path, [])
         f.units = len(mine)
         f.residual_units = sum(1 for u in mine if not u.explained)
 
     warnings = inconsistent_renames(groups)
-    warnings += _leftover_warnings(repo, src, groups, head_analyses)
+    warnings += near_misses(units, groups)
+    warnings += _leftover_warnings(repo, src, groups, {p: a[1] for p, a in analyses.items()})
 
     residual = [h.id for h in hunks.values() if any(not units[uid].explained for uid in h.unit_ids)]
     return Report(
@@ -122,7 +132,7 @@ def _diff_file(
             summary.deletions += i2 - i1
             summary.additions += j2 - j1
             op_units = [
-                _make_unit(change.path, hunk_id, op, cls, old_lines, new_lines)
+                make_unit(change.path, hunk_id, op, cls, old_lines, new_lines)
                 for op, cls in _best_split(analyzer, old_an, new_an, Opcode(tag, i1, i2, j1, j2))
             ]
             units += op_units
@@ -143,8 +153,17 @@ def _diff_file(
                 u = unit_of_new[j + 1]
                 ln = u.new[j + 1 - u.new_start]
                 lines.append(HunkLine("+", ln.text, None, j + 1, u.id, ln.hl))
+        changed = [ln.type + ln.text for ln in lines if ln.type != " "]
         hunks.append(
-            Hunk(hunk_id, change.path, group[0][1] + 1, group[0][3] + 1, lines, hunk_units)
+            Hunk(
+                hunk_id,
+                change.path,
+                group[0][1] + 1,
+                group[0][3] + 1,
+                lines,
+                hunk_units,
+                fingerprint=short_hash(change.path, *changed),
+            )
         )
     return units, hunks
 
@@ -165,38 +184,6 @@ def _best_split(
     if sum(c.generic_tokens for _, c in paired) > sum(c.generic_tokens for _, c in block):
         return block
     return paired
-
-
-def _make_unit(
-    path: str,
-    hunk_id: str,
-    op: Opcode,
-    cls: Classification,
-    old_lines: list[str],
-    new_lines: list[str],
-) -> ChangeUnit:
-    old = [Line(old_lines[i], _merge(cls.old_hl.get(i + 1, []))) for i in range(op.i1, op.i2)]
-    new = [Line(new_lines[j], _merge(cls.new_hl.get(j + 1, []))) for j in range(op.j1, op.j2)]
-    return ChangeUnit(
-        id=short_hash(path, op.i1, op.i2, op.j1, op.j2),
-        path=path,
-        hunk_id=hunk_id,
-        old_start=op.i1 + 1,
-        new_start=op.j1 + 1,
-        old=old,
-        new=new,
-        signatures=cls.signatures,
-    )
-
-
-def _merge(ranges: list[list[int]]) -> list[list[int]]:
-    merged: list[list[int]] = []
-    for start, end in sorted(ranges):
-        if merged and start <= merged[-1][1]:
-            merged[-1][1] = max(merged[-1][1], end)
-        else:
-            merged.append([start, end])
-    return merged
 
 
 def _leftover_warnings(

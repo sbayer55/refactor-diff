@@ -2,18 +2,30 @@ from refactor_diff.grouping import (
     build_groups,
     find_leftovers,
     inconsistent_renames,
+    near_misses,
     still_defined,
 )
 from refactor_diff.languages.python import PythonAnalyzer
-from refactor_diff.model import RENAME, ChangeUnit, Signature
+from refactor_diff.model import RENAME, REPLACE, ChangeUnit, Line, Signature
 
 
 def rename(old, new, detail="call"):
     return Signature(RENAME, f"{RENAME}\x00{old}\x00{new}", old, new, detail)
 
 
+def replace(old_tokens, new_tokens):
+    key = "\x00".join([REPLACE, *old_tokens, "\x01", *new_tokens])
+    return Signature(REPLACE, key, " ".join(old_tokens), " ".join(new_tokens))
+
+
 def unit(uid, path, *signatures):
-    return ChangeUnit(uid, path, "h", 1, 1, [], [], list(signatures))
+    return ChangeUnit(uid, path, "h", 1, 1, [], [Line("x = 1")], list(signatures))
+
+
+def near_for(units, min_count=2):
+    groups = build_groups(units, min_count)
+    warnings = near_misses({u.id: u for u in units}, groups)
+    return groups, warnings
 
 
 def test_min_count_threshold_and_explained():
@@ -75,3 +87,50 @@ def test_still_defined():
     assert still_defined("X", py.analyze("X: int = 1\n"), py)
     assert not still_defined("f", py.analyze("f()\ny = f\n"), py)
     assert not still_defined("x", py.analyze("def g(x=1):\n    x = 2\n"), py)
+
+
+def test_near_miss_typo_rename():
+    units = [unit(str(i), "a.py", rename("get_user", "fetch_user")) for i in range(3)]
+    typo = unit("t", "b.py", rename("get_user", "fetch_users"))
+    groups, warnings = near_for(units + [typo])
+    [g] = [g for g in groups if g.mechanical]
+    assert [n.group_id for n in typo.near] == [g.id]
+    assert typo.near[0].score >= 0.9
+    assert "fetch_users" in typo.near[0].hint
+    [w] = warnings
+    assert w.kind == "near-miss" and w.group_id == g.id
+    assert [(loc.path, loc.line) for loc in w.locations] == [("b.py", 1)]
+    assert all(not u.near for u in units)
+
+
+def test_unrelated_rename_is_not_a_near_miss():
+    units = [unit(str(i), "a.py", rename("get_user", "fetch_user")) for i in range(3)]
+    other = unit("o", "b.py", rename("foo", "bar"))
+    _, warnings = near_for(units + [other])
+    assert other.near == [] and warnings == []
+
+
+def test_near_miss_template():
+    tmpl = ["cfg", ".", "get", "(", "\x02", ")"]
+    units = [unit(str(i), "a.py", replace(tmpl, ["settings", ".", "\x02"])) for i in range(2)]
+    typo = unit("t", "b.py", replace(tmpl, ["setting", ".", "\x02"]))
+    near_for(units + [typo])
+    assert len(typo.near) == 1
+
+
+def test_replace_never_matches_a_rename_group():
+    units = [unit(str(i), "a.py", rename("get_user", "fetch_user")) for i in range(3)]
+    other = unit("o", "b.py", replace(["get_user"], ["fetch_user", "(", ")"]))
+    near_for(units + [other])
+    assert other.near == []
+
+
+def test_near_misses_are_capped_per_unit():
+    units = [
+        unit(f"{i}-{k}", "a.py", rename("name", f"name_{i:03d}"))
+        for i in range(300)
+        for k in range(2)
+    ]
+    typo = unit("t", "b.py", rename("name", "name_9999"))
+    near_for(units + [typo])
+    assert 1 <= len(typo.near) <= 2
