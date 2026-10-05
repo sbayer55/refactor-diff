@@ -135,10 +135,10 @@ def resolve(repo: Path, base: str | None, head: str | None, pr: int | None) -> R
     if not base:
         raise SourceError("Choose a base ref to compare against.")
     head = head or "HEAD"
-    base_sha = rev(repo, base)
+    base_sha = resolve_ref(repo, base)
     if head == WORKTREE:
         return ResolvedSource(f"{base} → working tree", base, head, base_sha, None)
-    head_sha = rev(repo, head)
+    head_sha = resolve_ref(repo, head)
     merge_base = git_text(repo, "merge-base", base_sha, head_sha)
     return ResolvedSource(f"{base}...{head}", base, head, merge_base, head_sha)
 
@@ -171,9 +171,43 @@ def _resolve_pr(repo: Path, number: int) -> ResolvedSource:
     )
 
 
-def _fetch(repo: Path, refspec: str) -> None:
+def resolve_ref(repo: Path, ref: str) -> str:
+    """Resolve ``ref`` to a commit, falling back to a remote branch of the same name.
+
+    A branch that was never checked out locally only exists as ``origin/<ref>``; if even that
+    is missing, the branch is fetched from the remote.
+    """
+    try:
+        return rev(repo, ref)
+    except SourceError:
+        pass
+    remotes = _remotes(repo)
+    for remote in remotes:
+        try:
+            return rev(repo, f"{remote}/{ref}")
+        except SourceError:
+            continue
+    for remote in remotes:
+        try:
+            git(repo, "fetch", "--quiet", remote, f"+refs/heads/{ref}:refs/remotes/{remote}/{ref}")
+            return rev(repo, f"{remote}/{ref}")
+        except SourceError:
+            continue
+    searched = ", ".join(f"{r}/{ref}" for r in remotes)
+    raise SourceError(
+        f"Unknown ref {ref!r}: not a local ref"
+        + (f", and not found as {searched} (also tried fetching it)." if remotes else ".")
+    )
+
+
+def _remotes(repo: Path) -> list[str]:
+    """Remotes to try for fallbacks, most likely first."""
     remotes = git_text(repo, "remote").split()
-    for remote in [r for r in ("origin", "upstream") if r in remotes] or remotes[:1]:
+    return [r for r in ("origin", "upstream") if r in remotes] or remotes[:1]
+
+
+def _fetch(repo: Path, refspec: str) -> None:
+    for remote in _remotes(repo):
         try:
             git(repo, "fetch", "--quiet", remote, refspec)
             return
