@@ -1,5 +1,5 @@
 from refactor_diff.languages.python import PythonAnalyzer
-from refactor_diff.model import DOCS, FORMATTING, RENAME, REPLACE, RETYPE
+from refactor_diff.model import ARGS, DOCS, FORMATTING, IMPORT, RENAME, REPLACE, RETYPE
 from refactor_diff.patterns import classify
 
 PY = PythonAnalyzer()
@@ -143,3 +143,108 @@ def test_regular_string_change_is_not_docs():
 def test_comment_and_code_change_keeps_code_signature():
     kinds = {s[0] for s in sigs("f(a)  # old\n", "g(a)  # new\n")}
     assert kinds == {RENAME, DOCS}
+
+
+def keys(old: str, new: str):
+    return [s.key for s in classify_one(old, new).signatures]
+
+
+# --- imports ---
+
+
+def test_import_module_change():
+    assert sigs("from a import x\n", "from b import x\n") == [(IMPORT, "a", "b", "x")]
+    assert keys("from a import x\n", "from b import x\n") == keys(
+        "from a import x as y\n", "from b import x as y\n"
+    )[:0] + [f"{IMPORT}\x00a\x00b"]
+
+
+def test_import_renamed_name_stays_a_rename():
+    assert sigs("from a import x\n", "from a import y\n") == [(RENAME, "x", "y", "import")]
+
+
+def test_import_module_and_name_change_falls_through():
+    assert all(k != IMPORT for k, *_ in sigs("from a import x\n", "from b import y\n"))
+
+
+def test_import_added_and_removed_names():
+    assert sigs("import os\n", "import os\nimport sys\n") == [(IMPORT, "", "import sys", "sys")]
+    assert sigs("from a import x, y\n", "from a import x\n") == [
+        (IMPORT, "from a import y", "", "y")
+    ]
+    assert keys("", "from __future__ import annotations\n") == [
+        f"{IMPORT}\x00\x00__future__.annotations"
+    ]
+
+
+def test_import_multiline_only_module_line_changed():
+    old = "from a import (\n    x,\n    y,\n)\n"
+    new = old.replace("from a", "from b")
+    a, b = PY.analyze(old), PY.analyze(new)
+    result = classify(PY, a, b, (1, 1), (1, 1))  # the unit is the first line only
+    assert [(s.kind, s.old, s.new) for s in result.signatures] == [(IMPORT, "a", "b")]
+
+
+def test_import_mixed_with_code_is_not_an_import_change():
+    assert all(
+        k != IMPORT for k, *_ in sigs("from a import x\nz = 1\n", "from b import x\nz = 2\n")
+    )
+
+
+# --- argument lists ---
+
+
+def test_added_keyword_argument_groups_across_values_and_with_the_def():
+    call1 = keys("fetch(1, 2)\n", "fetch(1, 2, timeout=5)\n")
+    call2 = keys("fetch(x, y)\n", "fetch(x, y, timeout=cfg.t)\n")
+    definition = keys("def fetch(a, b):\n    pass\n", "def fetch(a, b, timeout=None):\n    pass\n")
+    assert call1 == call2 == definition == [f"{ARGS}\x00fetch\x00+kw:timeout"]
+    assert sigs("fetch(1, 2)\n", "fetch(1, 2, timeout=5)\n") == [
+        (ARGS, "fetch(…)", "fetch(…, timeout=…)", "call")
+    ]
+    assert sigs("def fetch(a, b):\n    pass\n", "def fetch(a, b, timeout=None):\n    pass\n")[0][
+        3
+    ] == ("definition")
+
+
+def test_removed_keyword_argument():
+    assert keys("f(x, verbose=True)\n", "f(x)\n") == [f"{ARGS}\x00f\x00-kw:verbose"]
+
+
+def test_positional_to_keyword():
+    assert keys("f(x, 5)\n", "f(x, timeout=5)\n") == [f"{ARGS}\x00f\x00pos>kw:timeout"]
+
+
+def test_edit_inside_an_argument_is_not_an_args_change():
+    found = sigs("fetch(x, y)\n", "fetch(x, y + 1, timeout=5)\n")
+    assert all(k != ARGS for k, *_ in found)
+
+
+def test_method_and_function_calls_share_the_key():
+    assert keys("client.fetch(x)\n", "client.fetch(x, timeout=1)\n") == keys(
+        "fetch(x)\n", "fetch(x, timeout=2)\n"
+    )
+
+
+def test_nested_call_attributes_to_the_inner_call():
+    assert keys("log(fetch(x))\n", "log(fetch(x, timeout=1))\n") == [
+        f"{ARGS}\x00fetch\x00+kw:timeout"
+    ]
+
+
+def test_replaced_positional_plus_added_kwarg_is_not_an_args_change():
+    found = sigs("fetch(x, y)\n", "fetch(x, z, timeout=5)\n")
+    assert all(k != ARGS for k, *_ in found)
+
+
+def test_added_argument_line_in_multiline_call():
+    old = "r = fetch(\n    x,\n)\n"
+    new = "r = fetch(\n    x,\n    timeout=5,\n)\n"
+    a, b = PY.analyze(old), PY.analyze(new)
+    result = classify(PY, a, b, None, (3, 3), old_anchor=2, new_anchor=2)
+    assert [s.key for s in result.signatures] == [f"{ARGS}\x00fetch\x00+kw:timeout"]
+
+
+def test_added_positional_parameter():
+    assert keys("def f(a):\n    pass\n", "def f(a, b):\n    pass\n") == [f"{ARGS}\x00f\x00+pos"]
+    assert keys("f(1)\n", "f(1, 2)\n") == [f"{ARGS}\x00f\x00+pos"]

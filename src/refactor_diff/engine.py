@@ -172,7 +172,10 @@ def _best_split(
     analyzer: LanguageAnalyzer, old_an: FileAnalysis, new_an: FileAnalysis, op: Opcode
 ) -> list[tuple[Opcode, Classification]]:
     def run(ops: list[Opcode]) -> list[tuple[Opcode, Classification]]:
-        return [(o, classify(analyzer, old_an, new_an, o.old_range, o.new_range)) for o in ops]
+        return [
+            (o, classify(analyzer, old_an, new_an, o.old_range, o.new_range, o.i1, o.j1))
+            for o in ops
+        ]
 
     block_ops, paired_ops = candidate_units(op)
     block = run(block_ops)

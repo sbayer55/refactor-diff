@@ -877,7 +877,7 @@ function renderGroup(id) {
   const verifiedCount = units.filter((u) => u.verified).length;
   // A move is one occurrence shown as old block → new block; its deleted half isn't listed.
   const moved = g.kind === "move" ? units.find((u) => u.new.length && u.partner) : null;
-  if (moved) units = units.filter((u) => u.id !== moved.partner);
+  if (moved) units = [moved, ...units.filter((u) => u !== moved && u.id !== moved.partner)];
   const count = g.kind === "move" ? `moved block${units.length > 1 ? ` + ${plural(units.length - 1, "import edit")}` : ""}`
     : `${plural(g.visible.length, "occurrence")} in ${plural(files.size, "file")}`;
   let html = `<div class="page-head">

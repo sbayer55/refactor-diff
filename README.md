@@ -57,6 +57,12 @@ refactor-diff main..HEAD --python ~/.virtualenvs/myproject   # environment for c
   Lines that a pattern does explain are dimmed and tagged, so you keep the context.
 - **Mechanical patterns**: one entry per repeated edit, listing every occurrence grouped by
   file. Tick **Reviewed** as you go. The checkmarks are saved in your browser for that commit range.
+  A moved block is one pattern: its page shows the block as a diff from where it came from,
+  followed by the import lines that changed because of the move.
+- **✓ verified**: a change whose enclosing statement is provably the same program on both
+  sides (see [Verification](#verification)). The summary counts them.
+- **≈ almost …**: a leftover change that nearly matches a pattern — usually a typo. The
+  **Only near misses** filter shows just those.
 - **Warnings**: places where the refactor may be incomplete or inconsistent (see below).
 - **Files**: every changed file, with its status, kind and whether it was analyzed.
 
@@ -144,8 +150,11 @@ code at that revision rather than your current checkout.
    | `rename` | `get_user(id)` → `fetch_user(id)`. Records the context: definition, call, attribute, import, keyword argument or name |
    | `retype` | `def f(x: int)` → `def f(x: str)`, `-> List[int]` → `-> list[int]`, adding an annotation |
    | `replace` | any other repeated substitution, e.g. `cfg.get("timeout")` → `settings.timeout` |
-   | `formatting` | only whitespace or layout changed (quote style, re-wrapping) |
+   | `formatting` | only whitespace or layout changed (quote style, re-wrapping, indentation) |
    | `docs` | only comments or docstrings changed |
+   | `args` | a call or def changed the shape of its argument list: `fetch(x, y)` → `fetch(x, y, timeout=5)` is `fetch: +kw:timeout` whatever the value, and groups with the `def` that gained the parameter. Also removed keywords, added positionals and positional → keyword conversions. An edit inside an argument's value is never swallowed |
+   | `import` | import lines that only changed module (`from a import x` → `from b import x`), or added / removed a name |
+   | `move` | a block deleted in one place and inserted in another (see below) |
 
    Nearby edits that belong together become one template instead of fragments. This
    applies when an edit opens a bracket that a later edit closes, or when two edits are
@@ -157,7 +166,27 @@ code at that revision rather than your current checkout.
    least **Min repeats** times (default 2). A unit counts as explained only when every
    signature on it is mechanical. So a line that renames `get_user` *and* changes logic still
    shows up in **Needs review**.
-5. **Sanity checks.**
+5. **Moved code.** After every file is diffed, deletion-only and insertion-only blocks (at
+   least 3 lines / 12 tokens) are compared by their token streams, ignoring layout and
+   comments. Exact matches pair first, then near matches (≥ 75% similar), across files or
+   within one. When only one function out of a deleted block moved, the block is split at
+   statement boundaries so the rest still shows up for review. A pair becomes a `move`
+   pattern, which is always mechanical: an exact move disappears from review, and a move with
+   edits inside leaves only those edits, classified like any other change and highlighted on
+   the moved block. An `import` change that only follows a move — the importer now points at
+   the new module, or the destination gained an import the block needs — is folded into the
+   move. Not detected: a block that replaces other code in the same hunk (that is one
+   `replace`, not a deletion plus an insertion).
+
+6. **Verification.** For every statement (function, method, top-level statement) whose
+   changes are all formatting, docs, rename or retype, the old and new versions are parsed and
+   compared after normalization: docstrings dropped, the diff's mechanical renames applied to
+   the old side, annotations dropped when the statement has a retype. Equal trees mark every
+   unit inside the statement **✓ verified**. It is a property of the whole statement, so a
+   function with one rename and one logic change verifies neither. Verification never changes
+   whether a unit is collapsed; it only says which collapsed changes are safe beyond doubt.
+
+7. **Sanity checks.**
    - *Missed renames*: a definition (`def`/`class`) was renamed, the old name is no longer
      defined anywhere in the repository at head, yet code still references it. This produces
      one warning per rename, listing every location. Renamed locals, parameters, keyword
@@ -165,6 +194,10 @@ code at that revision rather than your current checkout.
      unrelated.
    - *Inconsistent renames*: a definition or import was renamed to different names in
      different places.
+   - *Near misses*: a leftover change whose signature almost matches a mechanical pattern
+     (same old name, new name ≥ 80% similar, or vice versa; the same rule on the text of
+     templates and types). The unit is tagged **≈ almost …** and one warning lists every
+     near miss of a pattern.
 
 ## Development
 
@@ -181,7 +214,9 @@ Layout (`src/refactor_diff/`):
 | `hunks.py` | line diff, hunk grouping, candidate units |
 | `languages/` | language analyzers (`base.py` interface, `python.py`) |
 | `patterns.py` | token alignment, signature classification |
-| `grouping.py` | grouping, mechanical threshold, warnings |
+| `grouping.py` | grouping, mechanical threshold, warnings (inconsistent renames, near misses) |
+| `moves.py` | moved-code detection and the import churn a move explains |
+| `verify.py` | AST-equivalence verification of collapsed changes |
 | `categories.py` | file kinds (source, tests, docs, config, other) for filtering |
 | `engine.py` | `analyze()`, which turns a source into a `Report` |
 | `fileview.py` | whole-file diff of one changed file, for context and the old/new viewer |
@@ -193,12 +228,14 @@ Layout (`src/refactor_diff/`):
 ### Adding a language
 
 Implement the `LanguageAnalyzer` protocol in `languages/base.py`. It turns source text into
-tokens and type-annotation spans and names the language's keywords. Then register the
-analyzer in `languages/__init__.py`. The rest of the pipeline does not depend on the language.
+tokens, type-annotation spans, statement spans, call sites, defs and imports, names the
+language's keywords, and can parse and normalize a block for verification. Then register the
+analyzer in `languages/__init__.py`. The rest of the pipeline does not depend on the language;
+an analyzer that leaves the structural fields empty simply opts out of moves, `args`,
+`import` and verification.
 
 ## Roadmap
 
 - Post review comments to a PR from the UI
 - Apply or revert edits in the working tree from the UI
 - More languages (TypeScript, Go, …)
-- Detect code moved between files

@@ -141,6 +141,87 @@ def test_function_moved_into_a_class(tmp_path):
     )
     report = analyze(repo, "main", "feature")
     [move] = move_groups(report)
-    labels = {g.label for g in report.groups if not g.mechanical}
-    assert labels == {"insert self,"}
+    labels = {(g.kind, g.label) for g in report.groups if not g.mechanical}
+    assert labels == {("args", "def helper(…) → def helper(…, …)")}
     assert "(indentation)" not in " ".join(g.label for g in report.groups)
+
+
+def test_import_path_change_is_explained_by_the_move(tmp_path):
+    repo = repo_with(
+        tmp_path,
+        {
+            "pkg/__init__.py": "",
+            "pkg/a.py": HELPER,
+            "pkg/b.py": "X = 1\n",
+            "pkg/c.py": "from pkg.a import helper\n\nprint(helper(1, 2))\n",
+        },
+        {
+            "pkg/__init__.py": "",
+            "pkg/a.py": "",
+            "pkg/b.py": "X = 1\n\n\n" + HELPER,
+            "pkg/c.py": "from pkg.b import helper\n\nprint(helper(1, 2))\n",
+        },
+    )
+    report = analyze(repo, "main", "feature")
+    [move] = move_groups(report)
+    assert len(move.unit_ids) == 3
+    assert report.stats()["residual_units"] == 0
+    [imp] = [u for u in report.units.values() if u.path == "pkg/c.py"]
+    assert [s.kind for s in imp.signatures] == [MOVE]
+
+
+def test_import_needed_by_the_moved_block_is_linked(tmp_path):
+    block = "def stamp():\n    now = time.time()\n    label = str(now)\n    return label\n"
+    repo = repo_with(
+        tmp_path,
+        {"a.py": "import time\n\n\n" + block, "b.py": "X = 1\n"},
+        {"a.py": "", "b.py": "import time\n\nX = 1\n\n\n" + block},
+    )
+    report = analyze(repo, "main", "feature")
+    [move] = move_groups(report)
+    assert len(move.unit_ids) == 4  # block out, block in, import out, import in
+    assert report.stats()["residual_units"] == 0
+
+
+def test_relative_import_links_to_a_move_inside_the_package(tmp_path):
+    repo = repo_with(
+        tmp_path,
+        {
+            "pkg/__init__.py": "",
+            "pkg/a.py": HELPER,
+            "pkg/b.py": "X = 1\n",
+            "pkg/c.py": "from .a import helper\n\nprint(helper(1, 2))\n",
+        },
+        {
+            "pkg/__init__.py": "",
+            "pkg/a.py": "",
+            "pkg/b.py": "X = 1\n\n\n" + HELPER,
+            "pkg/c.py": "from .b import helper\n\nprint(helper(1, 2))\n",
+        },
+    )
+    report = analyze(repo, "main", "feature")
+    [move] = move_groups(report)
+    assert len(move.unit_ids) == 3
+    assert report.stats()["residual_units"] == 0
+
+
+def test_repeated_import_path_change_groups(tmp_path):
+    files = {f"m{i}.py": "from a import x\n\nprint(x)\n" for i in range(3)}
+    repo = repo_with(tmp_path, files, {k: v.replace("from a", "from b") for k, v in files.items()})
+    report = analyze(repo, "main", "feature")
+    [g] = [g for g in report.groups if g.kind == "import"]
+    assert g.mechanical and g.label == "a → b" and g.details == {"x": 3}
+
+
+def test_added_parameter_groups_def_with_call_sites(tmp_path):
+    before = "def fetch(a, b):\n    return a + b\n\n\nx = fetch(1, 2)\ny = fetch(3, 4)\n"
+    after = (
+        "def fetch(a, b, timeout=None):\n    return a + b\n\n\n"
+        "x = fetch(1, 2, timeout=5)\ny = fetch(3, 4, timeout=cfg.t)\n"
+    )
+    repo = repo_with(tmp_path, {"a.py": before}, {"a.py": after})
+    report = analyze(repo, "main", "feature")
+    [g] = [g for g in report.groups if g.kind == "args"]
+    assert g.mechanical and g.details == {"call": 2, "definition": 1}
+    assert g.label == "def fetch(…) → def fetch(…, timeout=…)"
+    assert report.stats()["residual_units"] == 0
