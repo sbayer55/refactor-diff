@@ -1,0 +1,221 @@
+"""Turn a diff source into a Report. UI-agnostic; the web server calls ``analyze``."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from refactor_diff import sources
+from refactor_diff.grouping import build_groups, find_leftovers, inconsistent_renames
+from refactor_diff.hunks import Opcode, candidate_units, diff_hunks
+from refactor_diff.languages import analyzer_for
+from refactor_diff.languages.base import FileAnalysis, LanguageAnalyzer, split_lines
+from refactor_diff.model import (
+    RENAME,
+    ChangeUnit,
+    FileChange,
+    FileSummary,
+    Hunk,
+    HunkLine,
+    Line,
+    Report,
+    Warning,
+    short_hash,
+)
+from refactor_diff.patterns import Classification, classify
+
+
+def analyze(
+    repo: Path,
+    base: str | None = None,
+    head: str | None = None,
+    pr: int | None = None,
+    min_count: int = 2,
+) -> Report:
+    src = sources.resolve(repo, base, head, pr)
+    changes = sources.load_changes(repo, src)
+
+    files: list[FileSummary] = []
+    units: dict[str, ChangeUnit] = {}
+    hunks: dict[str, Hunk] = {}
+    head_analyses: dict[str, FileAnalysis] = {}
+
+    for change in sorted(changes, key=lambda c: c.path):
+        analyzer = analyzer_for(change.path)
+        old_lines, new_lines = split_lines(change.old_text), split_lines(change.new_text)
+        summary = FileSummary(
+            change.path,
+            change.old_path,
+            change.status,
+            analyzed=analyzer is not None,
+            additions=0,
+            deletions=0,
+        )
+        files.append(summary)
+        if analyzer is None:
+            for group in diff_hunks(old_lines, new_lines):
+                for tag, i1, i2, j1, j2 in group:
+                    if tag != "equal":
+                        summary.deletions += i2 - i1
+                        summary.additions += j2 - j1
+            continue
+        old_an, new_an = analyzer.analyze(change.old_text), analyzer.analyze(change.new_text)
+        summary.parse_ok = old_an.parsed and new_an.parsed
+        head_analyses[change.path] = new_an
+        file_units, file_hunks = _diff_file(change, analyzer, old_an, new_an, summary)
+        units.update((u.id, u) for u in file_units)
+        hunks.update((h.id, h) for h in file_hunks)
+
+    groups = build_groups(list(units.values()), min_count)
+    for f in files:
+        mine = [u for u in units.values() if u.path == f.path]
+        f.units = len(mine)
+        f.residual_units = sum(1 for u in mine if not u.explained)
+
+    warnings = inconsistent_renames(groups)
+    warnings += _leftover_warnings(repo, src, groups, units, head_analyses)
+
+    residual = [h.id for h in hunks.values() if any(not units[uid].explained for uid in h.unit_ids)]
+    return Report(
+        id=short_hash(src.base_sha, src.head_sha or "worktree", min_count),
+        source=src.to_dict() | {"min_count": min_count},
+        files=files,
+        groups=groups,
+        units=units,
+        hunks=hunks,
+        residual_hunk_ids=residual,
+        warnings=warnings,
+    )
+
+
+def _diff_file(
+    change: FileChange,
+    analyzer: LanguageAnalyzer,
+    old_an: FileAnalysis,
+    new_an: FileAnalysis,
+    summary: FileSummary,
+) -> tuple[list[ChangeUnit], list[Hunk]]:
+    units: list[ChangeUnit] = []
+    hunks: list[Hunk] = []
+    old_lines, new_lines = old_an.lines, new_an.lines
+
+    for group in diff_hunks(old_lines, new_lines):
+        hunk_id = short_hash(change.path, group[0][1], group[0][3])
+        lines: list[HunkLine] = []
+        hunk_units: list[str] = []
+        for tag, i1, i2, j1, j2 in group:
+            if tag == "equal":
+                lines += [
+                    HunkLine(" ", old_lines[i], i + 1, j1 + (i - i1) + 1) for i in range(i1, i2)
+                ]
+                continue
+            summary.deletions += i2 - i1
+            summary.additions += j2 - j1
+            op_units = [
+                _make_unit(change.path, hunk_id, op, cls, old_lines, new_lines)
+                for op, cls in _best_split(analyzer, old_an, new_an, Opcode(tag, i1, i2, j1, j2))
+            ]
+            units += op_units
+            hunk_units += [u.id for u in op_units]
+            # Unified-diff order: all removed lines of the opcode, then all added lines.
+            unit_of_old: dict[int, ChangeUnit] = {}
+            unit_of_new: dict[int, ChangeUnit] = {}
+            for u in op_units:
+                for k in range(len(u.old)):
+                    unit_of_old[u.old_start + k] = u
+                for k in range(len(u.new)):
+                    unit_of_new[u.new_start + k] = u
+            for i in range(i1, i2):
+                u = unit_of_old[i + 1]
+                ln = u.old[i + 1 - u.old_start]
+                lines.append(HunkLine("-", ln.text, i + 1, None, u.id, ln.hl))
+            for j in range(j1, j2):
+                u = unit_of_new[j + 1]
+                ln = u.new[j + 1 - u.new_start]
+                lines.append(HunkLine("+", ln.text, None, j + 1, u.id, ln.hl))
+        hunks.append(
+            Hunk(hunk_id, change.path, group[0][1] + 1, group[0][3] + 1, lines, hunk_units)
+        )
+    return units, hunks
+
+
+def _best_split(
+    analyzer: LanguageAnalyzer, old_an: FileAnalysis, new_an: FileAnalysis, op: Opcode
+) -> list[tuple[Opcode, Classification]]:
+    def run(ops: list[Opcode]) -> list[tuple[Opcode, Classification]]:
+        return [(o, classify(analyzer, old_an, new_an, o.old_range, o.new_range)) for o in ops]
+
+    block_ops, paired_ops = candidate_units(op)
+    block = run(block_ops)
+    if paired_ops is None:
+        return block
+    paired = run(paired_ops)
+    # Line pairing is more granular; prefer it unless the lines don't really correspond
+    # (e.g. a call re-wrapped across lines), which shows up as extra generic churn.
+    if sum(c.generic_tokens for _, c in paired) > sum(c.generic_tokens for _, c in block):
+        return block
+    return paired
+
+
+def _make_unit(
+    path: str,
+    hunk_id: str,
+    op: Opcode,
+    cls: Classification,
+    old_lines: list[str],
+    new_lines: list[str],
+) -> ChangeUnit:
+    old = [Line(old_lines[i], _merge(cls.old_hl.get(i + 1, []))) for i in range(op.i1, op.i2)]
+    new = [Line(new_lines[j], _merge(cls.new_hl.get(j + 1, []))) for j in range(op.j1, op.j2)]
+    return ChangeUnit(
+        id=short_hash(path, op.i1, op.i2, op.j1, op.j2),
+        path=path,
+        hunk_id=hunk_id,
+        old_start=op.i1 + 1,
+        new_start=op.j1 + 1,
+        old=old,
+        new=new,
+        signatures=cls.signatures,
+    )
+
+
+def _merge(ranges: list[list[int]]) -> list[list[int]]:
+    merged: list[list[int]] = []
+    for start, end in sorted(ranges):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return merged
+
+
+def _leftover_warnings(
+    repo: Path,
+    src: sources.ResolvedSource,
+    groups,
+    units: dict[str, ChangeUnit],
+    head_analyses: dict[str, FileAnalysis],
+) -> list[Warning]:
+    """For mechanical renames, look for the old name in head versions of files.
+
+    Renamed definitions are checked repo-wide (every remaining reference is suspect); other
+    renames only in the files where the rename happened, to avoid flagging unrelated locals.
+    """
+    warnings: list[Warning] = []
+    extra_cache: dict[str, FileAnalysis] = {}
+    for g in groups:
+        if g.kind != RENAME or not g.mechanical:
+            continue
+        scope = {p: head_analyses[p] for p in g.files if p in head_analyses}
+        if "definition" in g.details:
+            scope.update(head_analyses)
+            others = [
+                p for p in sources.grep_files(repo, src, g.old, ["*.py", "*.pyi"]) if p not in scope
+            ]
+            missing = [p for p in others if p not in extra_cache]
+            for path, text in sources.read_file_at(repo, src, missing).items():
+                analyzer = analyzer_for(path)
+                if analyzer is not None:
+                    extra_cache[path] = analyzer.analyze(text)
+            scope.update({p: extra_cache[p] for p in others if p in extra_cache})
+        warnings += find_leftovers(g, scope)
+    return warnings

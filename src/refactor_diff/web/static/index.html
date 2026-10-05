@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>refactor-diff</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">⇄</span>
+      <span class="name">refactor-diff</span>
+      <span class="repo" id="repo"></span>
+    </div>
+    <form id="source-form" class="source-form" autocomplete="off">
+      <div class="segmented" role="tablist" aria-label="Diff source">
+        <button type="button" role="tab" data-mode="refs" aria-selected="true">Branches</button>
+        <button type="button" role="tab" data-mode="pr" aria-selected="false">Pull request</button>
+        <button type="button" role="tab" data-mode="worktree" aria-selected="false">Working tree</button>
+      </div>
+      <div class="fields">
+        <label class="field" data-show="refs worktree">
+          <span>Base</span>
+          <input name="base" list="branch-list" placeholder="main" required>
+        </label>
+        <label class="field" data-show="refs">
+          <span>Head</span>
+          <input name="head" list="branch-list" placeholder="HEAD">
+        </label>
+        <label class="field wide" data-show="pr">
+          <span>PR</span>
+          <input name="pr" list="pr-list" placeholder="Number" inputmode="numeric">
+        </label>
+        <label class="field narrow" title="A pattern must repeat this many times to be collapsed">
+          <span>Min repeats</span>
+          <input name="min_count" type="number" min="1" value="2">
+        </label>
+        <button type="submit" class="primary" id="analyze-btn">Analyze</button>
+      </div>
+      <datalist id="branch-list"></datalist>
+      <datalist id="pr-list"></datalist>
+    </form>
+  </header>
+
+  <section id="summary" class="summary" hidden></section>
+
+  <div class="layout">
+    <nav id="sidebar" class="sidebar" aria-label="Report sections"></nav>
+    <main id="content" class="content">
+      <div class="empty">
+        <h2>Pick something to compare</h2>
+        <p>Choose two branches, a pull request, or your uncommitted changes, then hit
+          <strong>Analyze</strong>. Repeated mechanical edits (renames, type changes,
+          identical substitutions) get collapsed into patterns so you only read what's left.</p>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
