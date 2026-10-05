@@ -12,11 +12,14 @@ const state = {
   reviewedHunks: new Set(), // reviewed hunk fingerprints
   delta: { prevHead: null, newHunks: new Set(), changed: [] }, // since the previous analysis
   shown: PAGE,
-  filters: { hidden: new Set(), hideDocs: false, exclude: [], nearOnly: false, newOnly: false },
+  filters: { hidden: new Set(), hideDocs: false, exclude: [], nearOnly: false, newOnly: false, search: "", regex: false },
   view: null, // the report as filtered by state.filters; see applyFilters()
   fileDiffs: new Map(), // path -> Promise of the whole-file diff (see /api/report/{id}/file)
   split: false, // side-by-side diffs (preference; see splitActive())
   syntax: false, // syntax-color changed lines too (unchanged lines always are)
+  repo: "", // absolute repository path (for editor links)
+  editor: null, // URL template from --editor
+  focus: -1, // keyboard focus: index into the page's hunks / occurrences
 };
 
 // Side-by-side needs room for two code columns; narrower windows always get unified diffs.
@@ -34,6 +37,10 @@ const CATEGORIES = [
 ];
 
 // ---------- helpers ----------
+
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+const MOD_KEY = IS_MAC ? "⌘" : "Ctrl";
+const modDown = (e) => (IS_MAC ? e.metaKey : e.ctrlKey);
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => (
@@ -140,19 +147,33 @@ function loadFilters(cliDefaults) {
     exclude: f.exclude || [],
     nearOnly: false,
     newOnly: false,
+    search: f.search || "",
+    regex: Boolean(f.regex),
   };
 }
 function saveFilters() {
   const f = state.filters;
   try {
     localStorage.setItem(filtersKey(), JSON.stringify({
-      hidden: [...f.hidden], hideDocs: f.hideDocs, exclude: f.exclude,
+      hidden: [...f.hidden], hideDocs: f.hideDocs, exclude: f.exclude, search: f.search, regex: f.regex,
     }));
   } catch {}
 }
 function filtersActive() {
   const f = state.filters;
-  return f.hidden.size > 0 || f.hideDocs || f.exclude.length > 0 || f.nearOnly || f.newOnly;
+  return f.hidden.size > 0 || f.hideDocs || f.exclude.length > 0 || f.nearOnly || f.newOnly || Boolean(f.search);
+}
+function emptyFilters() {
+  return { hidden: new Set(), hideDocs: false, exclude: [], nearOnly: false, newOnly: false, search: "", regex: false };
+}
+
+// The search box as a RegExp (case-insensitive), null when empty, false when invalid.
+function searchRegex() {
+  const f = state.filters;
+  if (!f.search) return null;
+  try {
+    return new RegExp(f.regex ? f.search : f.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  } catch { return false; }
 }
 
 function applyFilters() {
@@ -166,9 +187,15 @@ function applyFilters() {
     return !excludes.some((re) => re.test(path));
   };
   const docsOnly = (u) => u.signatures.length > 0 && u.signatures.every((k) => k === "docs");
+  const re = searchRegex() || null;
+  const test = (text) => { re.lastIndex = 0; return re.test(text); };
+  const matches = (u) => !re || test(u.path)
+    || u.old.some((ln) => test(ln.text)) || u.new.some((ln) => test(ln.text))
+    || u.signatures.some((k) => { const g = state.groupsByKey.get(k); return g && test(g.label); });
   const unitVisible = (u) => fileVisible(u.path) && !(f.hideDocs && docsOnly(u))
     && !(f.nearOnly && !u.explained && !(u.near && u.near.length))
-    && !(f.newOnly && !hunkIsNew(r.hunks[u.hunk_id]));
+    && !(f.newOnly && !hunkIsNew(r.hunks[u.hunk_id]))
+    && matches(u);
 
   const units = new Set(Object.values(r.units).filter(unitVisible).map((u) => u.id));
   const groups = r.groups
@@ -249,6 +276,12 @@ function renderFilters() {
       <input id="exclude-input" type="text" spellcheck="false" value="${esc(f.exclude.join(", "))}"
         placeholder="globs, e.g. migrations, *_pb2.py, src/legacy/**">
     </label>
+    <label class="exclude search">
+      <span class="filter-label">Search</span>
+      <input id="search-input" type="text" spellcheck="false" value="${esc(f.search)}" class="${searchRegex() === false ? "invalid" : ""}"
+        placeholder="text in changed lines, paths or patterns (/)" title="Narrow everything to changes whose lines, path or pattern match">
+      <button type="button" class="filter-chip mode regex" id="regex-toggle" aria-pressed="${f.regex}" title="Regular expression">.*</button>
+    </label>
     <span class="spacer"></span>
     ${highlightToggle()}
     ${layoutToggle()}
@@ -284,8 +317,23 @@ function renderFilters() {
     rerender();
   });
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") input.blur(); });
+  const search = $("#search-input");
+  search.addEventListener("change", () => {
+    f.search = search.value.trim();
+    saveFilters();
+    rerender();
+  });
+  search.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") search.blur();
+    if (e.key === "Escape") { search.value = ""; search.blur(); if (f.search) { f.search = ""; saveFilters(); rerender(); } }
+  });
+  $("#regex-toggle").addEventListener("click", () => {
+    f.regex = !f.regex;
+    saveFilters();
+    rerender();
+  });
   $("#reset-filters")?.addEventListener("click", () => {
-    state.filters = { hidden: new Set(), hideDocs: false, exclude: [], nearOnly: false, newOnly: false };
+    state.filters = emptyFilters();
     saveFilters();
     rerender();
   });
@@ -448,9 +496,13 @@ function renderSidebar() {
 
 // ---------- views ----------
 
+let lastRoute = "";
 function route(opts) {
   if (!state.report) return;
   const [view, id, ...rest] = location.hash.replace(/^#/, "").split("/");
+  const key = `${view}/${id || ""}`;
+  if (key !== lastRoute) state.focus = -1;
+  lastRoute = key;
   renderSidebar();
   if (view === "file") {
     renderFileView(decodeURIComponent(id || ""), rest[0] || "diff", rest[1] || "");
@@ -464,7 +516,39 @@ function route(opts) {
   else if (view === "warnings") renderWarnings();
   else if (view === "files") renderFiles();
   else renderReview();
+  markSearch($("#content"));
+  applyFocus(false);
   if (!opts?.keepScroll) window.scrollTo({ top: 0 });
+}
+
+// Wrap search matches in code cells with <mark class="search"> (after rendering, so the
+// diff/syntax markup stays untouched).
+function markSearch(root) {
+  const re = searchRegex();
+  if (!re) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.parentElement.closest("td.text, td.side, .path") && n.nodeValue.trim()
+      ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT),
+  });
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const node of nodes) {
+    const text = node.nodeValue;
+    re.lastIndex = 0;
+    let m, pos = 0;
+    const frag = document.createDocumentFragment();
+    while ((m = re.exec(text)) && m[0]) {
+      frag.append(text.slice(pos, m.index));
+      const mark = document.createElement("mark");
+      mark.className = "search";
+      mark.textContent = m[0];
+      frag.append(mark);
+      pos = m.index + m[0].length;
+    }
+    if (!pos) continue;
+    frag.append(text.slice(pos));
+    node.replaceWith(frag);
+  }
 }
 
 const TAG_LABEL_MAX = 90;
@@ -845,7 +929,35 @@ function fileLinks(path, { oldLine, newLine } = {}) {
   if (f && f.status !== "D") links.push(`<a href="${fileHref(path, "new", newLine && "n" + newLine)}">New</a>`);
   const at = newLine ? "n" + newLine : oldLine ? "o" + oldLine : "";
   links.push(`<a href="${fileHref(path, "diff", at)}">Full diff</a>`);
+  if (!f || f.status !== "D") links.push(editorLink(path, newLine || oldLine));
   return `<span class="file-links">${links.join("")}</span>`;
+}
+
+// ---- open in editor ----
+// The editor opens the file in your checkout, which is the head revision only when the
+// source is the working tree (or the head branch is checked out).
+const EDITOR_TITLE = "Open in your editor (opens your checkout, which may differ from this revision)";
+
+function editorHref(path, line, col) {
+  if (!state.editor) return null;
+  const abs = `${state.repo.replace(/\/$/, "")}/${path}`;
+  return state.editor
+    .replace("{path}", encodeURI(abs))
+    .replace("{line}", String(line || 1))
+    .replace("{col}", String(col || 1));
+}
+
+function editorLink(path, line, label = "Open") {
+  const href = editorHref(path, line);
+  return href ? `<a class="open" href="${esc(href)}" title="${EDITOR_TITLE}">${label}</a>` : "";
+}
+
+function openInEditor(path, line) {
+  const href = editorHref(path, line);
+  if (href) {
+    toast(`Opening ${path}:${line || 1} in your editor…`);
+    window.location.assign(href);
+  }
 }
 
 // A context window: a slice [lo, hi) of a file's whole diff that grows with "show more".
@@ -1053,7 +1165,7 @@ function renderWarnings() {
     for (const loc of w.locations) {
       const text = loc.text.trimStart();
       const ranges = re ? [...text.matchAll(re)].map((m) => [m.index, m.index + m[0].length]) : [];
-      locs += `<tr><td class="where"><a href="${fileHref(loc.path, "new", "n" + loc.line)}">${esc(loc.path)}:${loc.line}</a></td>
+      locs += `<tr><td class="where"><a href="${fileHref(loc.path, "new", "n" + loc.line)}">${esc(loc.path)}:${loc.line}</a> ${editorLink(loc.path, loc.line, "↗")}</td>
         <td class="text">${highlight(text, ranges)}</td></tr>`;
     }
     const unlisted = w.total - w.locations.length - (w.filteredOut || 0);
@@ -1149,6 +1261,7 @@ async function renderFileView(path, mode, line) {
       ${highlightToggle()}
       ${mode === "diff" ? layoutToggle(path) : ""}
       <span class="spacer"></span>
+      ${fd.status !== "D" ? `<a class="toggle" href="${esc(editorHref(path, line ? Number(line.slice(1)) : 1) || "#")}" title="${EDITOR_TITLE}">Open in editor</a>` : ""}
       <button type="button" class="toggle" data-jump="prev" title="Previous change (p)">↑ Prev change</button>
       <button type="button" class="toggle" data-jump="next" title="Next change (n)">↓ Next change</button>
     </div>
@@ -1198,23 +1311,177 @@ function jumpChange(dir) {
   window.scrollBy({ top: -mid });
 }
 
-document.addEventListener("keydown", (e) => {
-  if (!location.hash.startsWith("#file/") || e.metaKey || e.ctrlKey || e.altKey) return;
-  if (e.target.closest?.("input, textarea, select")) return;
-  if (e.key === "n") jumpChange(1);
-  if (e.key === "p") jumpChange(-1);
-});
+// Placeholder until PR comments land (Phase 5).
+function openCommentBox() {}
+
+// ---------- keyboard ----------
+
+const KEY_HELP = [
+  ["Review", [
+    ["j", "k", "next / previous hunk (or occurrence on a pattern page)"],
+    ["x", "", "mark the focused hunk reviewed (the pattern, on a pattern page)"],
+    ["e", "", "show context for the focused hunk; again to reveal more"],
+    ["o", "", "open the focused hunk in your editor"],
+    ["c", "", "comment on the focused hunk (pull requests)"],
+  ]],
+  ["Navigate", [
+    ["]", "[", "next / previous mechanical pattern"],
+    ["g r", "g w", "go to Needs review / Warnings"],
+    ["g f", "g c", "go to Files / Commits"],
+    ["n", "p", "next / previous change in the file viewer"],
+    ["/", "", "search"],
+  ]],
+  ["Other", [
+    [`${MOD_KEY}-click`, `${MOD_KEY}⇧-click`, "go to definition / find references"],
+    ["?", "", "this help"],
+    ["esc", "", "close panels, clear the search box"],
+  ]],
+];
+
+let pendingG = 0;
+
+// The hunks (review page) or occurrences (pattern page) that j/k move between.
+function focusables() {
+  return [...document.querySelectorAll("#content .hunk, #content .occurrence")];
+}
+
+function applyFocus(scroll = true) {
+  const items = focusables();
+  for (const el of document.querySelectorAll(".kbd-focus")) el.classList.remove("kbd-focus");
+  if (state.focus < 0 || state.focus >= items.length) { state.focus = Math.min(state.focus, items.length - 1); return; }
+  const el = items[state.focus];
+  el.classList.add("kbd-focus");
+  if (scroll) {
+    const r = el.getBoundingClientRect();
+    const top = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--topbar-h")) || 0;
+    if (r.top < top + 8 || r.bottom > window.innerHeight - 8) {
+      window.scrollBy({ top: r.top - top - 60 });
+    }
+  }
+}
+
+function moveFocus(delta) {
+  const n = focusables().length;
+  if (!n) return;
+  state.focus = state.focus < 0 ? (delta > 0 ? 0 : n - 1) : Math.max(0, Math.min(n - 1, state.focus + delta));
+  applyFocus();
+}
+
+function focusedElement() {
+  const items = focusables();
+  return state.focus >= 0 ? items[state.focus] || null : null;
+}
+
+// Where the focused hunk/occurrence lives: {path, line} on the new side when possible.
+function focusedLocation() {
+  const el = focusedElement();
+  if (!el) return null;
+  const r = state.report;
+  if (el.dataset.hunk) {
+    const h = r.hunks[el.dataset.hunk];
+    const changed = h.lines.find((ln) => ln.type !== " ") || h.lines[0];
+    return { path: h.path, line: changed.new_no || h.new_start, hunk: h };
+  }
+  const u = r.units[el.dataset.unit];
+  return { path: u.path, line: u.new.length ? u.new_start : u.old_start, unit: u };
+}
+
+function toggleFocusedReviewed() {
+  const el = focusedElement();
+  const [view, id] = location.hash.replace(/^#/, "").split("/");
+  if (view === "group" && id) {
+    const box = $("#group-reviewed");
+    if (box) { box.checked = !box.checked; box.dispatchEvent(new Event("change")); }
+    return;
+  }
+  const box = el?.querySelector("[data-review-hunk]");
+  if (!box) return;
+  box.checked = !box.checked;
+  box.dispatchEvent(new Event("change", { bubbles: true }));
+  if (box.checked) {
+    // On to the next hunk that still needs reading.
+    const items = focusables();
+    const next = items.findIndex((x, i) => i > state.focus && !x.classList.contains("done"));
+    if (next >= 0) { state.focus = next; applyFocus(); }
+  }
+}
+
+function expandFocused() {
+  const el = focusedElement();
+  if (!el) return;
+  const btn = el.querySelector("[data-hunk-context], [data-unit-context]:not(.ctx [data-unit-context])");
+  if (btn && !(el.classList.contains("ctx") && "unitContext" in btn.dataset)) { btn.click(); return; }
+  el.querySelector('[data-expand="down"]')?.click();
+}
+
+function patternStep(delta) {
+  const mech = state.view.groups.filter((g) => g.mechanical);
+  if (!mech.length) return;
+  const [view, id] = location.hash.replace(/^#/, "").split("/");
+  const i = view === "group" ? mech.findIndex((g) => g.id === id) : -1;
+  const next = i + delta;
+  if (next < 0) { location.hash = "#review"; return; }
+  if (next >= mech.length) return;
+  location.hash = `#group/${mech[next].id}`;
+}
+
+function showHelp(on = !$("#help").open) {
+  const dlg = $("#help");
+  if (!on) { dlg.close(); return; }
+  dlg.innerHTML = `<header><h3>Keyboard shortcuts</h3><button type="button" class="close" aria-label="Close" id="help-close">×</button></header>
+    ${KEY_HELP.map(([title, rows]) => `<h4>${title}</h4><table>${rows.map(([a, b, what]) =>
+      `<tr><td><kbd>${esc(a)}</kbd>${b ? ` <kbd>${esc(b)}</kbd>` : ""}</td><td>${esc(what)}</td></tr>`).join("")}</table>`).join("")}`;
+  $("#help-close").addEventListener("click", () => dlg.close());
+  dlg.showModal();
+}
+
+function onKey(e) {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const inField = e.target.closest?.("input, textarea, select, [contenteditable]");
+  if (e.key === "Escape") {
+    if ($("#help").open) $("#help").close();
+    hideNavPanel();
+    if (inField) e.target.blur();
+    $("#comment-box")?.remove();
+    return;
+  }
+  if (inField || !state.report) return;
+  if (pendingG) {
+    clearTimeout(pendingG);
+    pendingG = 0;
+    const go = { r: "#review", w: "#warnings", f: "#files", c: "#commits" }[e.key];
+    if (go) { location.hash = go; e.preventDefault(); }
+    return;
+  }
+  const inFile = location.hash.startsWith("#file/") || location.hash.startsWith("#lib/");
+  switch (e.key) {
+    case "?": showHelp(); break;
+    case "/": $("#search-input")?.focus(); e.preventDefault(); break;
+    case "g": pendingG = setTimeout(() => { pendingG = 0; }, 900); break;
+    case "]": patternStep(1); break;
+    case "[": patternStep(-1); break;
+    case "n": if (inFile) jumpChange(1); break;
+    case "p": if (inFile) jumpChange(-1); break;
+    case "j": if (!inFile) moveFocus(1); else return; break;
+    case "k": if (!inFile) moveFocus(-1); else return; break;
+    case "x": toggleFocusedReviewed(); break;
+    case "e": expandFocused(); break;
+    case "o": { const at = focusedLocation(); if (at) openInEditor(at.path, at.line); break; }
+    case "c": { const el = focusedElement(); if (el) openCommentBox(el); break; }
+    default: return;
+  }
+  e.preventDefault();
+}
+
+document.addEventListener("keydown", onKey);
 
 // ---------- code navigation (go to definition / find references) ----------
 
-const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
-const MOD_KEY = IS_MAC ? "⌘" : "Ctrl";
-const modDown = (e) => (IS_MAC ? e.metaKey : e.ctrlKey);
 const ID_CHAR = /[\p{L}\p{N}_]/u;
 
 function navHint() {
   return `<p class="nav-hint"><kbd>${MOD_KEY}</kbd>-click a name to go to its definition ·
-    <kbd>${MOD_KEY}</kbd><kbd>⇧</kbd>-click to find references</p>`;
+    <kbd>${MOD_KEY}</kbd><kbd>⇧</kbd>-click to find references · <kbd>?</kbd> keyboard shortcuts</p>`;
 }
 
 // Character offset of the point (x, y) within a code cell's text, or null.
@@ -1533,13 +1800,18 @@ async function init() {
   $("#source-form").addEventListener("submit", runAnalysis);
   $("#content").addEventListener("click", onContentClick);
   $("#content").addEventListener("change", onContentChange);
+  $("#content").addEventListener("mousedown", (e) => {
+    const el = e.target.closest(".hunk, .occurrence");
+    if (!el) return;
+    const i = focusables().indexOf(el);
+    if (i >= 0 && i !== state.focus) { state.focus = i; applyFocus(false); }
+  });
   $("#content").addEventListener("click", onCodeClick, true);
   $("#content").addEventListener("mousedown", onCodeMouseDown);
   $("#content").addEventListener("mousemove", onCodeMouseMove);
   document.addEventListener("keyup", (e) => {
     if (e.key === "Meta" || e.key === "Control") { document.body.classList.remove("nav-armed"); setHoverWord(null); }
   });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideNavPanel(); });
   loadLayout();
   loadSyntax();
   trackTopbarHeight();
@@ -1552,6 +1824,8 @@ async function init() {
     $("#repo").textContent = cfg.repo;
     $("#repo").title = cfg.repo;
     defaults = cfg.defaults || {};
+    state.repo = cfg.repo;
+    state.editor = defaults.editor || null;
   } catch {}
   setMode(defaults.mode || "refs");
   const form = $("#source-form");

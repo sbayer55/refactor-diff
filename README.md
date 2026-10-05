@@ -48,6 +48,7 @@ refactor-diff --worktree main          # uncommitted changes vs main
 refactor-diff --repo ../other --port 8000 --no-browser
 refactor-diff main..HEAD --hide tests,comments --exclude migrations
 refactor-diff main..HEAD --python ~/.virtualenvs/myproject   # environment for code navigation
+refactor-diff main..HEAD --editor cursor                      # "Open" links target Cursor
 ```
 
 ### What you see
@@ -113,8 +114,30 @@ repository.
 - **Exclude**: comma-separated globs. A pattern without `/` matches any path segment
   (`migrations`, `*_pb2.py`); a pattern with `/` matches the whole path (`src/legacy/**`).
 
+- **Search**: text (or a regular expression with the `.*` toggle) matched against changed
+  lines, file paths and pattern labels. Everything narrows to the matching changes and the
+  matches are highlighted. `/` focuses the box, `Esc` clears it.
+
 To pre-set filters from the command line, use `--hide` (any of `source`, `tests`, `docs`,
 `config`, `other`, `comments`) and `--exclude GLOB` (repeatable).
+
+### Keyboard
+
+Press `?` for the full list. The review loop is `j` / `k` to move between hunks (or
+occurrences on a pattern page), `x` to mark the focused one reviewed (focus moves on to the
+next unreviewed hunk), `e` to show its context and then reveal more, `o` to open it in your
+editor, `]` / `[` to step through the mechanical patterns, `g r` / `g w` / `g f` to jump to
+Needs review / Warnings / Files, and `/` to search. In the file viewer `n` / `p` move between
+changes.
+
+### Open in editor
+
+Every file header, occurrence, warning location and the file viewer have an **Open** link
+that opens the file at that line in your editor — VS Code by default. `--editor` takes
+`vscode`, `cursor`, `zed`, `idea`, `pycharm`, or a URL template with `{path}`, `{line}` and
+`{col}` (e.g. `--editor 'x-mine://{path}?l={line}'`). The editor opens your checkout, which
+is the head revision only when you're reviewing the working tree or have the head branch
+checked out.
 
 ### Highlighting
 

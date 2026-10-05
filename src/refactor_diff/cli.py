@@ -17,6 +17,15 @@ from refactor_diff.web.server import create_app
 
 HOST = "127.0.0.1"
 
+# URL templates for "Open in editor" links. {path} is absolute; {line} and {col} are 1-based.
+EDITORS = {
+    "vscode": "vscode://file/{path}:{line}:{col}",
+    "cursor": "cursor://file/{path}:{line}:{col}",
+    "zed": "zed://file/{path}:{line}:{col}",
+    "idea": "idea://open?file={path}&line={line}",
+    "pycharm": "pycharm://open?file={path}&line={line}",
+}
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
@@ -47,6 +56,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Python interpreter or virtualenv used to resolve imports for code navigation "
         "(default: .venv, venv or env in the repository)",
     )
+    p.add_argument(
+        "--editor",
+        metavar="NAME|TEMPLATE",
+        default="vscode",
+        help=f"editor for 'Open' links: one of {', '.join(EDITORS)}, or a URL template with "
+        "{path}, {line} and {col} (default: vscode)",
+    )
     p.add_argument("--repo", type=Path, default=Path.cwd(), help="git repository (default: cwd)")
     p.add_argument("--port", type=int, default=0, help="port to listen on (default: random)")
     p.add_argument("--no-browser", action="store_true", help="don't open a browser window")
@@ -58,7 +74,18 @@ def defaults_from(args: argparse.Namespace) -> dict:
     filters = _filter_defaults(args)
     if filters:
         defaults["filters"] = filters
+    defaults["editor"] = editor_template(args.editor)
     return defaults
+
+
+def editor_template(spec: str) -> str:
+    template = EDITORS.get(spec.lower(), spec)
+    if "{path}" not in template:
+        sys.exit(
+            f"refactor-diff: --editor must be one of {', '.join(EDITORS)} or a URL template "
+            "containing {path} (and optionally {line}, {col})"
+        )
+    return template
 
 
 def _source_defaults(args: argparse.Namespace) -> dict:
