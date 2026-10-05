@@ -457,13 +457,14 @@ function renderReview() {
 function hunkRows(h) {
   return diffRows(h.lines.map((ln) => ({
     t: ln.type, o: ln.old_no, n: ln.new_no, text: ln.text, unit: ln.unit, hl: ln.hl,
-  })), { tags: true });
+  })), { tags: true, path: h.path });
 }
 
-// Rows for a list of diff lines ({t, o, n, text, unit, hl}). Lines of units that a pattern
-// explains (or that filters hide) are dimmed, except the units in `focus`.
+// Rows for a list of diff lines ({t, o, n, text, unit, hl}) from the file at `opts.path`.
+// Lines of units that a pattern explains (or that filters hide) are dimmed, except the units
+// in `focus`.
 function diffRows(lines, opts = {}) {
-  return splitActive() ? splitRows(lines, opts) : unifiedRows(lines, opts);
+  return splitFor(opts.path) ? splitRows(lines, opts) : unifiedRows(lines, opts);
 }
 
 function lineState(ln, focus) {
@@ -563,6 +564,16 @@ function splitActive() {
   return state.split && !narrowQuery.matches;
 }
 
+// Added and deleted files have nothing to put on one side, so they always render unified.
+function splitFor(path) {
+  return splitActive() && !oneSided(path);
+}
+
+function oneSided(path) {
+  const f = path && state.report.files.find((x) => x.path === path);
+  return Boolean(f) && (f.status === "A" || f.status === "D");
+}
+
 function loadLayout() {
   try { state.split = localStorage.getItem("refactor-diff:layout") === "split"; } catch {}
 }
@@ -573,12 +584,14 @@ function setSplit(on) {
   rerender();
 }
 
-function layoutToggle() {
-  const narrow = narrowQuery.matches;
-  const split = splitActive();
+// With `path`, the toggle reflects that file: added/deleted files are always unified.
+function layoutToggle(path) {
+  const split = path ? splitFor(path) : splitActive();
+  const why = narrowQuery.matches ? "Window too narrow for side-by-side"
+    : path && oneSided(path) ? "Added and deleted files are always shown unified" : "";
   return `<div class="layout-toggle" role="group" aria-label="Diff layout">
-    <button type="button" data-layout="unified" aria-pressed="${!split}">Unified</button>
-    <button type="button" data-layout="split" aria-pressed="${split}" ${narrow ? 'disabled title="Window too narrow for side-by-side"' : 'title="Side-by-side diff"'}>Split</button>
+    <button type="button" data-layout="unified" aria-pressed="${!split}" ${why ? "disabled" : ""}>Unified</button>
+    <button type="button" data-layout="split" aria-pressed="${split}" ${why ? `disabled title="${why}"` : 'title="Side-by-side diff"'}>Split</button>
   </div>`;
 }
 
@@ -627,7 +640,7 @@ function renderCtx(box, fd) {
   const all = (dir, n) => `<button type="button" class="link" data-expand="${dir}-all">${dir === "up" ? "to start" : "to end"} (${n})</button>`;
   let rows = "";
   if (lo > 0) rows += `<tr class="expand"><td colspan="4">${more("up", Math.min(CTX_STEP, lo))}${lo > CTX_STEP ? " · " + all("up", lo) : ""}</td></tr>`;
-  rows += diffRows(fd.lines.slice(lo, hi), { tags: !focus.size, focus });
+  rows += diffRows(fd.lines.slice(lo, hi), { tags: !focus.size, focus, path: box.dataset.path });
   const rest = fd.lines.length - hi;
   if (rest > 0) rows += `<tr class="expand"><td colspan="4">${more("down", Math.min(CTX_STEP, rest))}${rest > CTX_STEP ? " · " + all("down", rest) : ""}</td></tr>`;
   box.querySelector("table").innerHTML = rows;
@@ -689,7 +702,7 @@ function unitRows(u) {
   return diffRows([
     ...u.old.map((ln, k) => ({ t: "-", o: u.old_start + k, n: null, text: ln.text, unit: u.id, hl: ln.hl })),
     ...u.new.map((ln, k) => ({ t: "+", o: null, n: u.new_start + k, text: ln.text, unit: u.id, hl: ln.hl })),
-  ], { focus: new Set([u.id]) });
+  ], { focus: new Set([u.id]), path: u.path });
 }
 
 function renderGroup(id) {
@@ -834,7 +847,7 @@ async function renderFileView(path, mode, line) {
   const counts = mode === "old" ? plural(fd.old_lines, "line") : mode === "new" ? plural(fd.new_lines, "line")
     : `<span class="adds">+${fd.lines.filter((l) => l.t === "+").length}</span> <span class="dels">−${fd.lines.filter((l) => l.t === "-").length}</span>`;
 
-  let body = mode === "diff" ? diffRows(rows, { anchors: true }) : "";
+  let body = mode === "diff" ? diffRows(rows, { anchors: true, path }) : "";
   let prevChanged = false;
   for (const ln of mode === "diff" ? [] : rows) {
     const changed = ln.t !== " ";
@@ -859,7 +872,7 @@ async function renderFileView(path, mode, line) {
     </div>
     <div class="viewer-bar">
       <nav class="tabs" aria-label="File version">${tabs}</nav>
-      ${mode === "diff" ? layoutToggle() : ""}
+      ${mode === "diff" ? layoutToggle(path) : ""}
       <span class="spacer"></span>
       <button type="button" class="toggle" data-jump="prev" title="Previous change (p)">↑ Prev change</button>
       <button type="button" class="toggle" data-jump="next" title="Next change (n)">↓ Next change</button>
