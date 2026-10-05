@@ -21,6 +21,12 @@ from refactor_diff.categories import CONFIG, DOCS, OTHER, SOURCE, TESTS, categor
         (".github/workflows/ci.yml", False, CONFIG),
         ("Dockerfile", False, CONFIG),
         ("static/app.js", False, OTHER),
+        ("src/users.ts", True, SOURCE),
+        ("src/components/Button.tsx", True, SOURCE),
+        ("src/users.test.ts", True, TESTS),
+        ("src/__tests__/users.ts", True, TESTS),
+        ("tsconfig.json", False, CONFIG),
+        ("vite.config.ts", True, CONFIG),
     ],
 )
 def test_categorize(path, analyzed, expected):

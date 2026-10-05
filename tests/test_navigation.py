@@ -74,6 +74,12 @@ def test_missing_file_is_an_error(nav):
         navigator.definitions(base, "nope.py", 1, 0)
 
 
+def test_unsupported_file_is_an_error(nav):
+    navigator, base, _ = nav
+    with pytest.raises(NavigationError):
+        navigator.definitions(base, "README.txt", 1, 0)
+
+
 def test_snapshot_has_only_python_files(rename_repo, tmp_path):
     snaps = Snapshots(rename_repo, tmp_path / "snaps")
     root = snaps.root(rev(rename_repo, "main"))
@@ -136,3 +142,21 @@ def test_navigate_and_source_endpoints(rename_repo):
         )
         assert bad.status_code == 400
         assert client.get("/api/library", params={"path": "/etc/hosts"}).status_code == 404
+
+
+def test_snapshot_has_ts_sources_and_project_files(ts_rename_repo, tmp_path):
+    (ts_rename_repo / "node_modules/dep").mkdir(parents=True)  # installed, not in git
+    snaps = Snapshots(ts_rename_repo, tmp_path / "snaps")
+    root = snaps.root(rev(ts_rename_repo, "main"))
+    assert sorted(p.name for p in root.iterdir()) == [
+        "api.ts",
+        "billing.ts",
+        "legacy.js",
+        "models.ts",
+        "node_modules",
+        "package.json",
+        "reports.ts",
+        "tsconfig.json",
+        "users.ts",
+    ]
+    assert (root / "node_modules").resolve() == (ts_rename_repo / "node_modules").resolve()
