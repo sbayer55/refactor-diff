@@ -216,6 +216,10 @@ button.primary:disabled { opacity: 0.6; cursor: progress; }
   border-radius: var(--radius); padding: 10px 14px; margin-bottom: 10px;
 }
 .warning .where { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.warning table.locations { margin-top: 8px; border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 12.5px; }
+.warning table.locations td { padding: 1px 0; vertical-align: top; }
+.warning table.locations td.where { white-space: nowrap; padding-right: 12px; width: 1%; }
+.warning table.locations td.text { white-space: pre-wrap; word-break: break-all; }
 .warning pre { margin: 6px 0 0; font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; word-break: break-all; }
 .warning mark { background: var(--warn-bg); color: var(--warn-fg); }
 

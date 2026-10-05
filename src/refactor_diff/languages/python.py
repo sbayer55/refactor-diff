@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import builtins
 import io
 import keyword
 import re
@@ -27,6 +28,7 @@ _STRUCTURAL = {
     tokenize.DEDENT: "<DEDENT>",
     tokenize.NEWLINE: "<NEWLINE>",
 }
+_BUILTINS = frozenset(dir(builtins))
 _SKIP = {tokenize.NL, tokenize.ENCODING, tokenize.ENDMARKER}
 
 # Rough tokenizer for files that do not tokenize cleanly (merge markers, syntax errors).
@@ -52,6 +54,9 @@ class PythonAnalyzer:
 
     def is_keyword(self, value: str) -> bool:
         return keyword.iskeyword(value) or keyword.issoftkeyword(value)
+
+    def is_builtin(self, value: str) -> bool:
+        return value in _BUILTINS
 
     def import_keywords(self) -> frozenset[str]:
         return frozenset({"import", "from"})

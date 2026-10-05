@@ -5,7 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from refactor_diff import sources
-from refactor_diff.grouping import build_groups, find_leftovers, inconsistent_renames
+from refactor_diff.grouping import (
+    build_groups,
+    find_leftovers,
+    inconsistent_renames,
+    still_defined,
+)
 from refactor_diff.hunks import Opcode, candidate_units, diff_hunks
 from refactor_diff.languages import analyzer_for
 from refactor_diff.languages.base import FileAnalysis, LanguageAnalyzer, split_lines
@@ -14,6 +19,7 @@ from refactor_diff.model import (
     ChangeUnit,
     FileChange,
     FileSummary,
+    Group,
     Hunk,
     HunkLine,
     Line,
@@ -72,7 +78,7 @@ def analyze(
         f.residual_units = sum(1 for u in mine if not u.explained)
 
     warnings = inconsistent_renames(groups)
-    warnings += _leftover_warnings(repo, src, groups, units, head_analyses)
+    warnings += _leftover_warnings(repo, src, groups, head_analyses)
 
     residual = [h.id for h in hunks.values() if any(not units[uid].explained for uid in h.unit_ids)]
     return Report(
@@ -191,31 +197,35 @@ def _merge(ranges: list[list[int]]) -> list[list[int]]:
 def _leftover_warnings(
     repo: Path,
     src: sources.ResolvedSource,
-    groups,
-    units: dict[str, ChangeUnit],
+    groups: list[Group],
     head_analyses: dict[str, FileAnalysis],
 ) -> list[Warning]:
-    """For mechanical renames, look for the old name in head versions of files.
+    """Flag references left behind when a definition (def/class) was renamed.
 
-    Renamed definitions are checked repo-wide (every remaining reference is suspect); other
-    renames only in the files where the rename happened, to avoid flagging unrelated locals.
+    Only renamed definitions are checked, repo-wide at head, and only when the old name is
+    no longer defined anywhere: then every remaining reference points at nothing. Renamed
+    locals, parameters and keyword arguments are skipped, since other variables with the same
+    name are usually unrelated.
     """
     warnings: list[Warning] = []
-    extra_cache: dict[str, FileAnalysis] = {}
+    extra: dict[str, FileAnalysis] = {}
     for g in groups:
-        if g.kind != RENAME or not g.mechanical:
+        if g.kind != RENAME or not g.mechanical or "definition" not in g.details:
             continue
-        scope = {p: head_analyses[p] for p in g.files if p in head_analyses}
-        if "definition" in g.details:
-            scope.update(head_analyses)
-            others = [
-                p for p in sources.grep_files(repo, src, g.old, ["*.py", "*.pyi"]) if p not in scope
-            ]
-            missing = [p for p in others if p not in extra_cache]
-            for path, text in sources.read_file_at(repo, src, missing).items():
-                analyzer = analyzer_for(path)
-                if analyzer is not None:
-                    extra_cache[path] = analyzer.analyze(text)
-            scope.update({p: extra_cache[p] for p in others if p in extra_cache})
-        warnings += find_leftovers(g, scope)
+        analyzers = {p: analyzer_for(p) for p in g.files}
+        if any(a is not None and a.is_builtin(g.old) for a in analyzers.values()):
+            continue
+        hits = sources.grep_files(repo, src, g.old, ["*.py", "*.pyi"])
+        missing = [p for p in hits if p not in head_analyses and p not in extra]
+        for path, text in sources.read_file_at(repo, src, missing).items():
+            analyzer = analyzer_for(path)
+            if analyzer is not None:
+                extra[path] = analyzer.analyze(text)
+        scope = {p: head_analyses.get(p) or extra.get(p) for p in hits}
+        scope = {p: an for p, an in scope.items() if an is not None}
+        if any(still_defined(g.old, an, analyzer_for(p)) for p, an in scope.items()):
+            continue
+        warning = find_leftovers(g, scope)
+        if warning is not None:
+            warnings.append(warning)
     return warnings

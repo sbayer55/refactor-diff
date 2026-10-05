@@ -70,20 +70,29 @@ refactor-diff --repo ../other --port 8000 --no-browser
 
    | Kind | Example |
    |---|---|
-   | `rename` | `get_user(id)` → `fetch_user(id)`. Records the context: definition, call, attribute, import or name |
+   | `rename` | `get_user(id)` → `fetch_user(id)`. Records the context: definition, call, attribute, import, keyword argument or name |
    | `retype` | `def f(x: int)` → `def f(x: str)`, `-> List[int]` → `-> list[int]`, adding an annotation |
    | `replace` | any other repeated substitution, e.g. `cfg.get("timeout")` → `settings.timeout` |
    | `formatting` | only whitespace or layout changed (quote style, re-wrapping) |
+
+   Nearby edits that belong together become one template instead of fragments. This
+   applies when an edit opens a bracket that a later edit closes, or when two edits are
+   separated only by `.` or `=`. Unchanged names and literals in between become `…`, so
+   `role="admin"` → `roles=("admin",)` and `role="faculty"` → `roles=("faculty",)` share the
+   pattern `role=… → roles=(…,)`, and `actor` → `str(actor.user_id)` reads as `… → str(….user_id)`.
 
 4. **Group.** Units are grouped by signature. A pattern is *mechanical* when it repeats at
    least **Min repeats** times (default 2). A unit counts as explained only when every
    signature on it is mechanical. So a line that renames `get_user` *and* changes logic still
    shows up in **Needs review**.
 5. **Sanity checks.**
-   - *Missed renames*: the old name still appears after a mechanical rename. If the
-     definition itself was renamed, this is checked across the whole repository at head.
-     Otherwise it is only checked in the files where the rename happened.
-   - *Inconsistent renames*: the same identifier was renamed to different names.
+   - *Missed renames*: a definition (`def`/`class`) was renamed, the old name is no longer
+     defined anywhere in the repository at head, yet code still references it. This produces
+     one warning per rename, listing every location. Renamed locals, parameters, keyword
+     arguments and builtins are not checked: other variables with the same name are usually
+     unrelated.
+   - *Inconsistent renames*: a definition or import was renamed to different names in
+     different places.
 
 ## Development
 

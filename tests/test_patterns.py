@@ -5,10 +5,14 @@ from refactor_diff.patterns import classify
 PY = PythonAnalyzer()
 
 
-def sigs(old: str, new: str):
+def classify_one(old: str, new: str):
     a, b = PY.analyze(old), PY.analyze(new)
     old_n, new_n = len(a.lines), len(b.lines)
-    result = classify(PY, a, b, (1, old_n) if old_n else None, (1, new_n) if new_n else None)
+    return classify(PY, a, b, (1, old_n) if old_n else None, (1, new_n) if new_n else None)
+
+
+def sigs(old: str, new: str):
+    result = classify_one(old, new)
     return [(s.kind, s.old, s.new, s.detail) for s in result.signatures]
 
 
@@ -76,6 +80,28 @@ def test_rewrapped_call_is_formatting():
 def test_dotted_replacement_is_one_signature():
     assert sigs('t = cfg.get("timeout")\n', "t = settings.timeout\n") == [
         (REPLACE, 'cfg.get("timeout")', "settings.timeout", "")
+    ]
+
+
+def test_keyword_argument_rename():
+    assert sigs("f(a, role=1)\n", "f(a, roles=1)\n") == [(RENAME, "role", "roles", "keyword")]
+
+
+def test_wrap_in_tuple_is_one_template():
+    assert sigs('f(role="admin")\n', 'f(roles=("admin",))\n') == [
+        (REPLACE, "role=…", "roles=(…,)", "")
+    ]
+
+
+def test_wrap_templates_group_across_different_values():
+    a = classify_one('f(role="admin")\n', 'f(roles=("admin",))\n')
+    b = classify_one('g(x, role="faculty")\n', 'g(x, roles=("faculty",))\n')
+    assert a.signatures[0].key == b.signatures[0].key
+
+
+def test_wrap_in_call_is_one_template():
+    assert sigs("save(created_by=actor)\n", "save(created_by=str(actor.user_id))\n") == [
+        (REPLACE, "…", "str(….user_id)", "")
     ]
 
 

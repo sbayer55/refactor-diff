@@ -57,6 +57,10 @@ class LanguageAnalyzer(Protocol):
 
     def is_keyword(self, value: str) -> bool: ...
 
+    def is_builtin(self, value: str) -> bool:
+        """Names always available without a definition (renaming them away is never "missed")."""
+        ...
+
     def import_keywords(self) -> frozenset[str]:
         """Tokens that start an import statement."""
         ...

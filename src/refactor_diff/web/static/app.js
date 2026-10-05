@@ -347,23 +347,28 @@ function renderWarnings() {
   const content = $("#content");
   if (!r.warnings.length) {
     content.innerHTML = `<div class="empty"><h2>No warnings</h2>
-      <p>No leftover old names after renames, and no identifier was renamed two different ways.</p></div>`;
+      <p>No references to renamed definitions are left behind, and no symbol was renamed two different ways.</p></div>`;
     return;
   }
   let html = `<div class="page-head"><h2>Warnings</h2>
-    <p>Possible problems with the refactor: old names that still appear, or inconsistent renames.</p></div>`;
+    <p>Possible problems with the refactor: references to a renamed definition that no longer exists, or a symbol renamed two different ways.</p></div>`;
   for (const w of r.warnings) {
     const g = r.groups.find((x) => x.id === w.group_id);
-    let code = "";
-    if (w.text != null && g) {
-      const re = new RegExp(`\\b${g.old.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g");
-      const ranges = [...w.text.matchAll(re)].map((m) => [m.index, m.index + m[0].length]);
-      code = `<pre>${highlight(w.text, ranges)}</pre>`;
+    const re = g && g.kind === "rename"
+      ? new RegExp(`\\b${g.old.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g")
+      : null;
+    let locs = "";
+    for (const loc of w.locations) {
+      const text = loc.text.trimStart();
+      const ranges = re ? [...text.matchAll(re)].map((m) => [m.index, m.index + m[0].length]) : [];
+      locs += `<tr><td class="where">${esc(loc.path)}:${loc.line}</td>
+        <td class="text">${highlight(text, ranges)}</td></tr>`;
     }
+    const more = w.total > w.locations.length
+      ? `<div class="where">…and ${w.total - w.locations.length} more</div>` : "";
     html += `<div class="warning">
       <div>${esc(w.message)}${g ? ` · <a href="#group/${g.id}">view pattern</a>` : ""}</div>
-      ${w.path ? `<div class="where">${esc(w.path)}${w.line ? ":" + w.line : ""}</div>` : ""}
-      ${code}</div>`;
+      ${locs ? `<table class="locations">${locs}</table>${more}` : ""}</div>`;
   }
   content.innerHTML = html;
 }

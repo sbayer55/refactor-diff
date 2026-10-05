@@ -16,6 +16,10 @@ from difflib import SequenceMatcher
 
 from refactor_diff.languages.base import (
     NAME,
+    NUMBER,
+    OP,
+    OTHER,
+    STRING,
     STRUCTURAL,
     Annotation,
     FileAnalysis,
@@ -25,7 +29,12 @@ from refactor_diff.languages.base import (
 from refactor_diff.model import FORMATTING, RENAME, REPLACE, RETYPE, Signature
 
 MAX_LABEL = 160
+MAX_WRAP_GAP = 12  # unchanged tokens a bracket wrap may enclose
+PLACEHOLDER = "…"
 _ANNOTATION_PUNCT = {":", "->"}
+_BRACKETS = {"(": 1, "[": 1, "{": 1, ")": -1, "]": -1, "}": -1}
+_JOIN_GAPS = {".", "="}
+_HOLE_KINDS = {NAME, STRING, NUMBER}
 
 LineRange = tuple[int, int] | None  # inclusive (first, last), None when empty
 
@@ -77,18 +86,18 @@ def classify(
     classified = [_classify_op(analyzer, a, b, op) for op in ops]
 
     result = Classification([])
-    for cluster in _clusters(a, ops, classified):
-        if len(cluster) == 1 or all(classified[k] is not None for k in cluster):
+    for cluster in _clusters(a, b, ops, classified):
+        if all(classified[k] is not None for k in cluster):
             for k in cluster:
-                sig = classified[k] or _replace_sig(a, b, *ops[k][1:])
-                if sig.kind == REPLACE:
-                    result.generic_tokens += ops[k][2] - ops[k][1] + ops[k][4] - ops[k][3]
-                _add(result, sig)
-        else:
-            i1, j1 = ops[cluster[0]][1], ops[cluster[0]][3]
-            i2, j2 = ops[cluster[-1]][2], ops[cluster[-1]][4]
+                _add(result, classified[k])
+        elif len(cluster) == 1:
+            _, i1, i2, j1, j2 = ops[cluster[0]]
             result.generic_tokens += i2 - i1 + j2 - j1
             _add(result, _replace_sig(a, b, i1, i2, j1, j2))
+        else:
+            cluster_ops = [ops[k] for k in cluster]
+            result.generic_tokens += sum(i2 - i1 + j2 - j1 for _, i1, i2, j1, j2 in cluster_ops)
+            _add(result, _template_sig(a, b, cluster_ops))
         for k in cluster:
             _, i1, i2, j1, j2 = ops[k]
             _highlight(result.old_hl, a.tokens[i1:i2], old_range)
@@ -101,23 +110,44 @@ def _add(result: Classification, sig: Signature) -> None:
         result.signatures.append(sig)
 
 
-def _clusters(a: _Side, ops, classified) -> list[list[int]]:
-    """Join ops separated only by a "." so ``cfg.get("x")`` -> ``settings.x`` reads as one
-    replacement instead of a rename plus a fragment."""
+def _depth(tokens: list[Token]) -> int:
+    return sum(_BRACKETS.get(t.value, 0) for t in tokens if t.kind == OP)
+
+
+def _clusters(a: _Side, b: _Side, ops, classified) -> list[list[int]]:
+    """Group nearby ops that form one edit, so it gets one signature instead of fragments:
+
+    * wraps - an op leaves a bracket open and a later op closes it around unchanged code:
+      ``actor`` -> ``str(actor.user_id)``, ``role="x"`` -> ``roles=("x",)``
+    * ops separated by a single ``.`` or ``=``: ``cfg.get("x")`` -> ``settings.x``
+
+    Retypes never join a cluster; a cluster made only of renames is reported as renames.
+    """
     clusters: list[list[int]] = []
-    for k, op in enumerate(ops):
+    open_old = open_new = 0
+    for k, (_, i1, i2, j1, j2) in enumerate(ops):
         if clusters:
-            prev = ops[clusters[-1][-1]]
-            gap = a.tokens[prev[2] : op[1]]
-            if (
-                len(gap) == 1
-                and gap[0].value == "."
-                and (classified[k] is None or classified[clusters[-1][-1]] is None)
-            ):
+            last = ops[clusters[-1][-1]]
+            gap = a.tokens[last[2] : i1]
+            joinable = (
+                _joinable(classified[k])
+                and _joinable(classified[clusters[-1][-1]])
+                and not any(t.kind == STRUCTURAL for t in gap)
+            )
+            wrap = (open_old > 0 or open_new > 0) and len(gap) <= MAX_WRAP_GAP
+            short = len(gap) == 1 and gap[0].value in _JOIN_GAPS
+            if joinable and (wrap or short):
                 clusters[-1].append(k)
+                open_old += _depth(gap) + _depth(a.tokens[i1:i2])
+                open_new += _depth(gap) + _depth(b.tokens[j1:j2])
                 continue
         clusters.append([k])
+        open_old, open_new = _depth(a.tokens[i1:i2]), _depth(b.tokens[j1:j2])
     return clusters
+
+
+def _joinable(sig: Signature | None) -> bool:
+    return sig is None or sig.kind == RENAME
 
 
 def _classify_op(analyzer: LanguageAnalyzer, a: _Side, b: _Side, op) -> Signature | None:
@@ -157,6 +187,8 @@ def rename_context(analyzer: LanguageAnalyzer, tokens: list[Token], i: int) -> s
         return "import"
     if nxt == "(":
         return "call"
+    if nxt == "=" and prev in ("(", ","):
+        return "keyword"
     return "name"
 
 
@@ -200,6 +232,32 @@ def _replace_sig(a: _Side, b: _Side, i1: int, i2: int, j1: int, j2: int) -> Sign
     return Signature(
         REPLACE, key, render(old_toks, a.analysis.lines), render(new_toks, b.analysis.lines)
     )
+
+
+def _template_sig(a: _Side, b: _Side, cluster_ops) -> Signature:
+    """One signature for a cluster of ops. Unchanged code between the ops becomes a "…"
+    placeholder when it holds names or literals, so ``role="admin"`` and ``role="faculty"``
+    share the template ``role=… -> roles=(…,)``."""
+    old: list[Token] = []
+    new: list[Token] = []
+    for n, (_, i1, i2, j1, j2) in enumerate(cluster_ops):
+        if n:
+            prev = cluster_ops[n - 1]
+            gap_a, gap_b = a.tokens[prev[2] : i1], b.tokens[prev[4] : j1]
+            if any(t.kind in _HOLE_KINDS for t in gap_a):
+                old.append(_hole(gap_a))
+                new.append(_hole(gap_b))
+            else:
+                old += gap_a
+                new += gap_b
+        old += a.tokens[i1:i2]
+        new += b.tokens[j1:j2]
+    key = "\x00".join([REPLACE, *(t.value for t in old), "\x01", *(t.value for t in new)])
+    return Signature(REPLACE, key, render(old, a.analysis.lines), render(new, b.analysis.lines))
+
+
+def _hole(tokens: list[Token]) -> Token:
+    return Token(OTHER, "\x02", PLACEHOLDER, tokens[0].start, tokens[-1].end)
 
 
 def render(tokens: list[Token], lines: list[str]) -> str:

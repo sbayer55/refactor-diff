@@ -4,18 +4,20 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 
-from refactor_diff.languages.base import NAME, FileAnalysis
+from refactor_diff.languages.base import NAME, FileAnalysis, LanguageAnalyzer
 from refactor_diff.model import (
     FORMATTING,
     RENAME,
     ChangeUnit,
     Group,
+    Location,
     Signature,
     Warning,
     short_hash,
 )
 
-MAX_LEFTOVERS_PER_GROUP = 25
+MAX_LOCATIONS = 50
+SYMBOL_CONTEXTS = {"definition", "import"}
 
 
 def build_groups(units: list[ChangeUnit], min_count: int) -> list[Group]:
@@ -56,13 +58,17 @@ def build_groups(units: list[ChangeUnit], min_count: int) -> list[Group]:
 
 
 def inconsistent_renames(groups: list[Group]) -> list[Warning]:
+    """A symbol (definition or import) renamed to different names in different places.
+
+    Locals and keyword arguments are skipped: renaming ``user_id`` differently in unrelated
+    functions is normal."""
     targets: dict[str, list[Group]] = defaultdict(list)
     for g in groups:
         if g.kind == RENAME:
             targets[g.old].append(g)
     warnings = []
     for old, gs in targets.items():
-        if len(gs) > 1:
+        if len(gs) > 1 and any(SYMBOL_CONTEXTS & g.details.keys() for g in gs):
             news = ", ".join(f"{g.new} (×{len(g.unit_ids)})" for g in gs)
             warnings.append(
                 Warning(
@@ -74,30 +80,51 @@ def inconsistent_renames(groups: list[Group]) -> list[Warning]:
     return warnings
 
 
-def find_leftovers(group: Group, files: dict[str, FileAnalysis]) -> list[Warning]:
-    """Identifier tokens still spelled with the old name after a rename."""
+def still_defined(name: str, analysis: FileAnalysis, analyzer: LanguageAnalyzer) -> bool:
+    """Whether ``name`` is still defined here (def/class, or a top-level assignment)."""
+    toks = analysis.tokens
+    for i, tok in enumerate(toks):
+        if tok.kind != NAME or tok.value != name:
+            continue
+        if i > 0 and toks[i - 1].value in analyzer.definition_keywords():
+            return True
+        if tok.start[1] == 0 and i + 1 < len(toks) and toks[i + 1].value in ("=", ":"):
+            return True
+    return False
+
+
+def find_leftovers(group: Group, files: dict[str, FileAnalysis]) -> Warning | None:
+    """One warning listing every identifier still spelled with the old name after a rename
+    (comments and strings don't count)."""
     attribute_only = set(group.details) == {"attribute"}
-    found: list[Warning] = []
+    locations: list[Location] = []
+    total = 0
     for path in sorted(files):
         analysis = files[path]
         toks = analysis.tokens
         for i, tok in enumerate(toks):
             if tok.kind != NAME or tok.value != group.old:
                 continue
-            is_attr = i > 0 and toks[i - 1].value == "."
-            if attribute_only and not is_attr:
+            if attribute_only and not (i > 0 and toks[i - 1].value == "."):
                 continue
+            total += 1
             line = tok.start[0]
-            found.append(
-                Warning(
-                    kind="missed-rename",
-                    message=f"{group.old} still appears after renaming it to {group.new}",
-                    group_id=group.id,
-                    path=path,
-                    line=line,
-                    text=analysis.lines[line - 1] if line - 1 < len(analysis.lines) else None,
-                )
-            )
-            if len(found) >= MAX_LEFTOVERS_PER_GROUP:
-                return found
-    return found
+            if len(locations) < MAX_LOCATIONS and all(
+                (loc.path, loc.line) != (path, line) for loc in locations[-1:]
+            ):
+                text = analysis.lines[line - 1] if line - 1 < len(analysis.lines) else ""
+                locations.append(Location(path, line, text))
+    if not total:
+        return None
+    files_hit = len({loc.path for loc in locations})
+    return Warning(
+        kind="missed-rename",
+        message=(
+            f"{group.old} was renamed to {group.new} and is no longer defined, but "
+            f"{total} reference{'s' if total != 1 else ''} remain"
+            f"{f' in {files_hit} files' if files_hit > 1 else ''}"
+        ),
+        group_id=group.id,
+        locations=locations,
+        total=total,
+    )

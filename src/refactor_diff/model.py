@@ -112,13 +112,19 @@ class Group:
 
 
 @dataclass
+class Location:
+    path: str
+    line: int
+    text: str
+
+
+@dataclass
 class Warning:
     kind: str  # "missed-rename" | "inconsistent-rename"
     message: str
     group_id: str | None = None
-    path: str | None = None
-    line: int | None = None
-    text: str | None = None
+    locations: list[Location] = field(default_factory=list)
+    total: int = 0  # all matches found; ``locations`` may be truncated
 
 
 @dataclass

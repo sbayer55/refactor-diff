@@ -23,8 +23,12 @@ def test_fixture_project(rename_repo):
     assert [report.hunks[h].path for h in report.residual_hunk_ids] == ["api.py"]
 
     # legacy.py was never touched but still calls the old name.
-    missed = [(w.path, w.line) for w in report.warnings if w.kind == "missed-rename"]
-    assert missed == [("legacy.py", 1), ("legacy.py", 5)]
+    [missed] = [w for w in report.warnings if w.kind == "missed-rename"]
+    assert missed.total == 2
+    assert [(loc.path, loc.line) for loc in missed.locations] == [
+        ("legacy.py", 1),
+        ("legacy.py", 5),
+    ]
 
     files = {f.path: f for f in report.files}
     assert not files["README.txt"].analyzed
@@ -39,3 +43,11 @@ def test_worktree_source(rename_repo):
     assert report.source["head_sha"] is None
     assert [g.label for g in report.groups if g.mechanical] == ["get_user → fetch_user"]
     assert report.stats()["residual_units"] == 0
+
+
+def test_no_missed_rename_warning_when_old_name_still_defined(rename_repo):
+    (rename_repo / "users.py").write_text(
+        (rename_repo / "users.py").read_text() + "\n\ndef get_user(user_id):\n    return None\n"
+    )
+    report = analyze(rename_repo, "main", ":worktree:")
+    assert not [w for w in report.warnings if w.kind == "missed-rename"]

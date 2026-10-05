@@ -1,4 +1,9 @@
-from refactor_diff.grouping import build_groups, find_leftovers, inconsistent_renames
+from refactor_diff.grouping import (
+    build_groups,
+    find_leftovers,
+    inconsistent_renames,
+    still_defined,
+)
 from refactor_diff.languages.python import PythonAnalyzer
 from refactor_diff.model import RENAME, ChangeUnit, Signature
 
@@ -32,15 +37,41 @@ def test_unit_needs_every_signature_mechanical():
     assert [u.explained for u in units] == [True, False]
 
 
-def test_inconsistent_rename_warning():
-    units = [unit("1", "a.py", rename("f", "g")), unit("2", "b.py", rename("f", "h"))]
+def test_inconsistent_rename_warning_for_symbols():
+    units = [
+        unit("1", "a.py", rename("f", "g", "definition")),
+        unit("2", "b.py", rename("f", "h")),
+    ]
     warnings = inconsistent_renames(build_groups(units, min_count=1))
     assert len(warnings) == 1 and "f was renamed" in warnings[0].message
+
+
+def test_locals_renamed_differently_are_not_inconsistent():
+    units = [
+        unit("1", "a.py", rename("user_id", "member_id", "name")),
+        unit("2", "b.py", rename("user_id", "staff_id", "keyword")),
+    ]
+    assert inconsistent_renames(build_groups(units, min_count=1)) == []
 
 
 def test_leftovers_found_in_code_not_comments_or_strings():
     units = [unit("1", "a.py", rename("f", "g")), unit("2", "a.py", rename("f", "g"))]
     group = build_groups(units, min_count=2)[0]
     analysis = PythonAnalyzer().analyze("g()\n# f is gone\ns = 'f'\nf()\n")
-    leftovers = find_leftovers(group, {"a.py": analysis})
-    assert [(w.path, w.line) for w in leftovers] == [("a.py", 4)]
+    warning = find_leftovers(group, {"a.py": analysis})
+    assert [(loc.path, loc.line) for loc in warning.locations] == [("a.py", 4)]
+    assert warning.total == 1
+
+
+def test_no_leftovers_is_no_warning():
+    group = build_groups([unit("1", "a.py", rename("f", "g"))], min_count=1)[0]
+    assert find_leftovers(group, {"a.py": PythonAnalyzer().analyze("g()\n")}) is None
+
+
+def test_still_defined():
+    py = PythonAnalyzer()
+    assert still_defined("f", py.analyze("def f():\n    pass\n"), py)
+    assert still_defined("C", py.analyze("class C:\n    pass\n"), py)
+    assert still_defined("X", py.analyze("X: int = 1\n"), py)
+    assert not still_defined("f", py.analyze("f()\ny = f\n"), py)
+    assert not still_defined("x", py.analyze("def g(x=1):\n    x = 2\n"), py)
