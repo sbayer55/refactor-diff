@@ -12,12 +12,13 @@ from pathlib import Path
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse
+from starlette.responses import FileResponse, JSONResponse, PlainTextResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from refactor_diff import sources
 from refactor_diff.engine import analyze
+from refactor_diff.export import anchor_line, markdown_summary
 from refactor_diff.fileview import file_diff
 from refactor_diff.languages.base import split_lines
 from refactor_diff.model import Report
@@ -177,6 +178,83 @@ def create_app(
             return JSONResponse({"error": str(e)}, status_code=404)
         return JSONResponse({"path": path, "lines": split_lines(text)})
 
+    async def get_summary(request: Request):
+        """The review summary as Markdown (what "Copy as Markdown" copies)."""
+        report = reports.get(request.path_params["report_id"])
+        if report is None:
+            return _unknown_report()
+        review = store.review(report.source["identity"], hunks_of(report))
+        return PlainTextResponse(markdown_summary(report, review), media_type="text/markdown")
+
+    async def get_commits(request: Request):
+        """The commits between base and head, oldest first (empty for the working tree)."""
+        report = reports.get(request.path_params["report_id"])
+        if report is None:
+            return _unknown_report()
+        try:
+            commits = await run_in_threadpool(
+                sources.list_commits, repo, report.source["base_sha"], report.source["head_sha"]
+            )
+        except sources.SourceError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        return JSONResponse({"commits": commits})
+
+    def _pr_of(report: Report) -> int | None:
+        return report.source["pr"]["number"] if report.source.get("pr") else None
+
+    async def post_pr_comment(request: Request):
+        """Post ``{"body"}`` as a comment on the report's pull request."""
+        report = reports.get(request.path_params["report_id"])
+        if report is None:
+            return _unknown_report()
+        number = _pr_of(report)
+        if number is None:
+            return JSONResponse({"error": "This report isn't a pull request."}, status_code=400)
+        body = (await request.json()).get("body", "")
+        if not isinstance(body, str) or not body.strip():
+            return JSONResponse({"error": "The comment is empty."}, status_code=400)
+        try:
+            url = await run_in_threadpool(sources.post_pr_comment, repo, number, body)
+        except sources.SourceError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        return JSONResponse({"url": url})
+
+    async def post_review_comment(request: Request):
+        """Post ``{"body", "hunk_id"}`` as an inline review comment on the hunk's first
+        changed line (``"line"``/``"side"`` override it)."""
+        report = reports.get(request.path_params["report_id"])
+        if report is None:
+            return _unknown_report()
+        number = _pr_of(report)
+        if number is None:
+            return JSONResponse({"error": "This report isn't a pull request."}, status_code=400)
+        body = await request.json()
+        text = body.get("body", "")
+        hunk = report.hunks.get(body.get("hunk_id", ""))
+        if not isinstance(text, str) or not text.strip() or hunk is None:
+            return JSONResponse({"error": "A comment and a hunk are required."}, status_code=400)
+        first = anchor_line(report, hunk)
+        side = body.get("side") or ("RIGHT" if first.new_no else "LEFT")
+        try:
+            line = int(body.get("line") or (first.new_no if side == "RIGHT" else first.old_no))
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "line must be an integer."}, status_code=400)
+        path = hunk.path if side == "RIGHT" else _side_path(report, "old", hunk.path)
+        try:
+            url = await run_in_threadpool(
+                sources.post_review_comment,
+                repo,
+                number,
+                text,
+                report.source["head_sha"],
+                path,
+                line,
+                side,
+            )
+        except sources.SourceError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        return JSONResponse({"url": url, "path": path, "line": line, "side": side})
+
     @contextlib.asynccontextmanager
     async def lifespan(app):
         yield
@@ -193,6 +271,14 @@ def create_app(
             Route("/api/report/{report_id}/file", get_file),
             Route("/api/report/{report_id}/review", get_review),
             Route("/api/report/{report_id}/review", mark_review, methods=["POST"]),
+            Route("/api/report/{report_id}/summary.md", get_summary),
+            Route("/api/report/{report_id}/commits", get_commits),
+            Route("/api/report/{report_id}/pr/comment", post_pr_comment, methods=["POST"]),
+            Route(
+                "/api/report/{report_id}/pr/review-comment",
+                post_review_comment,
+                methods=["POST"],
+            ),
             Route("/api/report/{report_id}/navigate", navigate, methods=["POST"]),
             Route("/api/report/{report_id}/source", get_source),
             Route("/api/library", get_library),

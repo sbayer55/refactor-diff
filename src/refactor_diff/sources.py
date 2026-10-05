@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -151,7 +152,15 @@ def resolve(repo: Path, base: str | None, head: str | None, pr: int | None) -> R
         return ResolvedSource(f"{base} → working tree", base, head, base_sha, None)
     head_sha = resolve_ref(repo, head)
     merge_base = git_text(repo, "merge-base", base_sha, head_sha)
-    return ResolvedSource(f"{base}...{head}", base, head, merge_base, head_sha)
+    label = f"{base}...{head}"
+    if base == f"{head}^" and _is_sha(head):
+        # One commit on its own (see the commits view): name it like git log does.
+        label = f"commit {head[:7]} {git_text(repo, 'log', '-1', '--format=%s', head_sha)}"
+    return ResolvedSource(label, base, head, merge_base, head_sha)
+
+
+def _is_sha(ref: str) -> bool:
+    return len(ref) >= 7 and all(c in "0123456789abcdef" for c in ref)
 
 
 def _resolve_pr(repo: Path, number: int) -> ResolvedSource:
@@ -330,3 +339,84 @@ def read_blobs(repo: Path, specs: list[str]) -> dict[str, bytes]:
         blobs[spec] = out[pos : pos + size]
         pos += size + 1
     return blobs
+
+
+# --- commits in a range ---------------------------------------------------------------------
+
+_SHORTSTAT = re.compile(
+    r"(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?"
+)
+
+
+def list_commits(repo: Path, base_sha: str, head_sha: str | None) -> list[dict]:
+    """The first-parent commits from base to head, oldest first, with their line counts."""
+    if not head_sha:
+        return []
+    out = git_text(
+        repo,
+        "log",
+        "--reverse",
+        "--first-parent",
+        "--shortstat",
+        "--format=%x1e%H%x1f%h%x1f%s%x1f%an%x1f%aI",
+        f"{base_sha}..{head_sha}",
+    )
+    commits = []
+    for record in out.split("\x1e"):
+        if not record.strip():
+            continue
+        head, _, rest = record.strip("\n").partition("\n")
+        sha, short, subject, author, date = (head.split("\x1f") + [""] * 5)[:5]
+        m = _SHORTSTAT.search(rest)
+        files, ins, dels = (int(x or 0) for x in m.groups()) if m else (0, 0, 0)
+        commits.append(
+            {
+                "sha": sha,
+                "short": short,
+                "subject": subject,
+                "author": author,
+                "date": date,
+                "files": files,
+                "insertions": ins,
+                "deletions": dels,
+            }
+        )
+    return commits
+
+
+# --- posting to a pull request --------------------------------------------------------------
+
+
+def _gh(repo: Path, *args: str, input: bytes | None = None) -> str:
+    if not gh_available():
+        raise SourceError("The GitHub CLI (gh) is not installed or not on PATH.")
+    proc = subprocess.run(["gh", *args], cwd=repo, input=input, capture_output=True)
+    if proc.returncode != 0:
+        raise SourceError(f"gh {' '.join(args[:2])} failed: {proc.stderr.decode().strip()}")
+    return proc.stdout.decode(errors="replace").strip()
+
+
+def post_pr_comment(repo: Path, number: int, body: str) -> str:
+    """Post a comment on the PR's conversation; returns its URL."""
+    return _gh(repo, "pr", "comment", str(number), "--body-file", "-", input=body.encode())
+
+
+def post_review_comment(
+    repo: Path, number: int, body: str, commit_id: str, path: str, line: int, side: str
+) -> str:
+    """Post an inline review comment on one line of the PR's diff; returns its URL."""
+    payload = {"body": body, "commit_id": commit_id, "path": path, "line": line, "side": side}
+    out = _gh(
+        repo,
+        "api",
+        "--method",
+        "POST",
+        f"repos/{{owner}}/{{repo}}/pulls/{number}/comments",
+        "--input",
+        "-",
+        input=json.dumps(payload).encode(),
+    )
+    try:
+        return json.loads(out).get("html_url", "")
+    except json.JSONDecodeError:
+        return ""

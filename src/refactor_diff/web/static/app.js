@@ -20,6 +20,9 @@ const state = {
   repo: "", // absolute repository path (for editor links)
   editor: null, // URL template from --editor
   focus: -1, // keyboard focus: index into the page's hunks / occurrences
+  commits: [], // commits between base and head (see /api/report/{id}/commits)
+  parent: null, // {id, label} of the whole-range report while viewing one of its commits
+  postingOk: false, // the user confirmed posting to the PR in this session
 };
 
 // Side-by-side needs room for two code columns; narrower windows always get unified diffs.
@@ -385,22 +388,111 @@ async function runAnalysis(evt) {
   btn.innerHTML = '<span class="spinner"></span> Analyzing';
   try {
     const report = await api("/api/analyze", body);
-    state.report = report;
-    state.groupsByKey = new Map(report.groups.map((g) => [g.key, g]));
-    state.shown = PAGE;
-    state.fileDiffs = new Map();
-    setReview(report.review);
-    applyFilters();
-    renderSummary();
-    renderFilters();
-    if (!location.hash || location.hash === "#") location.hash = "#review";
-    else route();
+    state.parent = null;
+    state.commits = [];
+    loadReport(report);
+    loadCommits();
   } catch (e) {
     showError(e.message);
   } finally {
     btn.disabled = false;
     btn.textContent = "Analyze";
   }
+}
+
+function loadReport(report) {
+  state.report = report;
+  state.groupsByKey = new Map(report.groups.map((g) => [g.key, g]));
+  state.shown = PAGE;
+  state.fileDiffs = new Map();
+  setReview(report.review);
+  applyFilters();
+  renderSummary();
+  renderFilters();
+  if (!location.hash || location.hash === "#" || location.hash.startsWith("#file/") || location.hash.startsWith("#lib/")) {
+    if (location.hash === "#review") route(); else location.hash = "#review";
+  } else {
+    route();
+  }
+}
+
+// A report the server already has (e.g. the whole range, after looking at one commit).
+async function showReport(id) {
+  try {
+    const report = await api(`/api/report/${id}`);
+    state.parent = null;
+    loadReport(report);
+  } catch (e) {
+    showError(e.message);
+  }
+}
+
+// ---------- commits ----------
+
+async function loadCommits() {
+  const id = state.report.id;
+  try {
+    const { commits } = await api(`/api/report/${id}/commits`);
+    if (state.report.id !== id) return;
+    state.commits = commits;
+    renderSidebar();
+    if (location.hash === "#commits") route({ keepScroll: true });
+  } catch { state.commits = []; }
+}
+
+// Analyze one commit of the range against its parent; the whole-range report stays a click away.
+async function analyzeCommit(sha) {
+  const parent = state.parent || { id: state.report.id, label: state.report.source.label, commits: state.commits };
+  toast(`Analyzing ${sha.slice(0, 7)}…`, { busy: true, sticky: true });
+  try {
+    const report = await api("/api/analyze", { base: `${sha}^`, head: sha, min_count: state.report.source.min_count });
+    hideToast();
+    state.parent = parent;
+    state.commits = parent.commits;
+    loadReport(report);
+  } catch (e) {
+    toast(e.message, { error: true });
+  }
+}
+
+function currentCommitIndex() {
+  if (!state.parent) return -1;
+  return state.commits.findIndex((c) => c.sha === state.report.source.head_sha);
+}
+
+function commitStep(delta) {
+  const i = currentCommitIndex();
+  const next = i < 0 ? (delta > 0 ? 0 : state.commits.length - 1) : i + delta;
+  if (next >= 0 && next < state.commits.length) analyzeCommit(state.commits[next].sha);
+}
+
+function renderCommits() {
+  const content = $("#content");
+  const commits = state.commits;
+  if (!commits.length) {
+    content.innerHTML = `<div class="empty"><h2>No commits</h2><p>${state.report.source.head_sha
+      ? "The range holds no commits." : "The working tree isn't a commit range."}</p></div>`;
+    return;
+  }
+  const current = currentCommitIndex();
+  const label = state.parent ? state.parent.label : state.report.source.label;
+  let html = `<div class="page-head"><h2>Commits</h2>
+    <p>${plural(commits.length, "commit")} in ${esc(label)}, oldest first. Analyze one to review it on its own
+    (its reviewed marks are separate from the whole range's).</p></div>
+    <table class="files commits"><thead><tr><th></th><th>Commit</th><th>Subject</th><th>Author</th><th>Files</th><th>+/−</th><th></th></tr></thead><tbody>`;
+  commits.forEach((c, i) => {
+    const date = c.date ? new Date(c.date).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+    html += `<tr class="${i === current ? "current" : ""}">
+      <td class="num">${i + 1}</td>
+      <td class="code">${esc(c.short)}</td>
+      <td class="path">${esc(c.subject)}</td>
+      <td>${esc(c.author)}<span class="meta"> ${esc(date)}</span></td>
+      <td class="num">${c.files}</td>
+      <td class="num"><span class="adds">+${c.insertions}</span> <span class="dels">−${c.deletions}</span></td>
+      <td>${i === current ? '<span class="meta">viewing</span>'
+        : `<button type="button" class="link" data-analyze-commit="${esc(c.sha)}">Analyze</button>`}</td></tr>`;
+  });
+  content.innerHTML = html + "</tbody></table>";
 }
 
 function showError(msg) {
@@ -434,9 +526,133 @@ function renderSummary() {
     <div class="metric"><span class="big">${stats.files_analyzed}<span class="of">/${stats.files_changed}</span></span>
       <span>files analyzed</span></div>
     <div class="source">
+      ${state.parent ? `<div><a href="#" id="back-to-range" class="link">← Back to ${esc(state.parent.label)}</a></div>` : ""}
       <div><strong>${esc(source.label)}</strong></div>
-      <div class="code">${sha(source.base_sha)} → ${sha(source.head_sha)}</div>
+      ${state.parent ? "" : `<div class="code">${sha(source.base_sha)} → ${sha(source.head_sha)}</div>`}
+      <div class="summary-actions">
+        <button type="button" class="link" id="copy-md" title="Copy the review summary as Markdown">Copy as Markdown</button>
+        ${source.pr ? `<button type="button" class="link" id="post-summary" title="Post the summary as a comment on the pull request">Post summary to PR #${source.pr.number}</button>` : ""}
+      </div>
     </div>`;
+  $("#copy-md").addEventListener("click", copySummary);
+  $("#post-summary")?.addEventListener("click", postSummary);
+  $("#back-to-range")?.addEventListener("click", (e) => { e.preventDefault(); showReport(state.parent.id); });
+}
+
+// ---------- outputs: Markdown summary and PR comments ----------
+
+async function fetchSummary() {
+  const res = await fetch(`/api/report/${state.report.id}/summary.md`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
+}
+
+async function copySummary() {
+  try {
+    const md = await fetchSummary();
+    await navigator.clipboard.writeText(md);
+    toast("Review summary copied as Markdown.");
+  } catch (e) {
+    toast(`Couldn't copy: ${e.message}`, { error: true });
+  }
+}
+
+function prNumber() {
+  return state.report.source.pr ? state.report.source.pr.number : null;
+}
+
+// Posting is outward-facing: ask once per session, after showing what will be posted.
+function confirmPosting() {
+  if (state.postingOk) return true;
+  state.postingOk = window.confirm(`Post comments to pull request #${prNumber()} as you (via gh)?`);
+  return state.postingOk;
+}
+
+async function postSummary() {
+  let md;
+  try { md = await fetchSummary(); } catch (e) { toast(e.message, { error: true }); return; }
+  showModal(`Post summary to PR #${prNumber()}`, md, async (body) => {
+    if (!confirmPosting()) return false;
+    const res = await api(`/api/report/${state.report.id}/pr/comment`, { body });
+    toast(`Posted: ${res.url}`);
+    return true;
+  });
+}
+
+// A dialog with an editable textarea and Post / Cancel.
+function showModal(title, text, onPost) {
+  const dlg = $("#modal");
+  dlg.innerHTML = `<header><h3>${esc(title)}</h3><button type="button" class="close" aria-label="Close" id="modal-close">×</button></header>
+    <textarea id="modal-text" spellcheck="false"></textarea>
+    <footer><span class="meta" id="modal-note"></span><span class="spacer"></span>
+      <button type="button" class="toggle" id="modal-cancel">Cancel</button>
+      <button type="button" class="primary" id="modal-post">Post</button></footer>`;
+  $("#modal-text").value = text;
+  const close = () => dlg.close();
+  $("#modal-close").addEventListener("click", close);
+  $("#modal-cancel").addEventListener("click", close);
+  $("#modal-post").addEventListener("click", async () => {
+    const btn = $("#modal-post");
+    btn.disabled = true;
+    try {
+      if (await onPost($("#modal-text").value)) close();
+    } catch (e) {
+      $("#modal-note").textContent = e.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  dlg.showModal();
+}
+
+// Inline comment box under a hunk (c key or the Comment button).
+function openCommentBox(el) {
+  $("#comment-box")?.remove();
+  if (!el || !el.dataset.hunk) return;
+  if (!prNumber()) { toast("Comments can only be posted when reviewing a pull request.", { error: true }); return; }
+  const h = state.report.hunks[el.dataset.hunk];
+  const at = hunkAnchor(h);
+  const where = at.new_no ? `${h.path}:${at.new_no} (new side)` : `${h.path}:${at.old_no} (original side)`;
+  const box = document.createElement("div");
+  box.id = "comment-box";
+  box.className = "comment-box";
+  box.innerHTML = `<textarea placeholder="Comment on this hunk…" spellcheck="true"></textarea>
+    <div class="comment-actions"><span class="meta">Review comment on ${esc(where)} of PR #${prNumber()}</span>
+      <span class="spacer"></span>
+      <button type="button" class="toggle" data-comment-cancel>Cancel</button>
+      <button type="button" class="primary" data-comment-post>Post</button></div>`;
+  el.querySelector(".hunk-bar").after(box);
+  const ta = box.querySelector("textarea");
+  ta.focus();
+  box.querySelector("[data-comment-cancel]").addEventListener("click", () => box.remove());
+  ta.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") box.querySelector("[data-comment-post]").click();
+  });
+  box.querySelector("[data-comment-post]").addEventListener("click", async () => {
+    const body = ta.value.trim();
+    if (!body) { ta.focus(); return; }
+    if (!confirmPosting()) return;
+    const btn = box.querySelector("[data-comment-post]");
+    btn.disabled = true;
+    try {
+      const res = await api(`/api/report/${state.report.id}/pr/review-comment`, { body, hunk_id: h.id });
+      toast(`Posted: ${res.url}`);
+      box.remove();
+    } catch (e) {
+      toast(e.message, { error: true });
+      btn.disabled = false;
+    }
+  });
+}
+
+// The line a comment on (or a jump to) this hunk should target: the first changed line of a
+// unit that still needs review, preferring the new side (mirrors export.anchor_line).
+function hunkAnchor(h) {
+  const r = state.report;
+  const changed = h.lines.filter((ln) => ln.type !== " ");
+  const residual = changed.filter((ln) => ln.unit && !r.units[ln.unit].explained);
+  const pool = residual.length ? residual : changed.length ? changed : h.lines;
+  return pool.find((ln) => ln.type === "+") || pool[0];
 }
 
 function renderSidebar() {
@@ -463,6 +679,10 @@ function renderSidebar() {
         <span class="label">Files</span>
         <span class="count">${v.files.length}${skipped ? ` · ${skipped} not analyzed` : ""}</span>
       </a>
+      ${state.commits.length > 1 || state.parent ? `<a class="nav-item${active("#commits")}" href="#commits">
+        <span class="label">Commits</span>
+        <span class="count">${state.parent ? `${currentCommitIndex() + 1} of ${state.commits.length}` : state.commits.length}</span>
+      </a>` : ""}
     </div>
     <div class="nav-section">
       <h4><span>Mechanical patterns</span><span>${done}/${mech.length} reviewed</span></h4>`;
@@ -515,6 +735,7 @@ function route(opts) {
   if (view === "group") renderGroup(id);
   else if (view === "warnings") renderWarnings();
   else if (view === "files") renderFiles();
+  else if (view === "commits") renderCommits();
   else renderReview();
   markSearch($("#content"));
   applyFocus(false);
@@ -626,6 +847,7 @@ function hunkHtml(h) {
       <span>@@ line ${h.new_start} @@</span>
       ${hunkIsNew(h) ? `<span class="badge-new" title="Not in the diff last time">new</span>` : ""}
       <span class="spacer"></span>
+      ${state.report.source.pr ? `<button type="button" class="link" data-hunk-comment title="Comment on this hunk in the PR (c)">Comment</button>` : ""}
       <button type="button" class="link" data-hunk-open>${done ? "Show" : "Hide"}</button>
       <button type="button" class="link" data-hunk-context>Show context</button></div>
     <table class="diff">${hunkRows(h)}</table></div>`;
@@ -1050,6 +1272,10 @@ async function onContentClick(e) {
         .map((h) => h.fingerprint);
       markHunks(fps, true);
       route({ keepScroll: true });
+    } else if ("hunkComment" in btn.dataset) {
+      openCommentBox(btn.closest(".hunk"));
+    } else if (btn.dataset.analyzeCommit) {
+      await analyzeCommit(btn.dataset.analyzeCommit);
     } else if (btn.id === "banner-new") {
       state.filters.newOnly = !state.filters.newOnly;
       rerender();
@@ -1311,9 +1537,6 @@ function jumpChange(dir) {
   window.scrollBy({ top: -mid });
 }
 
-// Placeholder until PR comments land (Phase 5).
-function openCommentBox() {}
-
 // ---------- keyboard ----------
 
 const KEY_HELP = [
@@ -1326,6 +1549,7 @@ const KEY_HELP = [
   ]],
   ["Navigate", [
     ["]", "[", "next / previous mechanical pattern"],
+    ["}", "{", "next / previous commit of the range"],
     ["g r", "g w", "go to Needs review / Warnings"],
     ["g f", "g c", "go to Files / Commits"],
     ["n", "p", "next / previous change in the file viewer"],
@@ -1379,8 +1603,8 @@ function focusedLocation() {
   const r = state.report;
   if (el.dataset.hunk) {
     const h = r.hunks[el.dataset.hunk];
-    const changed = h.lines.find((ln) => ln.type !== " ") || h.lines[0];
-    return { path: h.path, line: changed.new_no || h.new_start, hunk: h };
+    const at = hunkAnchor(h);
+    return { path: h.path, line: at.new_no || at.old_no || h.new_start, hunk: h };
   }
   const u = r.units[el.dataset.unit];
   return { path: u.path, line: u.new.length ? u.new_start : u.old_start, unit: u };
@@ -1460,6 +1684,8 @@ function onKey(e) {
     case "g": pendingG = setTimeout(() => { pendingG = 0; }, 900); break;
     case "]": patternStep(1); break;
     case "[": patternStep(-1); break;
+    case "}": if (state.commits.length) commitStep(1); break;
+    case "{": if (state.commits.length) commitStep(-1); break;
     case "n": if (inFile) jumpChange(1); break;
     case "p": if (inFile) jumpChange(-1); break;
     case "j": if (!inFile) moveFocus(1); else return; break;

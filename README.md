@@ -68,6 +68,20 @@ refactor-diff main..HEAD --editor cursor                      # "Open" links tar
   **Only near misses** filter shows just those.
 - **Warnings**: places where the refactor may be incomplete or inconsistent (see below).
 - **Files**: every changed file, with its status, kind and whether it was analyzed.
+- **Commits**: when the range has more than one commit, the list of commits with their
+  sizes. **Analyze** one to review it against its parent on its own — a refactor PR often has
+  one mechanical commit and one substantive one — with **← Back** to return to the whole
+  range (`}` / `{` step through the commits). A commit's reviewed marks are separate.
+
+### Getting the review out
+
+- **Copy as Markdown** (in the summary) copies the review: stats, a table of the mechanical
+  patterns with their reviewed ticks, a task list of the hunks that need review, and the
+  warnings. `GET /api/report/{id}/summary.md` serves the same text.
+- For a pull request, **Post summary to PR** shows that Markdown in an editable preview and
+  posts it as a PR comment, and every hunk in Needs review has a **Comment** button (or `c`)
+  that posts an inline review comment on the hunk's first unexplained line (new side when it
+  has one). Both go through `gh`, as you, after one confirmation per session.
 
 ### Review marks survive restarts and new commits
 
@@ -178,9 +192,10 @@ code at that revision rather than your current checkout.
 
 1. **Load the change set.** Uses `git diff --name-status -M` between the merge-base and head,
    and reads file contents with `git cat-file --batch`.
-2. **Split into change units.** A line-level diff is taken per file. When a replaced block has
-   the same number of lines on each side, the lines are paired one by one. Otherwise the block
-   stays whole, for example when a call is re-wrapped across lines.
+2. **Split into change units.** A line-level diff is taken per file (blank lines never anchor
+   a match, so an import block isn't torn apart to pair a blank line). When a replaced block
+   has the same number of lines on each side, the lines are paired one by one. Otherwise the
+   block stays whole, for example when a call is re-wrapped across lines.
 3. **Classify each unit.** Old and new tokens (from `tokenize`, with `ast` for type
    annotations) are aligned, and every differing span becomes a signature:
 
@@ -249,7 +264,7 @@ Layout (`src/refactor_diff/`):
 
 | Module | Purpose |
 |---|---|
-| `sources.py` | git, GitHub PR and working-tree loading |
+| `sources.py` | git, GitHub PR and working-tree loading; commit lists; posting PR comments via `gh` |
 | `hunks.py` | line diff, hunk grouping, candidate units |
 | `languages/` | language analyzers (`base.py` interface, `python.py`) |
 | `patterns.py` | token alignment, signature classification |
@@ -258,6 +273,8 @@ Layout (`src/refactor_diff/`):
 | `verify.py` | AST-equivalence verification of collapsed changes |
 | `categories.py` | file kinds (source, tests, docs, config, other) for filtering |
 | `engine.py` | `analyze()`, which turns a source into a `Report` |
+| `state.py` | reviewed marks and the previous analysis, in `~/.config/refactor-diff` |
+| `export.py` | the Markdown review summary |
 | `fileview.py` | whole-file diff of one changed file, for context and the old/new viewer |
 | `snapshots.py` | Python sources of a revision written to a temp dir, for navigation |
 | `navigation.py` | go-to-definition / find-references with Jedi |
@@ -275,6 +292,5 @@ an analyzer that leaves the structural fields empty simply opts out of moves, `a
 
 ## Roadmap
 
-- Post review comments to a PR from the UI
 - Apply or revert edits in the working tree from the UI
 - More languages (TypeScript, Go, …)

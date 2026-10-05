@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from difflib import SequenceMatcher
-
+from refactor_diff.hunks import line_matcher
 from refactor_diff.languages.base import split_lines
 from refactor_diff.model import Report
 
@@ -33,7 +32,7 @@ def file_diff(report: Report, path: str) -> dict | None:
             by_new[u.new_start + k] = (u.id, ln.hl)
 
     lines: list[dict] = []
-    for tag, i1, i2, j1, j2 in SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+    for tag, i1, i2, j1, j2 in line_matcher(old, new).get_opcodes():
         if tag == "equal":
             lines += [
                 {"t": " ", "o": i + 1, "n": j1 + (i - i1) + 1, "text": old[i]}
