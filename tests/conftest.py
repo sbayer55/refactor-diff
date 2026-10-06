@@ -1,8 +1,12 @@
+import contextlib
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+from starlette.testclient import TestClient
+
+from refactor_diff.web.server import create_app
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -69,3 +73,11 @@ def isolated_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     cfg = tmp_path / "config"
     monkeypatch.setenv("XDG_CONFIG_HOME", str(cfg))
     return cfg
+
+
+@pytest.fixture
+def serve():
+    """``serve(repo, ...)`` returns a ``TestClient`` for ``create_app(repo, ...)`` whose
+    lifespan runs: the app is shut down at teardown, which removes its snapshot directory."""
+    with contextlib.ExitStack() as stack:
+        yield lambda *args, **kwargs: stack.enter_context(TestClient(create_app(*args, **kwargs)))

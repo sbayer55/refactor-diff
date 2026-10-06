@@ -1,10 +1,8 @@
 import json
 
 from conftest import commit, git
-from starlette.testclient import TestClient
 
 from refactor_diff.state import ReviewStore, config_dir
-from refactor_diff.web.server import create_app
 
 
 def test_config_dir_honours_xdg(isolated_config):
@@ -64,7 +62,7 @@ def test_corrupt_state_file_is_ignored(tmp_path):
     assert store.load("x")["groups"] == ["g"]
 
 
-def test_review_marks_survive_new_commits_via_the_api(tmp_path, isolated_config):
+def test_review_marks_survive_new_commits_via_the_api(tmp_path, isolated_config, serve):
     repo = tmp_path / "repo"
     pad = "\n".join(f"line_{i} = {i}" for i in range(10)) + "\n"
     base = pad + "\n\ndef f():\n    return 1\n\n\ndef g():\n    return 2\n\n\n" + pad
@@ -72,7 +70,7 @@ def test_review_marks_survive_new_commits_via_the_api(tmp_path, isolated_config)
     git(repo, "checkout", "-qb", "feature")
     commit(repo, {"a.py": base.replace("return 2", "return 3")}, "after")
 
-    client = TestClient(create_app(repo))
+    client = serve(repo)
     body = {"base": "main", "head": "feature"}
     data = client.post("/api/analyze", json=body).json()
     [hunk] = data["hunks"].values()
@@ -104,12 +102,12 @@ def test_review_marks_survive_new_commits_via_the_api(tmp_path, isolated_config)
         hunk["fingerprint"]
     ]
     # Another server process reads the same state.
-    assert TestClient(create_app(repo)).get(f"/api/report/{data3['id']}/review").status_code == 404
+    assert serve(repo).get(f"/api/report/{data3['id']}/review").status_code == 404
     assert (isolated_config / "refactor-diff" / "reviews").exists()
 
 
-def test_bad_review_body_is_400(rename_repo):
-    client = TestClient(create_app(rename_repo))
+def test_bad_review_body_is_400(rename_repo, serve):
+    client = serve(rename_repo)
     data = client.post("/api/analyze", json={"base": "main", "head": "feature"}).json()
     res = client.post(f"/api/report/{data['id']}/review", json={"hunks": ["x"]})
     assert res.status_code == 400
