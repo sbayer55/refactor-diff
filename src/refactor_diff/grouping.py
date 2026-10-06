@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from difflib import SequenceMatcher
 
 from refactor_diff.languages.base import NAME, FileAnalysis, LanguageAnalyzer
 from refactor_diff.model import (
     ALWAYS_MECHANICAL,
+    ARGS,
     RENAME,
     ChangeUnit,
     Group,
     Location,
+    NearMiss,
     Signature,
     Warning,
     short_hash,
@@ -18,6 +21,8 @@ from refactor_diff.model import (
 
 MAX_LOCATIONS = 50
 SYMBOL_CONTEXTS = {"definition", "import"}
+NEAR_GROUPS_PER_KIND = 200  # largest mechanical groups considered per signature kind
+NEAR_PER_UNIT = 2
 
 
 def build_groups(units: list[ChangeUnit], min_count: int) -> list[Group]:
@@ -80,6 +85,95 @@ def inconsistent_renames(groups: list[Group]) -> list[Warning]:
                 )
             )
     return warnings
+
+
+def near_misses(units: dict[str, ChangeUnit], groups: list[Group]) -> list[Warning]:
+    """Flag leftover changes that almost match a mechanical pattern: ``get_user → fetch_users``
+    next to forty ``get_user → fetch_user``, or a template differing in one token. Those are
+    where typos hide. Fills ``unit.near`` and returns one warning per pattern with near misses."""
+    by_kind: dict[str, list[tuple[Group, _Parts]]] = defaultdict(list)
+    for g in sorted(groups, key=lambda g: -len(g.unit_ids)):
+        if g.mechanical and g.kind not in ALWAYS_MECHANICAL:
+            if len(by_kind[g.kind]) < NEAR_GROUPS_PER_KIND:
+                by_kind[g.kind].append((g, _sig_parts(g.kind, g.key, g.old, g.new)))
+
+    hits: dict[str, list[ChangeUnit]] = defaultdict(list)
+    for u in units.values():
+        if u.explained:
+            continue
+        found: dict[str, NearMiss] = {}
+        for sig in u.signatures:
+            if sig.kind in ALWAYS_MECHANICAL:
+                continue
+            parts = _sig_parts(sig.kind, sig.key, sig.old, sig.new)
+            for g, g_parts in by_kind.get(sig.kind, []):
+                if g.key == sig.key:
+                    continue
+                score = _score(parts, g_parts, sig.kind)
+                if score is None:
+                    continue
+                side = "new" if parts[0] == g_parts[0] else "old"
+                differs = sig.new if side == "new" else sig.old
+                hint = f"looks like `{g.label}` ({side} side differs: {differs})"
+                best = found.get(g.id)
+                if best is None or score > best.score:
+                    found[g.id] = NearMiss(g.id, round(score, 3), hint)
+        u.near = sorted(found.values(), key=lambda n: -n.score)[:NEAR_PER_UNIT]
+        for n in u.near:
+            hits[n.group_id].append(u)
+
+    warnings = []
+    by_id = {g.id: g for g in groups}
+    for gid, near_units in hits.items():
+        g = by_id[gid]
+        locations = []
+        for u in near_units[:MAX_LOCATIONS]:
+            line = u.new_start if u.new else u.old_start
+            text = (u.new or u.old)[0].text
+            locations.append(Location(u.path, line, text))
+        n = len(near_units)
+        warnings.append(
+            Warning(
+                kind="near-miss",
+                message=f"{n} change{'s' if n != 1 else ''} look{'' if n != 1 else 's'} like "
+                f"a near miss of {g.label}",
+                group_id=gid,
+                locations=locations,
+                total=n,
+            )
+        )
+    return warnings
+
+
+_Parts = tuple[str, str]
+
+
+def _sig_parts(kind: str, key: str, old: str, new: str) -> _Parts:
+    """The two strings to compare per side: the callee and the shape delta for argument
+    changes, the displayed old/new text otherwise."""
+    if kind == ARGS:
+        _, name, delta = (key.split("\0", 2) + ["", ""])[:3]
+        return name, delta
+    return old, new
+
+
+def _sim(a, b) -> float:
+    if a == b:
+        return 1.0
+    la, lb = len(a), len(b)
+    if abs(la - lb) > max(3, 0.3 * max(la, lb)):
+        return 0.0
+    sm = SequenceMatcher(None, a, b, autojunk=False)
+    return sm.ratio() if sm.quick_ratio() >= 0.7 else 0.0
+
+
+def _score(a: _Parts, b: _Parts, kind: str) -> float | None:
+    so, sn = _sim(a[0], b[0]), _sim(a[1], b[1])
+    if kind == ARGS:
+        ok = (so == 1 and sn >= 0.75) or (sn == 1 and so >= 0.85)
+    else:
+        ok = (so == 1 and sn >= 0.8) or (sn == 1 and so >= 0.8) or (so >= 0.9 and sn >= 0.9)
+    return (so + sn) / 2 if ok else None
 
 
 def still_defined(name: str, analysis: FileAnalysis, analyzer: LanguageAnalyzer) -> bool:

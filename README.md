@@ -50,17 +50,54 @@ refactor-diff --repo ../other --port 8000 --no-browser
 refactor-diff main..HEAD --hide tests,comments --exclude migrations
 refactor-diff main..HEAD --python ~/.virtualenvs/myproject   # environment for code navigation
 refactor-diff main..HEAD --tsserver ~/tools/node_modules/typescript   # TypeScript for navigation
+refactor-diff main..HEAD --editor cursor                      # "Open" links target Cursor
 ```
 
 ### What you see
 
 - **Summary**: how much of the diff was collapsed, and how many changes are left to review.
 - **Needs review**: the hunks that contain changes not explained by a repeated pattern.
-  Lines that a pattern does explain are dimmed and tagged, so you keep the context.
+  Lines that a pattern does explain are dimmed and tagged, so you keep the context. Tick a
+  hunk once you've read it: it folds up, and the summary shows `done / total` hunks.
+  **Mark all reviewed** on a file header ticks every hunk in that file.
 - **Mechanical patterns**: one entry per repeated edit, listing every occurrence grouped by
-  file. Tick **Reviewed** as you go. The checkmarks are saved in your browser for that commit range.
+  file. Tick **Reviewed** as you go.
+  A moved block is one pattern: its page shows the block as a diff from where it came from,
+  followed by the import lines that changed because of the move.
+- **✓ verified**: a change whose enclosing statement is provably the same program on both
+  sides (see [Verification](#verification)). The summary counts them.
+- **≈ almost …**: a leftover change that nearly matches a pattern — usually a typo. The
+  **Only near misses** filter shows just those.
 - **Warnings**: places where the refactor may be incomplete or inconsistent (see below).
 - **Files**: every changed file, with its status, kind and whether it was analyzed.
+- **Commits**: when the range has more than one commit, the list of commits with their
+  sizes. **Analyze** one to review it against its parent on its own — a refactor PR often has
+  one mechanical commit and one substantive one — with **← Back** to return to the whole
+  range (`}` / `{` step through the commits). A commit's reviewed marks are separate.
+
+### Getting the review out
+
+- **Copy as Markdown** (in the summary) copies the review: stats, a table of the mechanical
+  patterns with their reviewed ticks, a task list of the hunks that need review, and the
+  warnings. `GET /api/report/{id}/summary.md` serves the same text.
+- For a pull request, **Post summary to PR** shows that Markdown in an editable preview and
+  posts it as a PR comment, and every hunk in Needs review has a **Comment** button (or `c`)
+  that posts an inline review comment on the hunk's first unexplained line (new side when it
+  has one). Both go through `gh`, as you, after one confirmation per session.
+
+### Review marks survive restarts and new commits
+
+Reviewed marks are stored in `~/.config/refactor-diff/` (or `$XDG_CONFIG_HOME/refactor-diff/`),
+one file per repository, keyed by *what* you compared — the PR number, or the branch names —
+rather than by commit. Hunks are identified by a fingerprint of their changed lines, so a
+reviewed hunk stays reviewed when lines above it shift.
+
+When you analyze the same comparison again after new commits, a banner at the top of
+**Needs review** says what happened since the previous head: how many changes are new
+(badged **new** on their hunk, and on pattern occurrences), and which reviewed hunks were
+modified — those lose their mark so you read them again. **Show only what's new** (also a
+filter chip) narrows everything to the new changes; a reviewed pattern that gained
+occurrences shows **+N** in the sidebar.
 
 ### Context and file versions
 
@@ -93,8 +130,30 @@ repository.
 - **Exclude**: comma-separated globs. A pattern without `/` matches any path segment
   (`migrations`, `*_pb2.py`); a pattern with `/` matches the whole path (`src/legacy/**`).
 
+- **Search**: text (or a regular expression with the `.*` toggle) matched against changed
+  lines, file paths and pattern labels. Everything narrows to the matching changes and the
+  matches are highlighted. `/` focuses the box, `Esc` clears it.
+
 To pre-set filters from the command line, use `--hide` (any of `source`, `tests`, `docs`,
 `config`, `other`, `comments`) and `--exclude GLOB` (repeatable).
+
+### Keyboard
+
+Press `?` for the full list. The review loop is `j` / `k` to move between hunks (or
+occurrences on a pattern page), `x` to mark the focused one reviewed (focus moves on to the
+next unreviewed hunk), `e` to show its context and then reveal more, `o` to open it in your
+editor, `]` / `[` to step through the mechanical patterns, `g r` / `g w` / `g f` to jump to
+Needs review / Warnings / Files, and `/` to search. In the file viewer `n` / `p` move between
+changes.
+
+### Open in editor
+
+Every file header, occurrence, warning location and the file viewer have an **Open** link
+that opens the file at that line in your editor — VS Code by default. `--editor` takes
+`vscode`, `cursor`, `zed`, `idea`, `pycharm`, or a URL template with `{path}`, `{line}` and
+`{col}` (e.g. `--editor 'x-mine://{path}?l={line}'`). The editor opens your checkout, which
+is the head revision only when you're reviewing the working tree or have the head branch
+checked out.
 
 ### Highlighting
 
@@ -140,9 +199,10 @@ code at that revision rather than your current checkout.
 
 1. **Load the change set.** Uses `git diff --name-status -M` between the merge-base and head,
    and reads file contents with `git cat-file --batch`.
-2. **Split into change units.** A line-level diff is taken per file. When a replaced block has
-   the same number of lines on each side, the lines are paired one by one. Otherwise the block
-   stays whole, for example when a call is re-wrapped across lines.
+2. **Split into change units.** A line-level diff is taken per file (blank lines never anchor
+   a match, so an import block isn't torn apart to pair a blank line). When a replaced block
+   has the same number of lines on each side, the lines are paired one by one. Otherwise the
+   block stays whole, for example when a call is re-wrapped across lines.
 3. **Classify each unit.** Old and new tokens (from `tokenize`, with `ast` for type
    annotations) are aligned, and every differing span becomes a signature:
 
@@ -151,8 +211,11 @@ code at that revision rather than your current checkout.
    | `rename` | `get_user(id)` → `fetch_user(id)`. Records the context: definition, call, attribute, import, keyword argument or name |
    | `retype` | `def f(x: int)` → `def f(x: str)`, `-> List[int]` → `-> list[int]`, adding an annotation |
    | `replace` | any other repeated substitution, e.g. `cfg.get("timeout")` → `settings.timeout` |
-   | `formatting` | only whitespace or layout changed (quote style, re-wrapping) |
+   | `formatting` | only whitespace or layout changed (quote style, re-wrapping, indentation) |
    | `docs` | only comments or docstrings changed |
+   | `args` | a call or def changed the shape of its argument list: `fetch(x, y)` → `fetch(x, y, timeout=5)` is `fetch: +kw:timeout` whatever the value, and groups with the `def` that gained the parameter. Also removed keywords, added positionals and positional → keyword conversions. An edit inside an argument's value is never swallowed |
+   | `import` | import lines that only changed module (`from a import x` → `from b import x`), or added / removed a name |
+   | `move` | a block deleted in one place and inserted in another (see below) |
 
    Nearby edits that belong together become one template instead of fragments. This
    applies when an edit opens a bracket that a later edit closes, or when two edits are
@@ -164,7 +227,27 @@ code at that revision rather than your current checkout.
    least **Min repeats** times (default 2). A unit counts as explained only when every
    signature on it is mechanical. So a line that renames `get_user` *and* changes logic still
    shows up in **Needs review**.
-5. **Sanity checks.**
+5. **Moved code.** After every file is diffed, deletion-only and insertion-only blocks (at
+   least 3 lines / 12 tokens) are compared by their token streams, ignoring layout and
+   comments. Exact matches pair first, then near matches (≥ 75% similar), across files or
+   within one. When only one function out of a deleted block moved, the block is split at
+   statement boundaries so the rest still shows up for review. A pair becomes a `move`
+   pattern, which is always mechanical: an exact move disappears from review, and a move with
+   edits inside leaves only those edits, classified like any other change and highlighted on
+   the moved block. An `import` change that only follows a move — the importer now points at
+   the new module, or the destination gained an import the block needs — is folded into the
+   move. Not detected: a block that replaces other code in the same hunk (that is one
+   `replace`, not a deletion plus an insertion).
+
+6. **Verification.** For every statement (function, method, top-level statement) whose
+   changes are all formatting, docs, rename or retype, the old and new versions are parsed and
+   compared after normalization: docstrings dropped, the diff's mechanical renames applied to
+   the old side, annotations dropped when the statement has a retype. Equal trees mark every
+   unit inside the statement **✓ verified**. It is a property of the whole statement, so a
+   function with one rename and one logic change verifies neither. Verification never changes
+   whether a unit is collapsed; it only says which collapsed changes are safe beyond doubt.
+
+7. **Sanity checks.**
    - *Missed renames*: a definition (`def`/`class`) was renamed, the old name is no longer
      defined anywhere in the repository at head, yet code still references it. This produces
      one warning per rename, listing every location. Renamed locals, parameters, keyword
@@ -172,6 +255,10 @@ code at that revision rather than your current checkout.
      unrelated.
    - *Inconsistent renames*: a definition or import was renamed to different names in
      different places.
+   - *Near misses*: a leftover change whose signature almost matches a mechanical pattern
+     (same old name, new name ≥ 80% similar, or vice versa; the same rule on the text of
+     templates and types). The unit is tagged **≈ almost …** and one warning lists every
+     near miss of a pattern.
 
 ## Development
 
@@ -184,13 +271,17 @@ Layout (`src/refactor_diff/`):
 
 | Module | Purpose |
 |---|---|
-| `sources.py` | git, GitHub PR and working-tree loading |
+| `sources.py` | git, GitHub PR and working-tree loading; commit lists; posting PR comments via `gh` |
 | `hunks.py` | line diff, hunk grouping, candidate units |
 | `languages/` | language analyzers (`base.py` interface, `python.py`, `typescript.py`) |
 | `patterns.py` | token alignment, signature classification |
-| `grouping.py` | grouping, mechanical threshold, warnings |
+| `grouping.py` | grouping, mechanical threshold, warnings (inconsistent renames, near misses) |
+| `moves.py` | moved-code detection and the import churn a move explains |
+| `verify.py` | AST-equivalence verification of collapsed changes |
 | `categories.py` | file kinds (source, tests, docs, config, other) for filtering |
 | `engine.py` | `analyze()`, which turns a source into a `Report` |
+| `state.py` | reviewed marks and the previous analysis, in `~/.config/refactor-diff` |
+| `export.py` | the Markdown review summary |
 | `fileview.py` | whole-file diff of one changed file, for context and the old/new viewer |
 | `snapshots.py` | analyzable sources of a revision written to a temp dir, for navigation |
 | `navigation.py` | go-to-definition / find-references, dispatched by language; Jedi backend |
@@ -202,8 +293,11 @@ Layout (`src/refactor_diff/`):
 
 Implement the `LanguageAnalyzer` protocol in `languages/base.py`. It turns source text into
 tokens and type-annotation spans, names the language's keywords, and lists the `globs` used
-to search the repository for missed renames. Then register the analyzer in
-`languages/__init__.py`. The rest of the analysis pipeline does not depend on the language.
+to search the repository for missed renames. Optionally it also exposes statement spans, call
+sites, defs and imports, and can parse and normalize a block for verification; an analyzer
+that leaves those empty simply opts out of moves, `args`, `import` and verification. Then
+register the analyzer in `languages/__init__.py`. The rest of the analysis pipeline does not
+depend on the language.
 
 For the UI, add a highlighter to `LANGUAGES` in `web/static/syntax.js`, and for code
 navigation a backend like `tsserver.py` that `Navigator` in `navigation.py` dispatches to
@@ -211,7 +305,5 @@ navigation a backend like `tsserver.py` that `Navigator` in `navigation.py` disp
 
 ## Roadmap
 
-- Post review comments to a PR from the UI
 - Apply or revert edits in the working tree from the UI
 - More languages (Go, …)
-- Detect code moved between files

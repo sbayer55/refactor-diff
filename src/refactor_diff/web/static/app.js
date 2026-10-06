@@ -8,13 +8,21 @@ const state = {
   sources: null,
   report: null,
   groupsByKey: new Map(),
-  reviewed: new Set(),
+  reviewed: new Set(), // reviewed group ids
+  reviewedHunks: new Set(), // reviewed hunk fingerprints
+  delta: { prevHead: null, newHunks: new Set(), changed: [] }, // since the previous analysis
   shown: PAGE,
-  filters: { hidden: new Set(), hideDocs: false, exclude: [] },
+  filters: { hidden: new Set(), hideDocs: false, exclude: [], nearOnly: false, newOnly: false, search: "", regex: false },
   view: null, // the report as filtered by state.filters; see applyFilters()
   fileDiffs: new Map(), // path -> Promise of the whole-file diff (see /api/report/{id}/file)
   split: false, // side-by-side diffs (preference; see splitActive())
   syntax: false, // syntax-color changed lines too (unchanged lines always are)
+  repo: "", // absolute repository path (for editor links)
+  editor: null, // URL template from --editor
+  focus: -1, // keyboard focus: index into the page's hunks / occurrences
+  commits: [], // commits between base and head (see /api/report/{id}/commits)
+  parent: null, // {id, label} of the whole-range report while viewing one of its commits
+  postingOk: false, // the user confirmed posting to the PR in this session
 };
 
 // Side-by-side needs room for two code columns; narrower windows always get unified diffs.
@@ -32,6 +40,10 @@ const CATEGORIES = [
 ];
 
 // ---------- helpers ----------
+
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+const MOD_KEY = IS_MAC ? "⌘" : "Ctrl";
+const modDown = (e) => (IS_MAC ? e.metaKey : e.ctrlKey);
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => (
@@ -66,23 +78,47 @@ async function api(path, body) {
   return data;
 }
 
-// Reviewed marks are per-viewer conveniences, so localStorage is fine (and may be unavailable).
-function storageKey() {
-  const s = state.report.source;
-  return `refactor-diff:reviewed:${s.base_sha}..${s.head_sha || "worktree"}`;
+// ---------- review state ----------
+// Reviewed marks live on the server (in ~/.config/refactor-diff), keyed by what is being
+// compared rather than by commit, so they survive restarts and new commits. Hunks are tracked
+// by content fingerprint; see /api/report/{id}/review.
+
+function setReview(review) {
+  state.reviewed = new Set(review.groups);
+  state.reviewedHunks = new Set(review.hunks);
+  state.delta = {
+    prevHead: review.delta.prev_head,
+    newHunks: new Set(review.delta.new),
+    changed: review.delta.changed_reviewed,
+  };
 }
-function loadReviewed() {
+
+async function postReview(changes) {
   try {
-    state.reviewed = new Set(JSON.parse(localStorage.getItem(storageKey()) || "[]"));
-  } catch { state.reviewed = new Set(); }
+    setReview(await api(`/api/report/${state.report.id}/review`, changes));
+  } catch (e) {
+    toast(`Couldn't save the review mark: ${e.message}`, { error: true });
+  }
 }
-function saveReviewed() {
-  try { localStorage.setItem(storageKey(), JSON.stringify([...state.reviewed])); } catch {}
-}
+
 function toggleReviewed(id, on) {
   if (on) state.reviewed.add(id); else state.reviewed.delete(id);
-  saveReviewed();
   renderSidebar();
+  postReview({ groups: { [on ? "add" : "remove"]: [id] } });
+}
+
+function markHunks(fingerprints, on) {
+  for (const fp of fingerprints) {
+    if (on) state.reviewedHunks.add(fp); else state.reviewedHunks.delete(fp);
+  }
+  applyFilters();
+  renderSummary();
+  renderSidebar();
+  postReview({ hunks: { [on ? "add" : "remove"]: fingerprints } });
+}
+
+function hunkIsNew(h) {
+  return state.delta.newHunks.has(h.fingerprint);
 }
 
 // ---------- filters ----------
@@ -112,19 +148,35 @@ function loadFilters(cliDefaults) {
     hidden: new Set(f.hidden || []),
     hideDocs: Boolean(f.hideDocs),
     exclude: f.exclude || [],
+    nearOnly: false,
+    newOnly: false,
+    search: f.search || "",
+    regex: Boolean(f.regex),
   };
 }
 function saveFilters() {
   const f = state.filters;
   try {
     localStorage.setItem(filtersKey(), JSON.stringify({
-      hidden: [...f.hidden], hideDocs: f.hideDocs, exclude: f.exclude,
+      hidden: [...f.hidden], hideDocs: f.hideDocs, exclude: f.exclude, search: f.search, regex: f.regex,
     }));
   } catch {}
 }
 function filtersActive() {
   const f = state.filters;
-  return f.hidden.size > 0 || f.hideDocs || f.exclude.length > 0;
+  return f.hidden.size > 0 || f.hideDocs || f.exclude.length > 0 || f.nearOnly || f.newOnly || Boolean(f.search);
+}
+function emptyFilters() {
+  return { hidden: new Set(), hideDocs: false, exclude: [], nearOnly: false, newOnly: false, search: "", regex: false };
+}
+
+// The search box as a RegExp (case-insensitive), null when empty, false when invalid.
+function searchRegex() {
+  const f = state.filters;
+  if (!f.search) return null;
+  try {
+    return new RegExp(f.regex ? f.search : f.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  } catch { return false; }
 }
 
 function applyFilters() {
@@ -138,7 +190,15 @@ function applyFilters() {
     return !excludes.some((re) => re.test(path));
   };
   const docsOnly = (u) => u.signatures.length > 0 && u.signatures.every((k) => k === "docs");
-  const unitVisible = (u) => fileVisible(u.path) && !(f.hideDocs && docsOnly(u));
+  const re = searchRegex() || null;
+  const test = (text) => { re.lastIndex = 0; return re.test(text); };
+  const matches = (u) => !re || test(u.path)
+    || u.old.some((ln) => test(ln.text)) || u.new.some((ln) => test(ln.text))
+    || u.signatures.some((k) => { const g = state.groupsByKey.get(k); return g && test(g.label); });
+  const unitVisible = (u) => fileVisible(u.path) && !(f.hideDocs && docsOnly(u))
+    && !(f.nearOnly && !u.explained && !(u.near && u.near.length))
+    && !(f.newOnly && !hunkIsNew(r.hunks[u.hunk_id]))
+    && matches(u);
 
   const units = new Set(Object.values(r.units).filter(unitVisible).map((u) => u.id));
   const groups = r.groups
@@ -154,6 +214,7 @@ function applyFilters() {
   }
   const files = r.files.filter((x) => fileVisible(x.path));
   const explained = [...units].filter((id) => r.units[id].explained).length;
+  const hunksDone = residualHunks.filter((hid) => state.reviewedHunks.has(r.hunks[hid].fingerprint)).length;
 
   state.view = {
     units,
@@ -165,6 +226,7 @@ function applyFilters() {
     fileVisible,
     hiddenUnits: Object.keys(r.units).length - units.size,
     docsUnits: Object.values(r.units).filter((u) => fileVisible(u.path) && docsOnly(u)).length,
+    nearUnits: Object.values(r.units).filter((u) => fileVisible(u.path) && !u.explained && u.near && u.near.length).length,
     stats: {
       files_changed: files.length,
       files_analyzed: files.filter((x) => x.analyzed).length,
@@ -172,6 +234,10 @@ function applyFilters() {
       residual_units: units.size - explained,
       collapsed_pct: units.size ? Math.round((100 * explained) / units.size) : 0,
       mechanical_groups: groups.filter((g) => g.mechanical).length,
+      verified_units: [...units].filter((id) => r.units[id].verified).length,
+      moves: groups.filter((g) => g.kind === "move").length,
+      hunks: residualHunks.length,
+      hunks_done: hunksDone,
     },
   };
 }
@@ -202,10 +268,22 @@ function renderFilters() {
     <button type="button" class="filter-chip" id="docs-toggle" aria-pressed="${!f.hideDocs}"
       title="Changes that only touch comments or docstrings" ${docsTotal ? "" : "disabled"}>
       Comment &amp; docstring edits <span class="n">${docsTotal}</span></button>
+    ${v.nearUnits ? `<button type="button" class="filter-chip mode" id="near-toggle" aria-pressed="${f.nearOnly}"
+      title="Only leftover changes that almost match a mechanical pattern (likely typos)">
+      Only near misses <span class="n">${v.nearUnits}</span></button>` : ""}
+    ${state.delta.newHunks.size ? `<button type="button" class="filter-chip mode" id="new-toggle" aria-pressed="${f.newOnly}"
+      title="Only changes that weren't in the diff last time you analyzed it">
+      New since ${esc(state.delta.prevHead.slice(0, 7))} <span class="n">${state.delta.newHunks.size}</span></button>` : ""}
     <label class="exclude">
       <span class="filter-label">Exclude</span>
       <input id="exclude-input" type="text" spellcheck="false" value="${esc(f.exclude.join(", "))}"
         placeholder="globs, e.g. migrations, *_pb2.py, src/legacy/**">
+    </label>
+    <label class="exclude search">
+      <span class="filter-label">Search</span>
+      <input id="search-input" type="text" spellcheck="false" value="${esc(f.search)}" class="${searchRegex() === false ? "invalid" : ""}"
+        placeholder="text in changed lines, paths or patterns (/)" title="Narrow everything to changes whose lines, path or pattern match">
+      <button type="button" class="filter-chip mode regex" id="regex-toggle" aria-pressed="${f.regex}" title="Regular expression">.*</button>
     </label>
     <span class="spacer"></span>
     ${highlightToggle()}
@@ -227,6 +305,14 @@ function renderFilters() {
     saveFilters();
     rerender();
   });
+  $("#near-toggle")?.addEventListener("click", () => {
+    f.nearOnly = !f.nearOnly;
+    rerender();
+  });
+  $("#new-toggle")?.addEventListener("click", () => {
+    f.newOnly = !f.newOnly;
+    rerender();
+  });
   const input = $("#exclude-input");
   input.addEventListener("change", () => {
     f.exclude = input.value.split(",").map((s) => s.trim()).filter(Boolean);
@@ -234,8 +320,23 @@ function renderFilters() {
     rerender();
   });
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") input.blur(); });
+  const search = $("#search-input");
+  search.addEventListener("change", () => {
+    f.search = search.value.trim();
+    saveFilters();
+    rerender();
+  });
+  search.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") search.blur();
+    if (e.key === "Escape") { search.value = ""; search.blur(); if (f.search) { f.search = ""; saveFilters(); rerender(); } }
+  });
+  $("#regex-toggle").addEventListener("click", () => {
+    f.regex = !f.regex;
+    saveFilters();
+    rerender();
+  });
   $("#reset-filters")?.addEventListener("click", () => {
-    state.filters = { hidden: new Set(), hideDocs: false, exclude: [] };
+    state.filters = emptyFilters();
     saveFilters();
     rerender();
   });
@@ -287,22 +388,111 @@ async function runAnalysis(evt) {
   btn.innerHTML = '<span class="spinner"></span> Analyzing';
   try {
     const report = await api("/api/analyze", body);
-    state.report = report;
-    state.groupsByKey = new Map(report.groups.map((g) => [g.key, g]));
-    state.shown = PAGE;
-    state.fileDiffs = new Map();
-    loadReviewed();
-    applyFilters();
-    renderSummary();
-    renderFilters();
-    if (!location.hash || location.hash === "#") location.hash = "#review";
-    else route();
+    state.parent = null;
+    state.commits = [];
+    loadReport(report);
+    loadCommits();
   } catch (e) {
     showError(e.message);
   } finally {
     btn.disabled = false;
     btn.textContent = "Analyze";
   }
+}
+
+function loadReport(report) {
+  state.report = report;
+  state.groupsByKey = new Map(report.groups.map((g) => [g.key, g]));
+  state.shown = PAGE;
+  state.fileDiffs = new Map();
+  setReview(report.review);
+  applyFilters();
+  renderSummary();
+  renderFilters();
+  if (!location.hash || location.hash === "#" || location.hash.startsWith("#file/") || location.hash.startsWith("#lib/")) {
+    if (location.hash === "#review") route(); else location.hash = "#review";
+  } else {
+    route();
+  }
+}
+
+// A report the server already has (e.g. the whole range, after looking at one commit).
+async function showReport(id) {
+  try {
+    const report = await api(`/api/report/${id}`);
+    state.parent = null;
+    loadReport(report);
+  } catch (e) {
+    showError(e.message);
+  }
+}
+
+// ---------- commits ----------
+
+async function loadCommits() {
+  const id = state.report.id;
+  try {
+    const { commits } = await api(`/api/report/${id}/commits`);
+    if (state.report.id !== id) return;
+    state.commits = commits;
+    renderSidebar();
+    if (location.hash === "#commits") route({ keepScroll: true });
+  } catch { state.commits = []; }
+}
+
+// Analyze one commit of the range against its parent; the whole-range report stays a click away.
+async function analyzeCommit(sha) {
+  const parent = state.parent || { id: state.report.id, label: state.report.source.label, commits: state.commits };
+  toast(`Analyzing ${sha.slice(0, 7)}…`, { busy: true, sticky: true });
+  try {
+    const report = await api("/api/analyze", { base: `${sha}^`, head: sha, min_count: state.report.source.min_count });
+    hideToast();
+    state.parent = parent;
+    state.commits = parent.commits;
+    loadReport(report);
+  } catch (e) {
+    toast(e.message, { error: true });
+  }
+}
+
+function currentCommitIndex() {
+  if (!state.parent) return -1;
+  return state.commits.findIndex((c) => c.sha === state.report.source.head_sha);
+}
+
+function commitStep(delta) {
+  const i = currentCommitIndex();
+  const next = i < 0 ? (delta > 0 ? 0 : state.commits.length - 1) : i + delta;
+  if (next >= 0 && next < state.commits.length) analyzeCommit(state.commits[next].sha);
+}
+
+function renderCommits() {
+  const content = $("#content");
+  const commits = state.commits;
+  if (!commits.length) {
+    content.innerHTML = `<div class="empty"><h2>No commits</h2><p>${state.report.source.head_sha
+      ? "The range holds no commits." : "The working tree isn't a commit range."}</p></div>`;
+    return;
+  }
+  const current = currentCommitIndex();
+  const label = state.parent ? state.parent.label : state.report.source.label;
+  let html = `<div class="page-head"><h2>Commits</h2>
+    <p>${plural(commits.length, "commit")} in ${esc(label)}, oldest first. Analyze one to review it on its own
+    (its reviewed marks are separate from the whole range's).</p></div>
+    <table class="files commits"><thead><tr><th></th><th>Commit</th><th>Subject</th><th>Author</th><th>Files</th><th>+/−</th><th></th></tr></thead><tbody>`;
+  commits.forEach((c, i) => {
+    const date = c.date ? new Date(c.date).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+    html += `<tr class="${i === current ? "current" : ""}">
+      <td class="num">${i + 1}</td>
+      <td class="code">${esc(c.short)}</td>
+      <td class="path">${esc(c.subject)}</td>
+      <td>${esc(c.author)}<span class="meta"> ${esc(date)}</span></td>
+      <td class="num">${c.files}</td>
+      <td class="num"><span class="adds">+${c.insertions}</span> <span class="dels">−${c.deletions}</span></td>
+      <td>${i === current ? '<span class="meta">viewing</span>'
+        : `<button type="button" class="link" data-analyze-commit="${esc(c.sha)}">Analyze</button>`}</td></tr>`;
+  });
+  content.innerHTML = html + "</tbody></table>";
 }
 
 function showError(msg) {
@@ -322,17 +512,147 @@ function renderSummary() {
       <span class="big">${stats.collapsed_pct}%</span>
       <span>of changed lines collapsed</span>
       <div class="meter"><div style="width:${stats.collapsed_pct}%"></div></div>
+      ${stats.verified_units ? `<span class="sub" title="${esc(VERIFIED_TITLE)}">✓ ${plural(stats.verified_units, "change")} verified by AST</span>` : ""}
     </div>
     <div class="metric"><span class="big">${stats.residual_units}</span>
       <span>${stats.residual_units === 1 ? "change" : "changes"} to review</span></div>
+    <div class="metric">
+      <span class="big">${stats.hunks_done}<span class="of">/${stats.hunks}</span></span>
+      <span>${stats.hunks === 1 ? "hunk" : "hunks"} reviewed</span>
+      <div class="meter"><div style="width:${stats.hunks ? Math.round((100 * stats.hunks_done) / stats.hunks) : 0}%"></div></div>
+    </div>
     <div class="metric"><span class="big">${stats.mechanical_groups}</span>
       <span>mechanical ${stats.mechanical_groups === 1 ? "pattern" : "patterns"}</span></div>
-    <div class="metric"><span class="big">${stats.files_analyzed}<span style="font-size:16px;color:var(--muted)">/${stats.files_changed}</span></span>
+    <div class="metric"><span class="big">${stats.files_analyzed}<span class="of">/${stats.files_changed}</span></span>
       <span>files analyzed</span></div>
     <div class="source">
+      ${state.parent ? `<div><a href="#" id="back-to-range" class="link">← Back to ${esc(state.parent.label)}</a></div>` : ""}
       <div><strong>${esc(source.label)}</strong></div>
-      <div class="code">${sha(source.base_sha)} → ${sha(source.head_sha)}</div>
+      ${state.parent ? "" : `<div class="code">${sha(source.base_sha)} → ${sha(source.head_sha)}</div>`}
+      <div class="summary-actions">
+        <button type="button" class="link" id="copy-md" title="Copy the review summary as Markdown">Copy as Markdown</button>
+        ${source.pr ? `<button type="button" class="link" id="post-summary" title="Post the summary as a comment on the pull request">Post summary to PR #${source.pr.number}</button>` : ""}
+      </div>
     </div>`;
+  $("#copy-md").addEventListener("click", copySummary);
+  $("#post-summary")?.addEventListener("click", postSummary);
+  $("#back-to-range")?.addEventListener("click", (e) => { e.preventDefault(); showReport(state.parent.id); });
+}
+
+// ---------- outputs: Markdown summary and PR comments ----------
+
+async function fetchSummary() {
+  const res = await fetch(`/api/report/${state.report.id}/summary.md`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
+}
+
+async function copySummary() {
+  try {
+    const md = await fetchSummary();
+    await navigator.clipboard.writeText(md);
+    toast("Review summary copied as Markdown.");
+  } catch (e) {
+    toast(`Couldn't copy: ${e.message}`, { error: true });
+  }
+}
+
+function prNumber() {
+  return state.report.source.pr ? state.report.source.pr.number : null;
+}
+
+// Posting is outward-facing: ask once per session, after showing what will be posted.
+function confirmPosting() {
+  if (state.postingOk) return true;
+  state.postingOk = window.confirm(`Post comments to pull request #${prNumber()} as you (via gh)?`);
+  return state.postingOk;
+}
+
+async function postSummary() {
+  let md;
+  try { md = await fetchSummary(); } catch (e) { toast(e.message, { error: true }); return; }
+  showModal(`Post summary to PR #${prNumber()}`, md, async (body) => {
+    if (!confirmPosting()) return false;
+    const res = await api(`/api/report/${state.report.id}/pr/comment`, { body });
+    toast(`Posted: ${res.url}`);
+    return true;
+  });
+}
+
+// A dialog with an editable textarea and Post / Cancel.
+function showModal(title, text, onPost) {
+  const dlg = $("#modal");
+  dlg.innerHTML = `<header><h3>${esc(title)}</h3><button type="button" class="close" aria-label="Close" id="modal-close">×</button></header>
+    <textarea id="modal-text" spellcheck="false"></textarea>
+    <footer><span class="meta" id="modal-note"></span><span class="spacer"></span>
+      <button type="button" class="toggle" id="modal-cancel">Cancel</button>
+      <button type="button" class="primary" id="modal-post">Post</button></footer>`;
+  $("#modal-text").value = text;
+  const close = () => dlg.close();
+  $("#modal-close").addEventListener("click", close);
+  $("#modal-cancel").addEventListener("click", close);
+  $("#modal-post").addEventListener("click", async () => {
+    const btn = $("#modal-post");
+    btn.disabled = true;
+    try {
+      if (await onPost($("#modal-text").value)) close();
+    } catch (e) {
+      $("#modal-note").textContent = e.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  dlg.showModal();
+}
+
+// Inline comment box under a hunk (c key or the Comment button).
+function openCommentBox(el) {
+  $("#comment-box")?.remove();
+  if (!el || !el.dataset.hunk) return;
+  if (!prNumber()) { toast("Comments can only be posted when reviewing a pull request.", { error: true }); return; }
+  const h = state.report.hunks[el.dataset.hunk];
+  const at = hunkAnchor(h);
+  const where = at.new_no ? `${h.path}:${at.new_no} (new side)` : `${h.path}:${at.old_no} (original side)`;
+  const box = document.createElement("div");
+  box.id = "comment-box";
+  box.className = "comment-box";
+  box.innerHTML = `<textarea placeholder="Comment on this hunk…" spellcheck="true"></textarea>
+    <div class="comment-actions"><span class="meta">Review comment on ${esc(where)} of PR #${prNumber()}</span>
+      <span class="spacer"></span>
+      <button type="button" class="toggle" data-comment-cancel>Cancel</button>
+      <button type="button" class="primary" data-comment-post>Post</button></div>`;
+  el.querySelector(".hunk-bar").after(box);
+  const ta = box.querySelector("textarea");
+  ta.focus();
+  box.querySelector("[data-comment-cancel]").addEventListener("click", () => box.remove());
+  ta.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") box.querySelector("[data-comment-post]").click();
+  });
+  box.querySelector("[data-comment-post]").addEventListener("click", async () => {
+    const body = ta.value.trim();
+    if (!body) { ta.focus(); return; }
+    if (!confirmPosting()) return;
+    const btn = box.querySelector("[data-comment-post]");
+    btn.disabled = true;
+    try {
+      const res = await api(`/api/report/${state.report.id}/pr/review-comment`, { body, hunk_id: h.id });
+      toast(`Posted: ${res.url}`);
+      box.remove();
+    } catch (e) {
+      toast(e.message, { error: true });
+      btn.disabled = false;
+    }
+  });
+}
+
+// The line a comment on (or a jump to) this hunk should target: the first changed line of a
+// unit that still needs review, preferring the new side (mirrors export.anchor_line).
+function hunkAnchor(h) {
+  const r = state.report;
+  const changed = h.lines.filter((ln) => ln.type !== " ");
+  const residual = changed.filter((ln) => ln.unit && !r.units[ln.unit].explained);
+  const pool = residual.length ? residual : changed.length ? changed : h.lines;
+  return pool.find((ln) => ln.type === "+") || pool[0];
 }
 
 function renderSidebar() {
@@ -349,7 +669,7 @@ function renderSidebar() {
     <div class="nav-section">
       <a class="nav-item${active("#review")}" href="#review">
         <span class="label"><strong>Needs review</strong></span>
-        <span class="pill ${v.stats.residual_units ? "attention" : "ok"}">${v.stats.residual_units}</span>
+        <span class="pill ${v.stats.hunks - v.stats.hunks_done ? "attention" : "ok"}" title="${v.stats.hunks_done} of ${v.stats.hunks} hunks reviewed">${v.stats.hunks - v.stats.hunks_done}</span>
       </a>
       <a class="nav-item${active("#warnings")}" href="#warnings">
         <span class="label">Warnings</span>
@@ -359,6 +679,10 @@ function renderSidebar() {
         <span class="label">Files</span>
         <span class="count">${v.files.length}${skipped ? ` · ${skipped} not analyzed` : ""}</span>
       </a>
+      ${state.commits.length > 1 || state.parent ? `<a class="nav-item${active("#commits")}" href="#commits">
+        <span class="label">Commits</span>
+        <span class="count">${state.parent ? `${currentCommitIndex() + 1} of ${state.commits.length}` : state.commits.length}</span>
+      </a>` : ""}
     </div>
     <div class="nav-section">
       <h4><span>Mechanical patterns</span><span>${done}/${mech.length} reviewed</span></h4>`;
@@ -368,11 +692,13 @@ function renderSidebar() {
   }
   for (const g of mech) {
     const isDone = state.reviewed.has(g.id);
+    const fresh = g.visible.filter((uid) => hunkIsNew(r.hunks[r.units[uid].hunk_id])).length;
     html += `
-      <a class="nav-item${active("#group/" + g.id)}${isDone ? " done" : ""}" href="#group/${g.id}" title="${esc(g.label)}">
+      <a class="nav-item${active("#group/" + g.id)}${isDone && !fresh ? " done" : ""}" href="#group/${g.id}" title="${esc(g.label)}${isDone && fresh ? ` — reviewed, but ${fresh} new since` : ""}">
         <input type="checkbox" data-review="${g.id}" ${isDone ? "checked" : ""} aria-label="Mark reviewed">
         <span class="kind ${g.kind}">${g.kind}</span>
         <span class="label code">${esc(g.label)}</span>
+        ${fresh ? `<span class="badge-new">+${fresh}</span>` : ""}
         <span class="count">×${g.visible.length}</span>
       </a>`;
   }
@@ -390,9 +716,13 @@ function renderSidebar() {
 
 // ---------- views ----------
 
+let lastRoute = "";
 function route(opts) {
   if (!state.report) return;
   const [view, id, ...rest] = location.hash.replace(/^#/, "").split("/");
+  const key = `${view}/${id || ""}`;
+  if (key !== lastRoute) state.focus = -1;
+  lastRoute = key;
   renderSidebar();
   if (view === "file") {
     renderFileView(decodeURIComponent(id || ""), rest[0] || "diff", rest[1] || "");
@@ -405,8 +735,41 @@ function route(opts) {
   if (view === "group") renderGroup(id);
   else if (view === "warnings") renderWarnings();
   else if (view === "files") renderFiles();
+  else if (view === "commits") renderCommits();
   else renderReview();
+  markSearch($("#content"));
+  applyFocus(false);
   if (!opts?.keepScroll) window.scrollTo({ top: 0 });
+}
+
+// Wrap search matches in code cells with <mark class="search"> (after rendering, so the
+// diff/syntax markup stays untouched).
+function markSearch(root) {
+  const re = searchRegex();
+  if (!re) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.parentElement.closest("td.text, td.side, .path") && n.nodeValue.trim()
+      ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT),
+  });
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const node of nodes) {
+    const text = node.nodeValue;
+    re.lastIndex = 0;
+    let m, pos = 0;
+    const frag = document.createDocumentFragment();
+    while ((m = re.exec(text)) && m[0]) {
+      frag.append(text.slice(pos, m.index));
+      const mark = document.createElement("mark");
+      mark.className = "search";
+      mark.textContent = m[0];
+      frag.append(mark);
+      pos = m.index + m[0].length;
+    }
+    if (!pos) continue;
+    frag.append(text.slice(pos));
+    node.replaceWith(frag);
+  }
 }
 
 const TAG_LABEL_MAX = 90;
@@ -415,15 +778,29 @@ function shortLabel(label) {
   return label.length > TAG_LABEL_MAX ? label.slice(0, TAG_LABEL_MAX - 1) + "…" : label;
 }
 
+const VERIFIED_TITLE = "Verified: the enclosing statement parses to the same program on both sides "
+  + "once the diff's renames are applied (docstrings and type annotations ignored).";
+
 function unitTags(unit) {
-  return unit.signatures.map((key) => {
+  const tags = unit.signatures.map((key) => {
     const g = state.groupsByKey.get(key);
     if (!g || !state.view.groupsById.has(g.id)) return "";
     if (g.mechanical) {
       return `<a class="tag" href="#group/${g.id}">${esc(g.kind)}: <span class="code">${esc(shortLabel(g.label))}</span></a>`;
     }
     return `<span class="tag unique">unique ${esc(g.kind)}: <span class="code">${esc(shortLabel(g.label))}</span></span>`;
-  }).join("");
+  });
+  for (const n of unit.near || []) {
+    const g = state.view.groupsById.get(n.group_id);
+    if (g) tags.push(`<a class="tag near" href="#group/${g.id}" title="${esc(n.hint)}">≈ almost <span class="code">${esc(shortLabel(g.label))}</span></a>`);
+  }
+  if (unit.verified) tags.push(`<span class="tag verified" title="${esc(VERIFIED_TITLE)}">✓ verified</span>`);
+  return tags.join("");
+}
+
+// The other half of a move, for showing a moved block as a diff against where it came from.
+function partnerOf(unit) {
+  return unit && unit.partner ? state.report.units[unit.partner] : null;
 }
 
 function renderReview() {
@@ -431,9 +808,10 @@ function renderReview() {
   const v = state.view;
   const content = $("#content");
   if (!v.residualHunks.length) {
-    content.innerHTML = `<div class="empty"><h2>Nothing left to review</h2>
-      <p>Every changed line in the ${filtersActive() ? "visible" : "analyzed"} files matched a
-      mechanical pattern. Skim the patterns in the sidebar and check the warnings.</p></div>`;
+    const why = state.filters.newOnly ? "Nothing new since last time in the visible files."
+      : `Every changed line in the ${filtersActive() ? "visible" : "analyzed"} files matched a
+      mechanical pattern. Skim the patterns in the sidebar and check the warnings.`;
+    content.innerHTML = `<div class="empty"><h2>Nothing left to review</h2><p>${why}</p></div>`;
     return;
   }
   const byFile = new Map();
@@ -443,28 +821,75 @@ function renderReview() {
     byFile.get(h.path).push(h);
   }
   let html = `<div class="page-head"><h2>Needs review</h2>
-    <p>Changes that don't belong to a repeated pattern. Lines already explained by a pattern are dimmed.</p></div>
+    <p>Changes that don't belong to a repeated pattern. Lines already explained by a pattern are dimmed.
+    Tick a hunk when you've read it; ticked hunks fold up and stay ticked across restarts and new commits.</p></div>
+    ${deltaBanner()}
     ${navHint()}`;
   for (const [path, hunks] of byFile) {
     const residual = hunks.reduce((n, h) =>
       n + h.unit_ids.filter((u) => v.units.has(u) && !r.units[u].explained).length, 0);
+    const left = hunks.filter((h) => !state.reviewedHunks.has(h.fingerprint)).length;
     html += `<section class="file"><header><span class="path">${esc(path)}</span>
-      <span class="meta">${plural(residual, "change")}</span>${fileLinks(path)}</header>`;
-    for (const h of hunks) {
-      html += `<div class="hunk" data-hunk="${h.id}">
-        <div class="hunk-bar"><span>@@ line ${h.new_start} @@</span>
-          <button type="button" class="link" data-hunk-context>Show context</button></div>
-        <table class="diff">${hunkRows(h)}</table></div>`;
-    }
+      <span class="meta">${plural(residual, "change")}</span>
+      ${left ? `<button type="button" class="link" data-review-file="${esc(path)}">Mark all ${hunks.length > 1 ? `${left} ` : ""}reviewed</button>` : ""}
+      ${fileLinks(path)}</header>`;
+    for (const h of hunks) html += hunkHtml(h);
     html += "</section>";
   }
   content.innerHTML = html;
 }
 
+function hunkHtml(h) {
+  const done = state.reviewedHunks.has(h.fingerprint);
+  return `<div class="hunk${done ? " done" : ""}" data-hunk="${h.id}">
+    <div class="hunk-bar">
+      <label class="review-box" title="Reviewed (x)"><input type="checkbox" data-review-hunk="${h.fingerprint}" ${done ? "checked" : ""}></label>
+      <span>@@ line ${h.new_start} @@</span>
+      ${hunkIsNew(h) ? `<span class="badge-new" title="Not in the diff last time">new</span>` : ""}
+      <span class="spacer"></span>
+      ${state.report.source.pr ? `<button type="button" class="link" data-hunk-comment title="Comment on this hunk in the PR (c)">Comment</button>` : ""}
+      <button type="button" class="link" data-hunk-open>${done ? "Show" : "Hide"}</button>
+      <button type="button" class="link" data-hunk-context>Show context</button></div>
+    <table class="diff">${hunkRows(h)}</table></div>`;
+}
+
+// What changed since the previous analysis of the same comparison (new commits pushed).
+function deltaBanner() {
+  const d = state.delta;
+  if (!d.prevHead || (!d.newHunks.size && !d.changed.length)) return "";
+  const r = state.report;
+  const visibleNew = state.view.residualHunks.filter((hid) => hunkIsNew(r.hunks[hid])).length;
+  const parts = [];
+  if (d.newHunks.size) parts.push(`${plural(d.newHunks.size, "new change")}${visibleNew !== d.newHunks.size ? ` (${visibleNew} to review)` : ""}`);
+  if (d.changed.length) {
+    const files = [...new Set(d.changed.map((c) => c.path))];
+    parts.push(`${plural(d.changed.length, "change")} you had reviewed ${d.changed.length === 1 ? "was" : "were"} modified (${files.map(esc).join(", ")}) and ${d.changed.length === 1 ? "is" : "are"} unmarked`);
+  }
+  const f = state.filters;
+  return `<div class="banner">
+    <strong>Since ${esc(d.prevHead.slice(0, 7))}:</strong> ${parts.join(" · ")}.
+    ${d.newHunks.size ? `<button type="button" class="link" id="banner-new">${f.newOnly ? "Show everything" : "Show only what's new"}</button>` : ""}
+  </div>`;
+}
+
 function hunkRows(h) {
-  return diffRows(h.lines.map((ln) => ({
-    t: ln.type, o: ln.old_no, n: ln.new_no, text: ln.text, unit: ln.unit, hl: ln.hl,
-  })), { tags: true, path: h.path });
+  const lines = [];
+  const shown = new Set();
+  for (const ln of h.lines) {
+    // A block moved here from elsewhere: show the original above it so the reader sees a
+    // diff of the move rather than a bare insertion.
+    const unit = ln.type === "+" && ln.unit ? state.report.units[ln.unit] : null;
+    const from = unit && !shown.has(unit.id) ? partnerOf(unit) : null;
+    if (from && from.old.length) {
+      shown.add(unit.id);
+      lines.push({ t: " ", text: "", from: `moved from ${from.path}:${from.old_start}`, unit: unit.id });
+      lines.push(...from.old.map((l, k) => ({
+        t: "-", o: from.old_start + k, n: null, text: l.text, unit: unit.id, hl: l.hl, path: from.path,
+      })));
+    }
+    lines.push({ t: ln.type, o: ln.old_no, n: ln.new_no, text: ln.text, unit: ln.unit, hl: ln.hl });
+  }
+  return diffRows(lines, { tags: true, path: h.path });
 }
 
 // Rows for a list of diff lines ({t, o, n, text, unit, hl}) from the file at `opts.path`.
@@ -507,17 +932,24 @@ function unifiedRows(lines, { tags = false, focus = null, anchors = false, path 
   for (const ln of lines) {
     const st = lineState(ln, focus);
     if (tags) rows += tagRow(st, tagged, 3, 1);
+    if (ln.from) { rows += fromRow(ln, 3, 1); continue; }
     const changed = ln.t !== " ";
     const attrs = anchors ? anchorAttrs(ln.o, ln.n) : "";
+    const p = ln.path || path;
     rows += `<tr class="${st.cls}${st.dim ? " explained" : ""}${st.focused ? " focus" : ""}${
       anchors && changed && !prevChanged ? " chg-start" : ""}"${attrs}>
       <td class="no">${ln.o ?? ""}</td><td class="no">${ln.n ?? ""}</td>
       <td class="sign">${ln.t === " " ? "" : ln.t}</td>
-      <td class="text${plain ? " plain" : ""}"${ln.t === "-" ? navAttrs(path, "o", ln.o) : navAttrs(path, "n", ln.n)}>${
+      <td class="text${plain ? " plain" : ""}"${ln.t === "-" ? navAttrs(p, "o", ln.o) : navAttrs(p, "n", ln.n)}>${
         codeHtml(ln, sx, plain)}</td></tr>`;
     prevChanged = changed;
   }
   return rows;
+}
+
+// A label row above lines pulled in from elsewhere ("moved from a.py:12").
+function fromRow(ln, lead, span) {
+  return `<tr class="tags">${"<td></td>".repeat(lead)}<td colspan="${span}"><span class="from">↓ ${esc(ln.from)}</span></td></tr>`;
 }
 
 // Side by side: removed lines on the left, added lines on the right, paired in order within
@@ -532,7 +964,7 @@ function splitRows(lines, { tags = false, focus = null, anchors = false, path = 
     const st = lineState(ln, focus);
     const num = side === "old" ? ln.o : ln.n;
     return `<td class="no ${st.cls}">${num}</td><td class="side ${st.cls}${st.dim ? " explained" : ""}${
-      st.focused ? " focus" : ""}"${navAttrs(path, side === "old" ? "o" : "n", num)}>${
+      st.focused ? " focus" : ""}"${navAttrs(ln.path || path, side === "old" ? "o" : "n", num)}>${
       codeHtml(ln, sx)}</td>`;
   };
   for (const [left, right] of pairLines(lines)) {
@@ -541,6 +973,7 @@ function splitRows(lines, { tags = false, focus = null, anchors = false, path = 
         rows += tagRow(lineState(ln, focus), tagged, 1, 3);
       }
     }
+    if (left && left.from) { rows += fromRow(left, 1, 3); continue; }
     const changed = left !== right;
     const attrs = anchors ? anchorAttrs(left?.o, right?.n) : "";
     rows += `<tr class="split-row${anchors && changed && !prevChanged ? " chg-start" : ""}"${attrs}>${
@@ -718,7 +1151,35 @@ function fileLinks(path, { oldLine, newLine } = {}) {
   if (f && f.status !== "D") links.push(`<a href="${fileHref(path, "new", newLine && "n" + newLine)}">New</a>`);
   const at = newLine ? "n" + newLine : oldLine ? "o" + oldLine : "";
   links.push(`<a href="${fileHref(path, "diff", at)}">Full diff</a>`);
+  if (!f || f.status !== "D") links.push(editorLink(path, newLine || oldLine));
   return `<span class="file-links">${links.join("")}</span>`;
+}
+
+// ---- open in editor ----
+// The editor opens the file in your checkout, which is the head revision only when the
+// source is the working tree (or the head branch is checked out).
+const EDITOR_TITLE = "Open in your editor (opens your checkout, which may differ from this revision)";
+
+function editorHref(path, line, col) {
+  if (!state.editor) return null;
+  const abs = `${state.repo.replace(/\/$/, "")}/${path}`;
+  return state.editor
+    .replace("{path}", encodeURI(abs))
+    .replace("{line}", String(line || 1))
+    .replace("{col}", String(col || 1));
+}
+
+function editorLink(path, line, label = "Open") {
+  const href = editorHref(path, line);
+  return href ? `<a class="open" href="${esc(href)}" title="${EDITOR_TITLE}">${label}</a>` : "";
+}
+
+function openInEditor(path, line) {
+  const href = editorHref(path, line);
+  if (href) {
+    toast(`Opening ${path}:${line || 1} in your editor…`);
+    window.location.assign(href);
+  }
 }
 
 // A context window: a slice [lo, hi) of a file's whole diff that grows with "show more".
@@ -750,6 +1211,17 @@ async function openCtx(box, path, lo, hi) {
   box.dataset.lo = Math.max(0, lo(fd));
   box.dataset.hi = Math.min(fd.lines.length, hi(fd));
   renderCtx(box, fd);
+}
+
+function onContentChange(e) {
+  const box = e.target.closest("[data-review-hunk]");
+  if (!box) return;
+  const hunk = box.closest(".hunk");
+  hunk.classList.toggle("done", box.checked);
+  hunk.classList.remove("open");
+  const open = hunk.querySelector("[data-hunk-open]");
+  if (open) open.textContent = box.checked ? "Show" : "Hide";
+  markHunks([box.dataset.reviewHunk], box.checked);
 }
 
 async function onContentClick(e) {
@@ -789,6 +1261,24 @@ async function onContentClick(e) {
       await openCtx(box, h.path, (fd) => start(fd) - CTX_STEP,
         (fd) => start(fd) + h.lines.length + CTX_STEP);
       btn.remove();
+    } else if ("hunkOpen" in btn.dataset) {
+      const box = btn.closest(".hunk");
+      box.classList.toggle("open");
+      btn.textContent = box.classList.contains("done") && !box.classList.contains("open") ? "Show" : "Hide";
+    } else if (btn.dataset.reviewFile) {
+      const r = state.report;
+      const fps = state.view.residualHunks.map((hid) => r.hunks[hid])
+        .filter((h) => h.path === btn.dataset.reviewFile && !state.reviewedHunks.has(h.fingerprint))
+        .map((h) => h.fingerprint);
+      markHunks(fps, true);
+      route({ keepScroll: true });
+    } else if ("hunkComment" in btn.dataset) {
+      openCommentBox(btn.closest(".hunk"));
+    } else if (btn.dataset.analyzeCommit) {
+      await analyzeCommit(btn.dataset.analyzeCommit);
+    } else if (btn.id === "banner-new") {
+      state.filters.newOnly = !state.filters.newOnly;
+      rerender();
     }
   } catch (err) {
     showError(err.message);
@@ -796,10 +1286,14 @@ async function onContentClick(e) {
 }
 
 function unitRows(u) {
-  return diffRows([
-    ...u.old.map((ln, k) => ({ t: "-", o: u.old_start + k, n: null, text: ln.text, unit: u.id, hl: ln.hl })),
-    ...u.new.map((ln, k) => ({ t: "+", o: null, n: u.new_start + k, text: ln.text, unit: u.id, hl: ln.hl })),
-  ], { focus: new Set([u.id]), path: u.path });
+  // A moved block is shown against the place it came from.
+  const from = u.new.length ? partnerOf(u) : null;
+  const lines = from ? [
+    { t: " ", text: "", from: `moved from ${from.path}:${from.old_start}`, unit: u.id },
+    ...from.old.map((ln, k) => ({ t: "-", o: from.old_start + k, n: null, text: ln.text, unit: u.id, hl: ln.hl, path: from.path })),
+  ] : u.old.map((ln, k) => ({ t: "-", o: u.old_start + k, n: null, text: ln.text, unit: u.id, hl: ln.hl }));
+  lines.push(...u.new.map((ln, k) => ({ t: "+", o: null, n: u.new_start + k, text: ln.text, unit: u.id, hl: ln.hl })));
+  return diffRows(lines, { focus: new Set([u.id]), path: u.path });
 }
 
 function renderGroup(id) {
@@ -813,38 +1307,54 @@ function renderGroup(id) {
     return;
   }
 
-  const transform = g.kind === "formatting" || g.kind === "docs"
+  const transform = g.kind === "formatting" || g.kind === "docs" || g.kind === "move"
     ? `<span class="transform">${esc(g.label)}</span>`
     : `<span class="transform"><span class="old">${esc(g.old || "∅")}</span> → <span class="new">${esc(g.new || "∅")}</span></span>`;
   const isDone = state.reviewed.has(g.id);
   const warnCount = state.view.warnings.filter((w) => w.group_id === g.id).length;
   const files = new Set(g.visible.map((uid) => r.units[uid].path));
   const hiddenHere = g.unit_ids.length - g.visible.length;
+  let units = g.visible.map((uid) => r.units[uid]);
+  const verifiedCount = units.filter((u) => u.verified).length;
+  // A move is one occurrence shown as old block → new block; its deleted half isn't listed.
+  const moved = g.kind === "move" ? units.find((u) => u.new.length && u.partner) : null;
+  if (moved) units = [moved, ...units.filter((u) => u !== moved && u.id !== moved.partner)];
+  const count = g.kind === "move" ? `moved block${units.length > 1 ? ` + ${plural(units.length - 1, "import edit")}` : ""}`
+    : `${plural(g.visible.length, "occurrence")} in ${plural(files.size, "file")}`;
   let html = `<div class="page-head">
       <h2><span class="kind ${g.kind}">${g.kind}</span>${transform}</h2>
       <span class="spacer"></span>
       <label class="toggle"><input type="checkbox" id="group-reviewed" ${isDone ? "checked" : ""}> Reviewed</label>
-      <p>${plural(g.visible.length, "occurrence")} in ${plural(files.size, "file")}${hiddenHere ? ` (${hiddenHere} hidden by filters)` : ""}${warnCount ? ` · <a href="#warnings">${plural(warnCount, "warning")}</a>` : ""}</p>
+      <p>${count}${hiddenHere ? ` (${hiddenHere} hidden by filters)` : ""}${
+        verifiedCount ? ` · <span class="tag verified" title="${esc(VERIFIED_TITLE)}">✓ ${g.kind === "move" ? "verified" : `${verifiedCount} of ${g.visible.length} verified`}</span>` : ""}${
+        warnCount ? ` · <a href="#warnings">${plural(warnCount, "warning")}</a>` : ""}</p>
     </div>`;
   const details = Object.entries(g.details);
-  if (details.length) {
+  if (details.length && g.kind !== "move") {
     html += `<div class="chips">${details.map(([d, n]) => `<span class="chip">${esc(d)} <b>×${n}</b></span>`).join("")}</div>`;
   }
 
-  const units = g.visible.map((uid) => r.units[uid]);
   const byFile = new Map();
   for (const u of units.slice(0, state.shown)) {
     if (!byFile.has(u.path)) byFile.set(u.path, []);
     byFile.get(u.path).push(u);
   }
+  let importsHead = false;
   for (const [path, us] of byFile) {
+    if (moved && !us.includes(moved) && !importsHead) {
+      importsHead = true;
+      html += `<h3 class="sub-head">Imports updated for this move</h3>`;
+    }
     html += `<section class="file"><header><span class="path">${esc(path)}</span>
       <span class="meta">×${us.length}</span>${fileLinks(path)}</header>`;
     for (const u of us) {
       const where = { oldLine: u.old.length ? u.old_start : null, newLine: u.new.length ? u.new_start : null };
+      const from = u === moved ? partnerOf(u) : null;
       html += `<div class="occurrence" data-unit="${u.id}"><table class="diff">${unitRows(u)}</table>
         <div class="occ-actions">
+          ${hunkIsNew(r.hunks[u.hunk_id]) ? `<span class="badge-new" title="Not in the diff last time">new</span>` : ""}
           ${u.explained ? "" : `<a class="badge-link" href="#review">also has other changes — see Needs review</a>`}
+          ${from ? `<span class="meta">moved from ${esc(from.path)}:${from.old_start}</span>${fileLinks(from.path, { oldLine: from.old_start })}` : ""}
           <button type="button" class="link" data-unit-context>Show context</button>
           ${fileLinks(path, where)}
         </div></div>`;
@@ -865,11 +1375,13 @@ function renderWarnings() {
   const content = $("#content");
   if (!v.warnings.length) {
     content.innerHTML = `<div class="empty"><h2>No warnings</h2>
-      <p>No references to renamed definitions are left behind, and no symbol was renamed two different ways.</p></div>`;
+      <p>No references to renamed definitions are left behind, no symbol was renamed two different ways,
+      and no leftover change looks like a near miss of a pattern.</p></div>`;
     return;
   }
   let html = `<div class="page-head"><h2>Warnings</h2>
-    <p>Possible problems with the refactor: references to a renamed definition that no longer exists, or a symbol renamed two different ways.</p></div>`;
+    <p>Possible problems with the refactor: references to a renamed definition that no longer exists, a symbol
+    renamed two different ways, or a leftover change that almost matches a pattern (a likely typo).</p></div>`;
   for (const w of v.warnings) {
     const g = r.groups.find((x) => x.id === w.group_id);
     const re = g && g.kind === "rename"
@@ -879,7 +1391,7 @@ function renderWarnings() {
     for (const loc of w.locations) {
       const text = loc.text.trimStart();
       const ranges = re ? [...text.matchAll(re)].map((m) => [m.index, m.index + m[0].length]) : [];
-      locs += `<tr><td class="where"><a href="${fileHref(loc.path, "new", "n" + loc.line)}">${esc(loc.path)}:${loc.line}</a></td>
+      locs += `<tr><td class="where"><a href="${fileHref(loc.path, "new", "n" + loc.line)}">${esc(loc.path)}:${loc.line}</a> ${editorLink(loc.path, loc.line, "↗")}</td>
         <td class="text">${highlight(text, ranges)}</td></tr>`;
     }
     const unlisted = w.total - w.locations.length - (w.filteredOut || 0);
@@ -975,6 +1487,7 @@ async function renderFileView(path, mode, line) {
       ${highlightToggle()}
       ${mode === "diff" ? layoutToggle(path) : ""}
       <span class="spacer"></span>
+      ${fd.status !== "D" ? `<a class="toggle" href="${esc(editorHref(path, line ? Number(line.slice(1)) : 1) || "#")}" title="${EDITOR_TITLE}">Open in editor</a>` : ""}
       <button type="button" class="toggle" data-jump="prev" title="Previous change (p)">↑ Prev change</button>
       <button type="button" class="toggle" data-jump="next" title="Next change (n)">↓ Next change</button>
     </div>
@@ -1024,23 +1537,177 @@ function jumpChange(dir) {
   window.scrollBy({ top: -mid });
 }
 
-document.addEventListener("keydown", (e) => {
-  if (!location.hash.startsWith("#file/") || e.metaKey || e.ctrlKey || e.altKey) return;
-  if (e.target.closest?.("input, textarea, select")) return;
-  if (e.key === "n") jumpChange(1);
-  if (e.key === "p") jumpChange(-1);
-});
+// ---------- keyboard ----------
+
+const KEY_HELP = [
+  ["Review", [
+    ["j", "k", "next / previous hunk (or occurrence on a pattern page)"],
+    ["x", "", "mark the focused hunk reviewed (the pattern, on a pattern page)"],
+    ["e", "", "show context for the focused hunk; again to reveal more"],
+    ["o", "", "open the focused hunk in your editor"],
+    ["c", "", "comment on the focused hunk (pull requests)"],
+  ]],
+  ["Navigate", [
+    ["]", "[", "next / previous mechanical pattern"],
+    ["}", "{", "next / previous commit of the range"],
+    ["g r", "g w", "go to Needs review / Warnings"],
+    ["g f", "g c", "go to Files / Commits"],
+    ["n", "p", "next / previous change in the file viewer"],
+    ["/", "", "search"],
+  ]],
+  ["Other", [
+    [`${MOD_KEY}-click`, `${MOD_KEY}⇧-click`, "go to definition / find references"],
+    ["?", "", "this help"],
+    ["esc", "", "close panels, clear the search box"],
+  ]],
+];
+
+let pendingG = 0;
+
+// The hunks (review page) or occurrences (pattern page) that j/k move between.
+function focusables() {
+  return [...document.querySelectorAll("#content .hunk, #content .occurrence")];
+}
+
+function applyFocus(scroll = true) {
+  const items = focusables();
+  for (const el of document.querySelectorAll(".kbd-focus")) el.classList.remove("kbd-focus");
+  if (state.focus < 0 || state.focus >= items.length) { state.focus = Math.min(state.focus, items.length - 1); return; }
+  const el = items[state.focus];
+  el.classList.add("kbd-focus");
+  if (scroll) {
+    const r = el.getBoundingClientRect();
+    const top = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--topbar-h")) || 0;
+    if (r.top < top + 8 || r.bottom > window.innerHeight - 8) {
+      window.scrollBy({ top: r.top - top - 60 });
+    }
+  }
+}
+
+function moveFocus(delta) {
+  const n = focusables().length;
+  if (!n) return;
+  state.focus = state.focus < 0 ? (delta > 0 ? 0 : n - 1) : Math.max(0, Math.min(n - 1, state.focus + delta));
+  applyFocus();
+}
+
+function focusedElement() {
+  const items = focusables();
+  return state.focus >= 0 ? items[state.focus] || null : null;
+}
+
+// Where the focused hunk/occurrence lives: {path, line} on the new side when possible.
+function focusedLocation() {
+  const el = focusedElement();
+  if (!el) return null;
+  const r = state.report;
+  if (el.dataset.hunk) {
+    const h = r.hunks[el.dataset.hunk];
+    const at = hunkAnchor(h);
+    return { path: h.path, line: at.new_no || at.old_no || h.new_start, hunk: h };
+  }
+  const u = r.units[el.dataset.unit];
+  return { path: u.path, line: u.new.length ? u.new_start : u.old_start, unit: u };
+}
+
+function toggleFocusedReviewed() {
+  const el = focusedElement();
+  const [view, id] = location.hash.replace(/^#/, "").split("/");
+  if (view === "group" && id) {
+    const box = $("#group-reviewed");
+    if (box) { box.checked = !box.checked; box.dispatchEvent(new Event("change")); }
+    return;
+  }
+  const box = el?.querySelector("[data-review-hunk]");
+  if (!box) return;
+  box.checked = !box.checked;
+  box.dispatchEvent(new Event("change", { bubbles: true }));
+  if (box.checked) {
+    // On to the next hunk that still needs reading.
+    const items = focusables();
+    const next = items.findIndex((x, i) => i > state.focus && !x.classList.contains("done"));
+    if (next >= 0) { state.focus = next; applyFocus(); }
+  }
+}
+
+function expandFocused() {
+  const el = focusedElement();
+  if (!el) return;
+  const btn = el.querySelector("[data-hunk-context], [data-unit-context]:not(.ctx [data-unit-context])");
+  if (btn && !(el.classList.contains("ctx") && "unitContext" in btn.dataset)) { btn.click(); return; }
+  el.querySelector('[data-expand="down"]')?.click();
+}
+
+function patternStep(delta) {
+  const mech = state.view.groups.filter((g) => g.mechanical);
+  if (!mech.length) return;
+  const [view, id] = location.hash.replace(/^#/, "").split("/");
+  const i = view === "group" ? mech.findIndex((g) => g.id === id) : -1;
+  const next = i + delta;
+  if (next < 0) { location.hash = "#review"; return; }
+  if (next >= mech.length) return;
+  location.hash = `#group/${mech[next].id}`;
+}
+
+function showHelp(on = !$("#help").open) {
+  const dlg = $("#help");
+  if (!on) { dlg.close(); return; }
+  dlg.innerHTML = `<header><h3>Keyboard shortcuts</h3><button type="button" class="close" aria-label="Close" id="help-close">×</button></header>
+    ${KEY_HELP.map(([title, rows]) => `<h4>${title}</h4><table>${rows.map(([a, b, what]) =>
+      `<tr><td><kbd>${esc(a)}</kbd>${b ? ` <kbd>${esc(b)}</kbd>` : ""}</td><td>${esc(what)}</td></tr>`).join("")}</table>`).join("")}`;
+  $("#help-close").addEventListener("click", () => dlg.close());
+  dlg.showModal();
+}
+
+function onKey(e) {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const inField = e.target.closest?.("input, textarea, select, [contenteditable]");
+  if (e.key === "Escape") {
+    if ($("#help").open) $("#help").close();
+    hideNavPanel();
+    if (inField) e.target.blur();
+    $("#comment-box")?.remove();
+    return;
+  }
+  if (inField || !state.report) return;
+  if (pendingG) {
+    clearTimeout(pendingG);
+    pendingG = 0;
+    const go = { r: "#review", w: "#warnings", f: "#files", c: "#commits" }[e.key];
+    if (go) { location.hash = go; e.preventDefault(); }
+    return;
+  }
+  const inFile = location.hash.startsWith("#file/") || location.hash.startsWith("#lib/");
+  switch (e.key) {
+    case "?": showHelp(); break;
+    case "/": $("#search-input")?.focus(); e.preventDefault(); break;
+    case "g": pendingG = setTimeout(() => { pendingG = 0; }, 900); break;
+    case "]": patternStep(1); break;
+    case "[": patternStep(-1); break;
+    case "}": if (state.commits.length) commitStep(1); break;
+    case "{": if (state.commits.length) commitStep(-1); break;
+    case "n": if (inFile) jumpChange(1); break;
+    case "p": if (inFile) jumpChange(-1); break;
+    case "j": if (!inFile) moveFocus(1); else return; break;
+    case "k": if (!inFile) moveFocus(-1); else return; break;
+    case "x": toggleFocusedReviewed(); break;
+    case "e": expandFocused(); break;
+    case "o": { const at = focusedLocation(); if (at) openInEditor(at.path, at.line); break; }
+    case "c": { const el = focusedElement(); if (el) openCommentBox(el); break; }
+    default: return;
+  }
+  e.preventDefault();
+}
+
+document.addEventListener("keydown", onKey);
 
 // ---------- code navigation (go to definition / find references) ----------
 
-const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
-const MOD_KEY = IS_MAC ? "⌘" : "Ctrl";
-const modDown = (e) => (IS_MAC ? e.metaKey : e.ctrlKey);
 const ID_CHAR = /[\p{L}\p{N}_$]/u;
 
 function navHint() {
   return `<p class="nav-hint"><kbd>${MOD_KEY}</kbd>-click a name to go to its definition ·
-    <kbd>${MOD_KEY}</kbd><kbd>⇧</kbd>-click to find references</p>`;
+    <kbd>${MOD_KEY}</kbd><kbd>⇧</kbd>-click to find references · <kbd>?</kbd> keyboard shortcuts</p>`;
 }
 
 // Character offset of the point (x, y) within a code cell's text, or null.
@@ -1360,13 +2027,19 @@ async function init() {
   }
   $("#source-form").addEventListener("submit", runAnalysis);
   $("#content").addEventListener("click", onContentClick);
+  $("#content").addEventListener("change", onContentChange);
+  $("#content").addEventListener("mousedown", (e) => {
+    const el = e.target.closest(".hunk, .occurrence");
+    if (!el) return;
+    const i = focusables().indexOf(el);
+    if (i >= 0 && i !== state.focus) { state.focus = i; applyFocus(false); }
+  });
   $("#content").addEventListener("click", onCodeClick, true);
   $("#content").addEventListener("mousedown", onCodeMouseDown);
   $("#content").addEventListener("mousemove", onCodeMouseMove);
   document.addEventListener("keyup", (e) => {
     if (e.key === "Meta" || e.key === "Control") { document.body.classList.remove("nav-armed"); setHoverWord(null); }
   });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideNavPanel(); });
   loadLayout();
   loadSyntax();
   trackTopbarHeight();
@@ -1379,6 +2052,8 @@ async function init() {
     $("#repo").textContent = cfg.repo;
     $("#repo").title = cfg.repo;
     defaults = cfg.defaults || {};
+    state.repo = cfg.repo;
+    state.editor = defaults.editor || null;
   } catch {}
   setMode(defaults.mode || "refs");
   const form = $("#source-form");

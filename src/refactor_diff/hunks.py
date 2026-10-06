@@ -25,10 +25,20 @@ class Opcode:
         return (self.j1 + 1, self.j2) if self.j2 > self.j1 else None
 
 
+def line_matcher(old: list[str], new: list[str]) -> SequenceMatcher:
+    """The line matcher shared by the engine and the file viewer. Blank lines are junk: they
+    may extend a match but never anchor one, so an import block followed by a blank line is not
+    torn apart to pair the blank line with another."""
+    return SequenceMatcher(_blank, old, new, autojunk=False)
+
+
+def _blank(line: str) -> bool:
+    return not line.strip()
+
+
 def diff_hunks(old: list[str], new: list[str]) -> list[list[tuple[str, int, int, int, int]]]:
     """Unified-diff style hunk groups (opcodes including surrounding context)."""
-    matcher = SequenceMatcher(None, old, new, autojunk=False)
-    return [list(g) for g in matcher.get_grouped_opcodes(CONTEXT)]
+    return [list(g) for g in line_matcher(old, new).get_grouped_opcodes(CONTEXT)]
 
 
 def candidate_units(op: Opcode) -> tuple[list[Opcode], list[Opcode] | None]:
