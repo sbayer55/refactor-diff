@@ -3,12 +3,10 @@ import subprocess
 from unittest import mock
 
 from conftest import commit, git
-from starlette.testclient import TestClient
 
 from refactor_diff import sources
 from refactor_diff.engine import analyze
 from refactor_diff.export import markdown_summary
-from refactor_diff.web.server import create_app
 
 
 def test_markdown_summary(rename_repo):
@@ -27,13 +25,13 @@ def test_markdown_summary(rename_repo):
     assert "(`legacy.py:1`, `legacy.py:5`)" in md
 
 
-def test_summary_route_and_commits(tmp_path):
+def test_summary_route_and_commits(tmp_path, serve):
     repo = tmp_path / "repo"
     commit(repo, {"a.py": "x = 1\n"}, "before")
     git(repo, "checkout", "-qb", "feature")
     commit(repo, {"a.py": "x = 2\n"}, "first change")
     commit(repo, {"b.py": "y = 1\ny2 = 2\n"}, "second change")
-    client = TestClient(create_app(repo))
+    client = serve(repo)
     data = client.post("/api/analyze", json={"base": "main", "head": "feature"}).json()
 
     md = client.get(f"/api/report/{data['id']}/summary.md")
@@ -59,7 +57,7 @@ def test_summary_route_and_commits(tmp_path):
     assert client.get(f"/api/report/{wt['id']}/commits").json() == {"commits": []}
 
 
-def test_pr_comment_routes(rename_repo):
+def test_pr_comment_routes(rename_repo, serve):
     sha = lambda ref: git(rename_repo, "rev-parse", ref)  # noqa: E731
     pr_info = {
         "number": 7,
@@ -91,7 +89,7 @@ def test_pr_comment_routes(rename_repo):
         mock.patch.object(sources, "gh_available", return_value=True),
         mock.patch.object(sources.subprocess, "run", side_effect=fake_run),
     ):
-        client = TestClient(create_app(rename_repo))
+        client = serve(rename_repo)
         data = client.post("/api/analyze", json={"pr": 7}).json()
         rid = data["id"]
         res = client.post(f"/api/report/{rid}/pr/comment", json={"body": "## Summary\nhello"})
@@ -124,8 +122,8 @@ def test_pr_comment_routes(rename_repo):
     }
 
 
-def test_pr_routes_refuse_non_pr_reports(rename_repo):
-    client = TestClient(create_app(rename_repo))
+def test_pr_routes_refuse_non_pr_reports(rename_repo, serve):
+    client = serve(rename_repo)
     data = client.post("/api/analyze", json={"base": "main", "head": "feature"}).json()
     res = client.post(f"/api/report/{data['id']}/pr/comment", json={"body": "x"})
     assert res.status_code == 400 and "pull request" in res.json()["error"]
