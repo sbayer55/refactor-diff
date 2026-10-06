@@ -57,6 +57,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "(default: .venv, venv or env in the repository)",
     )
     p.add_argument(
+        "--tsserver",
+        metavar="PATH",
+        help="tsserver (or TypeScript's tsserver.js) used for TypeScript/JavaScript code "
+        "navigation (default: node_modules/typescript in the repository, then PATH)",
+    )
+    p.add_argument(
         "--editor",
         metavar="NAME|TEMPLATE",
         default="vscode",
@@ -133,7 +139,7 @@ def main(argv: list[str] | None = None) -> None:
     if not args.no_browser:
         threading.Timer(0.8, webbrowser.open, [url]).start()
     uvicorn.run(
-        create_app(repo, defaults_from(args), args.python),
+        create_app(repo, defaults_from(args), args.python, args.tsserver),
         host=HOST,
         port=port,
         log_level="warning",

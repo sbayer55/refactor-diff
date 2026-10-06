@@ -1,8 +1,10 @@
-"""Python sources of a revision written to a temporary directory.
+"""Analyzable sources of a revision written to a temporary directory.
 
-Code navigation (Jedi) needs real files laid out as they were at a commit; for a branch or
-PR, neither side is checked out. A snapshot holds only the Python sources, which takes well
-under a second even for large repos, and is reused for the lifetime of the server.
+Code navigation (Jedi, tsserver) needs real files laid out as they were at a commit; for a
+branch or PR, neither side is checked out. A snapshot holds only the Python, TypeScript and
+JavaScript sources plus the project files tsserver reads (package.json, tsconfig.json), which
+takes well under a second even for large repos, and is reused for the lifetime of the server.
+Each package's ``node_modules`` is linked in from the repository, since it isn't in git.
 """
 
 from __future__ import annotations
@@ -15,7 +17,12 @@ from pathlib import Path
 
 from refactor_diff import sources
 
-SNAPSHOT_SUFFIXES = (".py", ".pyi")
+SNAPSHOT_SUFFIXES = (
+    ".py",
+    ".pyi",
+    *(".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"),
+)
+PROJECT_FILES = ("package.json", "jsconfig.json")  # plus tsconfig*.json
 _BATCH = 500  # blobs per `git cat-file --batch` call
 
 
@@ -45,7 +52,7 @@ class Snapshots:
             capture_output=True,
             check=True,
         ).stdout.decode(errors="replace")
-        paths = [p for p in listing.split("\0") if p.endswith(SNAPSHOT_SUFFIXES)]
+        paths = [p for p in listing.split("\0") if _wanted(p)]
         for i in range(0, len(paths), _BATCH):
             chunk = paths[i : i + _BATCH]
             blobs = sources.read_blobs(self.repo, [f"{sha}:{p}" for p in chunk])
@@ -54,4 +61,25 @@ class Snapshots:
                 file.parent.mkdir(parents=True, exist_ok=True)
                 file.write_bytes(data)
         dest.mkdir(parents=True, exist_ok=True)
+        for path in paths:
+            if path.rsplit("/", 1)[-1] == "package.json":
+                self._link_node_modules(dest, Path(path).parent)
         return dest
+
+    def _link_node_modules(self, dest: Path, package_dir: Path) -> None:
+        installed = self.repo / package_dir / "node_modules"
+        link = dest / package_dir / "node_modules"
+        if installed.is_dir() and not link.exists():
+            link.symlink_to(installed, target_is_directory=True)
+
+
+def _wanted(path: str) -> bool:
+    name = path.rsplit("/", 1)[-1]
+    if "node_modules" in path.split("/"):
+        return False  # vendored packages; the installed ones are linked in instead
+    return (
+        path.endswith(SNAPSHOT_SUFFIXES)
+        or name in PROJECT_FILES
+        or name.startswith("tsconfig")
+        and name.endswith(".json")
+    )

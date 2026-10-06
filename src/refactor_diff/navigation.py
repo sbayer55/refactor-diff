@@ -1,4 +1,4 @@
-"""Go-to-definition and find-references for Python, using Jedi.
+"""Go-to-definition and find-references: Jedi for Python, tsserver for TypeScript/JavaScript.
 
 Each side of a diff is resolved in its own revision: removed lines against a snapshot of the
 base commit, added and unchanged lines against the head (a snapshot, or the working tree).
@@ -15,6 +15,7 @@ from pathlib import Path
 
 import jedi
 
+from refactor_diff.languages import analyzer_for
 from refactor_diff.languages.base import split_lines
 from refactor_diff.snapshots import Snapshots
 
@@ -43,6 +44,46 @@ class Location:
 
 
 class Navigator:
+    """Dispatches each query to the backend for the file's language."""
+
+    def __init__(
+        self,
+        repo: Path,
+        snapshots: Snapshots,
+        python: str | None = None,
+        tsserver: str | None = None,
+    ):
+        from refactor_diff.tsserver import TsServerBackend  # imports this module's types
+
+        self.jedi = JediBackend(repo, snapshots, python)
+        self.tsserver = TsServerBackend(repo, snapshots, tsserver)
+
+    def _backend(self, path: str):
+        analyzer = analyzer_for(path)
+        if analyzer is None:
+            raise NavigationError(f"Code navigation isn't available for {path}.")
+        return self.jedi if analyzer.name == "python" else self.tsserver
+
+    def definitions(self, sha: str | None, path: str, line: int, col: int) -> list[Location]:
+        return self._backend(path).definitions(sha, path, line, col)
+
+    def references(self, sha: str | None, path: str, line: int, col: int) -> list[Location]:
+        return self._backend(path).references(sha, path, line, col)
+
+    def describe_environment(self, path: str) -> str:
+        return self._backend(path).describe_environment()
+
+    def library_source(self, path: str) -> str:
+        """Source of a library file that an earlier result pointed at."""
+        if path not in self.jedi.library_files | self.tsserver.library_files:
+            raise NavigationError("Only library files reached through navigation can be viewed.")
+        return Path(path).read_text(errors="replace")
+
+    def close(self) -> None:
+        self.tsserver.close()
+
+
+class JediBackend:
     def __init__(self, repo: Path, snapshots: Snapshots, python: str | None = None):
         self.repo = repo
         self.snapshots = snapshots
@@ -154,12 +195,6 @@ class Navigator:
             if not file.is_relative_to(self.repo):  # working-tree files can still change
                 self._lines[file] = lines
         return lines[line - 1] if 0 < line <= len(lines) else ""
-
-    def library_source(self, path: str) -> str:
-        """Source of a library file that an earlier result pointed at."""
-        if path not in self.library_files:
-            raise NavigationError("Only library files reached through navigation can be viewed.")
-        return Path(path).read_text(errors="replace")
 
 
 def to_dict(locations: list[Location]) -> list[dict]:

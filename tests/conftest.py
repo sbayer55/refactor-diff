@@ -42,8 +42,16 @@ def commit(repo: Path, files: dict[str, str | None], message: str = "edit") -> s
 @pytest.fixture
 def rename_repo(tmp_path: Path) -> Path:
     """A git repo with `main` (before/) and `feature` (after/) branches."""
-    project = FIXTURES / "rename_project"
-    repo = tmp_path / "repo"
+    return _fixture_repo(FIXTURES / "rename_project", tmp_path / "repo")
+
+
+@pytest.fixture
+def ts_rename_repo(tmp_path: Path) -> Path:
+    """The TypeScript counterpart of `rename_repo`."""
+    return _fixture_repo(FIXTURES / "ts_rename_project", tmp_path / "ts-repo")
+
+
+def _fixture_repo(project: Path, repo: Path) -> Path:
     shutil.copytree(project / "before", repo)
     _git(repo, "init", "-q", "-b", "main")
     _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "add", "-A")

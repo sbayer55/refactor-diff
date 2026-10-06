@@ -44,7 +44,7 @@ def verify_units(
 
     for path, mine in by_path.items():
         analyzer = analyzer_for(path)
-        if analyzer is None or path not in analyses:
+        if analyzer is None or path not in analyses or not hasattr(analyzer, "normalized_dump"):
             continue
         old_an, new_an = analyses[path]
         if old_an.tree is None or new_an.tree is None:
@@ -91,8 +91,8 @@ def _verify_moves(units, analyses, analyzer_for, mechanical) -> None:
         if not kinds <= VERIFIABLE:
             continue
         analyzer = analyzer_for(u.path)
-        if analyzer is None:
-            continue
+        if analyzer is None or not hasattr(analyzer, "parse_block"):
+            continue  # the language can't verify blocks
         old_text = "\n".join(ln.text for ln in d.old)
         new_text = "\n".join(ln.text for ln in u.new)
         old_tree, new_tree = analyzer.parse_block(old_text), analyzer.parse_block(new_text)

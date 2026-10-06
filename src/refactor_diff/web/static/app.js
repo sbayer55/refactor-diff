@@ -1412,7 +1412,7 @@ function renderFiles() {
   const label = { A: "added", M: "modified", D: "deleted", R: "renamed" };
   const v = state.view;
   let html = `<div class="page-head"><h2>Files</h2>
-    <p>Only Python files are analyzed for now; other files are listed but not collapsed.
+    <p>Python, TypeScript and JavaScript files are analyzed; other files are listed but not collapsed.
     Files hidden by filters are dimmed.</p></div>
     <table class="files"><thead><tr><th>Status</th><th>Path</th><th>Kind</th><th>+/−</th><th>To review</th><th>Analyzed</th></tr></thead><tbody>`;
   for (const f of r.files) {
@@ -1703,7 +1703,7 @@ document.addEventListener("keydown", onKey);
 
 // ---------- code navigation (go to definition / find references) ----------
 
-const ID_CHAR = /[\p{L}\p{N}_]/u;
+const ID_CHAR = /[\p{L}\p{N}_$]/u;
 
 function navHint() {
   return `<p class="nav-hint"><kbd>${MOD_KEY}</kbd>-click a name to go to its definition ·
@@ -1841,8 +1841,10 @@ function locHref(loc, side) {
 }
 
 function shortPath(p) {
-  const i = p.lastIndexOf("/site-packages/");
-  if (i >= 0) return p.slice(i + "/site-packages/".length);
+  for (const dir of ["/site-packages/", "/node_modules/"]) {
+    const i = p.lastIndexOf(dir);
+    if (i >= 0) return p.slice(i + dir.length);
+  }
   const t = p.lastIndexOf("/typeshed/");
   return t >= 0 ? p.slice(t + 1) : p;
 }

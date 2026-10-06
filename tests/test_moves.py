@@ -225,3 +225,20 @@ def test_added_parameter_groups_def_with_call_sites(tmp_path):
     assert g.mechanical and g.details == {"call": 2, "definition": 1}
     assert g.label == "def fetch(…) → def fetch(…, timeout=…)"
     assert report.stats()["residual_units"] == 0
+
+
+def test_moves_in_typescript_do_not_need_verification(tmp_path):
+    fn = (
+        "export function helper(x: number, y: number): number {\n  const total = x + y;\n"
+        "  if (total > 10) {\n    return total * 2;\n  }\n  return total;\n}\n"
+    )
+    repo = repo_with(
+        tmp_path,
+        {"a.ts": fn + "\nexport const X = 1;\n", "b.ts": "export const Y = 2;\n"},
+        {"a.ts": "export const X = 1;\n", "b.ts": "export const Y = 2;\n\n" + fn},
+    )
+    report = analyze(repo, "main", "feature")
+    [move] = move_groups(report)
+    assert move.label == "moved block: a.ts → b.ts"
+    assert report.stats()["residual_units"] == 0
+    assert not any(u.verified for u in report.units.values())

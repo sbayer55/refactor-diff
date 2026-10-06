@@ -36,11 +36,12 @@ def create_app(
     repo: Path,
     defaults: dict | None = None,
     python: str | None = None,
+    tsserver: str | None = None,
     state_dir: Path | None = None,
 ) -> Starlette:
     reports: dict[str, Report] = {}
     snapshots = Snapshots(repo)
-    navigator = Navigator(repo, snapshots, python)
+    navigator = Navigator(repo, snapshots, python, tsserver)
     store = ReviewStore(repo, state_dir)
 
     def hunks_of(report: Report) -> dict[str, str]:
@@ -145,7 +146,7 @@ def create_app(
         query = navigator.definitions if action == "definition" else navigator.references
         try:
             locations = await run_in_threadpool(query, _side_sha(report, side), path, line, col)
-            env = navigator.describe_environment()
+            env = navigator.describe_environment(path)
         except NavigationError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
         return JSONResponse(
@@ -258,6 +259,7 @@ def create_app(
     @contextlib.asynccontextmanager
     async def lifespan(app):
         yield
+        navigator.close()
         snapshots.close()
 
     return Starlette(

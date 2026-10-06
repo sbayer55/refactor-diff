@@ -133,6 +133,7 @@ class FileAnalysis:
 
 class LanguageAnalyzer(Protocol):
     name: str
+    globs: tuple[str, ...]  # git pathspecs for every file this language family analyzes
 
     def handles(self, path: str) -> bool: ...
 
@@ -152,6 +153,8 @@ class LanguageAnalyzer(Protocol):
         """Tokens that introduce a named definition (def, class, ...)."""
         ...
 
+    # Optional: analyzers without these (or that leave ``FileAnalysis.tree`` None) opt out of
+    # AST verification.
     def parse_block(self, text: str) -> object | None:
         """Parse a standalone block of code (dedented), or None if it doesn't parse."""
         ...
@@ -171,3 +174,11 @@ def split_lines(text: str) -> list[str]:
     if lines and lines[-1] == "":
         lines.pop()
     return [line.rstrip("\r") for line in lines]
+
+
+def char_col(lines: list[str], lineno: int, byte_col: int) -> int:
+    """Convert a UTF-8 byte offset (as parsers report it) to the character offset tokens use."""
+    if lineno - 1 >= len(lines):
+        return byte_col
+    line = lines[lineno - 1]
+    return len(line.encode("utf-8")[:byte_col].decode("utf-8", errors="replace"))

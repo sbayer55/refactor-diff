@@ -30,6 +30,7 @@ from refactor_diff.languages.base import (
     Pos,
     StmtSpan,
     Token,
+    char_col,
     split_lines,
 )
 
@@ -58,6 +59,7 @@ _FALLBACK_RE = re.compile(
 
 class PythonAnalyzer:
     name = "python"
+    globs = ("*.py", "*.pyi")
 
     def handles(self, path: str) -> bool:
         return path.endswith((".py", ".pyi"))
@@ -198,10 +200,10 @@ class _Positions:
         self.lines = lines
 
     def start(self, node: ast.AST) -> Pos:
-        return (node.lineno, _char_col(self.lines, node.lineno, node.col_offset))
+        return (node.lineno, char_col(self.lines, node.lineno, node.col_offset))
 
     def end(self, node: ast.AST) -> Pos:
-        return (node.end_lineno, _char_col(self.lines, node.end_lineno, node.end_col_offset))
+        return (node.end_lineno, char_col(self.lines, node.end_lineno, node.end_col_offset))
 
     def located(self, node: ast.AST | None) -> bool:
         return node is not None and getattr(node, "end_lineno", None) is not None
@@ -443,11 +445,3 @@ class _Normalize(ast.NodeTransformer):
         if node.value is None:
             return None
         return self.generic_visit(ast.Assign(targets=[node.target], value=node.value))
-
-
-def _char_col(lines: list[str], lineno: int, byte_col: int) -> int:
-    """ast reports UTF-8 byte offsets; tokens use character offsets."""
-    if lineno - 1 >= len(lines):
-        return byte_col
-    line = lines[lineno - 1]
-    return len(line.encode("utf-8")[:byte_col].decode("utf-8", errors="replace"))

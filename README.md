@@ -8,7 +8,8 @@ level, collapses the repeated mechanical edits into patterns such as
 `rename get_user → fetch_user ×42 in 17 files`, and shows you only the leftover changes
 that need a real review.
 
-It currently analyzes **Python only**. Other changed files are listed but not collapsed.
+It analyzes **Python, TypeScript and JavaScript** (`.py`, `.pyi`, `.ts`, `.tsx`, `.mts`,
+`.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`). Other changed files are listed but not collapsed.
 Support for more languages is planned (see [Roadmap](#roadmap)).
 
 ## Install
@@ -48,6 +49,7 @@ refactor-diff --worktree main          # uncommitted changes vs main
 refactor-diff --repo ../other --port 8000 --no-browser
 refactor-diff main..HEAD --hide tests,comments --exclude migrations
 refactor-diff main..HEAD --python ~/.virtualenvs/myproject   # environment for code navigation
+refactor-diff main..HEAD --tsserver ~/tools/node_modules/typescript   # TypeScript for navigation
 refactor-diff main..HEAD --editor cursor                      # "Open" links target Cursor
 ```
 
@@ -164,7 +166,7 @@ checked out.
 In both modes the gutter (line numbers and the `-`/`+` sign) is tinted red or green for removed
 and added lines, so changes stay visible. The Diff | Syntax toggle sits next to Unified |
 Split in the filter bar and the file viewer, and is remembered per browser. Highlighting is
-done in the browser (`web/static/syntax.js`); Python is the only language for now.
+done in the browser (`web/static/syntax.js`) for Python, TypeScript and JavaScript.
 
 ### Code navigation
 
@@ -181,9 +183,14 @@ the pointer.
 - **Environment:** imports of installed packages are resolved with your project's virtualenv:
   `.venv`, `venv` or `env` in the repository, or the one given with `--python`. Without one,
   navigation within the repository still works, but jumps into third-party packages won't.
+- **TypeScript and JavaScript** need Node.js and TypeScript: the repository's own
+  `node_modules/typescript`, a `tsserver` on your PATH, or the one given with `--tsserver`
+  (a `tsserver` executable, `tsserver.js`, or a `typescript` package directory). Each
+  package's installed `node_modules` is used to resolve imports, at both revisions.
 
-Navigation uses [Jedi](https://github.com/davidhalter/jedi). For a branch or PR, the Python
-files of each revision are written to a temporary snapshot on first use (well under a second
+Navigation uses [Jedi](https://github.com/davidhalter/jedi) for Python and TypeScript's
+`tsserver` for TypeScript and JavaScript. For a branch or PR, the source files of each revision
+(plus `package.json` and `tsconfig*.json`) are written to a temporary snapshot on first use (well under a second
 for a ~1,300-file repo) and deleted when the server stops. If the virtualenv has the project
 installed in editable mode, its paths are pointed at the snapshot, so imports resolve to the
 code at that revision rather than your current checkout.
@@ -266,7 +273,7 @@ Layout (`src/refactor_diff/`):
 |---|---|
 | `sources.py` | git, GitHub PR and working-tree loading; commit lists; posting PR comments via `gh` |
 | `hunks.py` | line diff, hunk grouping, candidate units |
-| `languages/` | language analyzers (`base.py` interface, `python.py`) |
+| `languages/` | language analyzers (`base.py` interface, `python.py`, `typescript.py`) |
 | `patterns.py` | token alignment, signature classification |
 | `grouping.py` | grouping, mechanical threshold, warnings (inconsistent renames, near misses) |
 | `moves.py` | moved-code detection and the import churn a move explains |
@@ -276,21 +283,27 @@ Layout (`src/refactor_diff/`):
 | `state.py` | reviewed marks and the previous analysis, in `~/.config/refactor-diff` |
 | `export.py` | the Markdown review summary |
 | `fileview.py` | whole-file diff of one changed file, for context and the old/new viewer |
-| `snapshots.py` | Python sources of a revision written to a temp dir, for navigation |
-| `navigation.py` | go-to-definition / find-references with Jedi |
+| `snapshots.py` | analyzable sources of a revision written to a temp dir, for navigation |
+| `navigation.py` | go-to-definition / find-references, dispatched by language; Jedi backend |
+| `tsserver.py` | TypeScript/JavaScript navigation backend (tsserver) |
 | `model.py` | serializable report model with stable IDs |
 | `web/` | Starlette server and the vanilla-JS single-page UI |
 
 ### Adding a language
 
 Implement the `LanguageAnalyzer` protocol in `languages/base.py`. It turns source text into
-tokens, type-annotation spans, statement spans, call sites, defs and imports, names the
-language's keywords, and can parse and normalize a block for verification. Then register the
-analyzer in `languages/__init__.py`. The rest of the pipeline does not depend on the language;
-an analyzer that leaves the structural fields empty simply opts out of moves, `args`,
-`import` and verification.
+tokens and type-annotation spans, names the language's keywords, and lists the `globs` used
+to search the repository for missed renames. Optionally it also exposes statement spans, call
+sites, defs and imports, and can parse and normalize a block for verification; an analyzer
+that leaves those empty simply opts out of moves, `args`, `import` and verification. Then
+register the analyzer in `languages/__init__.py`. The rest of the analysis pipeline does not
+depend on the language.
+
+For the UI, add a highlighter to `LANGUAGES` in `web/static/syntax.js`, and for code
+navigation a backend like `tsserver.py` that `Navigator` in `navigation.py` dispatches to
+(and the file suffixes to `SNAPSHOT_SUFFIXES` in `snapshots.py`).
 
 ## Roadmap
 
 - Apply or revert edits in the working tree from the UI
-- More languages (TypeScript, Go, …)
+- More languages (Go, …)
