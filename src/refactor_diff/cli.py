@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import os
+import signal
 import socket
 import sys
 import threading
 import webbrowser
+from collections.abc import Callable
 from pathlib import Path
+from typing import BinaryIO
 
 import uvicorn
 
@@ -72,6 +76,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--repo", type=Path, default=Path.cwd(), help="git repository (default: cwd)")
     p.add_argument("--port", type=int, default=0, help="port to listen on (default: random)")
     p.add_argument("--no-browser", action="store_true", help="don't open a browser window")
+    p.add_argument(
+        "--exit-with-parent",
+        action="store_true",
+        help="shut down when stdin closes (for a parent that pipes it, e.g. the desktop app)",
+    )
     return p.parse_args(argv)
 
 
@@ -126,6 +135,25 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
+def watch_parent(stdin: BinaryIO, on_closed: Callable[[], None]) -> None:
+    """Block until ``stdin`` hits EOF, then call ``on_closed``.
+
+    A parent that spawns us with a pipe on stdin closes it when it exits, even when it is
+    killed, so this is a portable way to never outlive it.
+    """
+    try:
+        while stdin.read(4096):
+            pass
+    except (OSError, ValueError):
+        pass
+    on_closed()
+
+
+def _terminate() -> None:
+    # SIGTERM lets uvicorn shut down gracefully, running the app's lifespan cleanup.
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     try:
@@ -135,9 +163,13 @@ def main(argv: list[str] | None = None) -> None:
 
     port = args.port or free_port()
     url = f"http://{HOST}:{port}/"
-    print(f"refactor-diff: serving {repo} at {url} (Ctrl+C to stop)")
+    print(f"refactor-diff: serving {repo} at {url} (Ctrl+C to stop)", flush=True)
     if not args.no_browser:
         threading.Timer(0.8, webbrowser.open, [url]).start()
+    if args.exit_with_parent:
+        threading.Thread(
+            target=watch_parent, args=(sys.stdin.buffer, _terminate), daemon=True
+        ).start()
     uvicorn.run(
         create_app(repo, defaults_from(args), args.python, args.tsserver),
         host=HOST,
