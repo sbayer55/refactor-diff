@@ -26,6 +26,29 @@ For development:
 uv sync
 ```
 
+### Desktop app (macOS)
+
+There is also a self-contained macOS app that bundles the backend, so it needs no Python
+on the machine it runs on (it still uses the `git`, `gh` and `node` it finds on your PATH).
+It opens with a folder picker and remembers recent repositories; you can also drop a
+repository on its Dock icon or run `open -a "Refactor Diff" ~/code/my-repo`.
+
+Building it requires [Rust](https://rustup.rs), Node 20+, the Xcode command line tools and
+`uv`:
+
+```bash
+cd desktop
+npm install
+npm run icons            # once: generates src-tauri/icons from app-icon.svg
+npm run build:sidecar    # freezes the Python backend with PyInstaller
+npm run dev              # run it
+npm run build            # bundles src-tauri/target/release/bundle/{macos,dmg}
+```
+
+The build is ad-hoc signed, not notarized: on another Mac, right-click the app and choose
+Open the first time. The app builds for the architecture it is built on; there is no
+universal build because the backend's native extensions are per-architecture.
+
 ## Usage
 
 Run it inside a git repository. It starts a local web UI on `127.0.0.1` and opens it in your browser:
@@ -288,6 +311,12 @@ Layout (`src/refactor_diff/`):
 | `tsserver.py` | TypeScript/JavaScript navigation backend (tsserver) |
 | `model.py` | serializable report model with stable IDs |
 | `web/` | Starlette server and the vanilla-JS single-page UI |
+
+The macOS app lives in `desktop/`: a [Tauri](https://tauri.app) shell (`src-tauri/`, Rust)
+that runs the backend frozen by PyInstaller (`sidecar.spec`) as a child process and shows
+its UI in a webview; `ui/index.html` is the landing page with the repository picker. To
+iterate on Python code without re-freezing, point the app at the checkout:
+`REFACTOR_DIFF_SIDECAR=$PWD/scripts/sidecar-dev.sh npm run dev`.
 
 ### Adding a language
 

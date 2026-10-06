@@ -1,6 +1,7 @@
 import subprocess
 import sys
 
+import jedi
 import pytest
 from starlette.testclient import TestClient
 
@@ -160,3 +161,18 @@ def test_snapshot_has_ts_sources_and_project_files(ts_rename_repo, tmp_path):
         "users.ts",
     ]
     assert (root / "node_modules").resolve() == (ts_rename_repo / "node_modules").resolve()
+
+
+def test_frozen_binary_prefers_a_system_interpreter(monkeypatch):
+    from refactor_diff import navigation
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(jedi, "find_system_environments", lambda: iter(["system"]))
+    monkeypatch.setattr(jedi, "get_default_environment", lambda: "default")
+    assert navigation._default_environment() == "system"
+
+    monkeypatch.setattr(jedi, "find_system_environments", lambda: iter([]))
+    assert navigation._default_environment() == "default"
+
+    monkeypatch.delattr(sys, "frozen")
+    assert navigation._default_environment() == "default"

@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Refactor Diff</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9; --fg: #1b1f24; --muted: #6b7280; --border: #d9dee5;
+    --card: #ffffff; --accent: #2563eb; --accent-fg: #ffffff; --danger: #b91c1c; --danger-bg: #fef2f2;
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15181d; --fg: #e6e8eb; --muted: #9aa3ad; --border: #2c323a;
+      --card: #1d2127; --accent: #3b82f6; --danger: #f87171; --danger-bg: #2a1a1a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--fg); display: grid; place-items: center; -webkit-user-select: none; user-select: none; }
+  main { width: min(560px, calc(100vw - 48px)); }
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 4px; }
+  p.lead { color: var(--muted); margin: 0 0 20px; }
+  button.primary {
+    font: inherit; font-weight: 600; color: var(--accent-fg); background: var(--accent);
+    border: 0; border-radius: 8px; padding: 10px 16px; cursor: pointer;
+  }
+  button.primary:hover { filter: brightness(1.08); }
+  button.primary:disabled { opacity: 0.6; cursor: default; }
+  kbd { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); margin-left: 8px; }
+  section { margin-top: 28px; }
+  h2 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 0 0 8px; }
+  ul.recents { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--card); overflow: hidden; }
+  ul.recents:empty { display: none; }
+  ul.recents li { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-top: 1px solid var(--border); cursor: pointer; }
+  ul.recents li:first-child { border-top: 0; }
+  ul.recents li:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  ul.recents .name { font-weight: 600; white-space: nowrap; }
+  ul.recents .path { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; flex: 1; }
+  ul.recents .remove { visibility: hidden; border: 0; background: none; color: var(--muted); font-size: 16px; cursor: pointer; padding: 0 4px; }
+  ul.recents li:hover .remove { visibility: visible; }
+  .empty { color: var(--muted); font-size: 13px; }
+  .error { display: none; margin-top: 20px; padding: 12px 14px; border-radius: 10px; background: var(--danger-bg); color: var(--danger); -webkit-user-select: text; user-select: text; }
+  .error.show { display: block; }
+  .error pre { margin: 8px 0 0; white-space: pre-wrap; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; max-height: 160px; overflow: auto; }
+  .status { display: none; color: var(--muted); margin-top: 20px; }
+  .status.show { display: block; }
+  footer { margin-top: 28px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Refactor Diff</h1>
+  <p class="lead">Review a refactor-heavy diff or pull request with the repeated edits collapsed.</p>
+
+  <button class="primary" id="open">Open Repository…<kbd>⌘O</kbd></button>
+
+  <div class="status" id="status"></div>
+  <div class="error" id="error"><div id="error-title"></div><pre id="error-detail"></pre></div>
+
+  <section>
+    <h2>Recent</h2>
+    <ul class="recents" id="recents"></ul>
+    <p class="empty" id="no-recents">Repositories you open will be listed here. You can also drop a folder on the Dock icon.</p>
+  </section>
+
+  <footer>Needs <code>git</code>; <code>gh</code> for pull requests. Review marks are kept in <code>~/.config/refactor-diff</code>.</footer>
+</main>
+
+<script>
+  const { invoke } = window.__TAURI__.core;
+  const { listen } = window.__TAURI__.event;
+
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const basename = (p) => p.replace(/\/+$/, "").split("/").pop() || p;
+
+  function showError(title, detail) {
+    $("error-title").textContent = title;
+    $("error-detail").textContent = detail || "";
+    $("error").classList.add("show");
+    setBusy(false);
+  }
+  function clearError() { $("error").classList.remove("show"); }
+
+  function setBusy(busy, message) {
+    $("open").disabled = busy;
+    $("status").textContent = message || "";
+    $("status").classList.toggle("show", busy);
+  }
+
+  async function renderRecents() {
+    const recents = await invoke("list_recents");
+    const ul = $("recents");
+    ul.innerHTML = recents.map((p) =>
+      `<li data-path="${esc(p)}"><span class="name">${esc(basename(p))}</span><span class="path">${esc(p)}</span>` +
+      `<button class="remove" title="Remove from recents" aria-label="Remove">×</button></li>`).join("");
+    $("no-recents").style.display = recents.length ? "none" : "";
+  }
+
+  async function openRepo(path) {
+    clearError();
+    setBusy(true, `Starting ${basename(path)}…`);
+    try {
+      await invoke("open_repo", { path });
+      // On success the window navigates to the review UI; nothing more to do here.
+    } catch (e) {
+      showError(`Couldn't open ${path}`, String(e));
+      renderRecents();
+    }
+  }
+
+  async function pickAndOpen() {
+    const path = await invoke("pick_repo");
+    if (path) await openRepo(path);
+  }
+
+  $("open").addEventListener("click", pickAndOpen);
+  $("recents").addEventListener("click", async (ev) => {
+    const li = ev.target.closest("li");
+    if (!li) return;
+    if (ev.target.closest(".remove")) {
+      await invoke("remove_recent", { path: li.dataset.path });
+      renderRecents();
+    } else {
+      openRepo(li.dataset.path);
+    }
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") clearError();
+  });
+
+  // The sidecar died while the review UI was showing; the app brought us back here.
+  listen("sidecar-exited", (ev) => {
+    const { code, signal, stderr } = ev.payload || {};
+    const how = code != null ? `exit code ${code}` : signal != null ? `signal ${signal}` : "unknown reason";
+    showError(`The backend stopped (${how}).`, stderr);
+  });
+
+  (async () => {
+    await renderRecents();
+    const status = await invoke("get_status");
+    if (status.lastError) showError(status.lastError.title, status.lastError.detail);
+    if (location.hash === "#loading" && status.repo) setBusy(true, `Starting ${basename(status.repo)}…`);
+  })();
+</script>
+</body>
+</html>

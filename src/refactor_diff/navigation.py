@@ -9,6 +9,7 @@ so project imports resolve to the code at that revision rather than the current 
 
 from __future__ import annotations
 
+import sys
 import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -83,6 +84,19 @@ class Navigator:
         self.tsserver.close()
 
 
+def _default_environment():
+    """Jedi's default environment, or a system Python when running as a frozen binary.
+
+    In a PyInstaller build ``sys.executable`` is the app itself, which Jedi can't use as an
+    interpreter, so it would silently fall back to in-process inference against the bundled
+    stdlib. Prefer a real interpreter from PATH in that case.
+    """
+    if getattr(sys, "frozen", False):
+        for env in jedi.find_system_environments():
+            return env
+    return jedi.get_default_environment()
+
+
 class JediBackend:
     def __init__(self, repo: Path, snapshots: Snapshots, python: str | None = None):
         self.repo = repo
@@ -104,7 +118,7 @@ class JediBackend:
                 self._env = (
                     jedi.create_environment(python, safe=False)
                     if python
-                    else jedi.get_default_environment()
+                    else _default_environment()
                 )
             except jedi.InvalidPythonEnvironment as e:
                 raise NavigationError(f"Can't use Python environment {python}: {e}") from e
