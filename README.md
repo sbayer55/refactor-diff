@@ -123,6 +123,40 @@ bar** along the bottom.
   that posts an inline review comment on the hunk's first unexplained line (new side when it
   has one). Both go through `gh`, as you, after one confirmation per session.
 
+### Ask the AI about a change
+
+Every hunk in **Needs review** has an **Ask** link (or press `a` on the focused hunk), and every
+changed line shows an **Ask** badge at its right edge when you hover it. Both open a menu of
+questions about that spot:
+
+- *Understand*: **Explain this change**, **How does this function work**, **Compare old vs
+  new**, **Who uses this**, **Why was this changed**.
+- *Review and risk*: **Review this change**, **Is this behavior-preserving**, **What could
+  break**.
+- A free-form prompt, with checkboxes for what to send along with the hunk.
+
+The menu greys out what doesn't apply (a line outside any function, a working tree with no
+commits) and says why. What the model sees is what refactor-diff already knows: the hunk with
+its pattern annotations, the enclosing function at both revisions, references from code
+navigation, the commits that touched the line, the pull request description, and the list of
+mechanical patterns. The answer streams into a band under the hunk; `L21` / `O20` references in
+it highlight those rows of the diff, and `path:line` mentions link to the file viewer. You can
+ask a follow-up, copy the answer, or (for a pull request) turn it into a review comment. Answers
+last for the browser session only.
+
+Nothing is sent until you pick a question. The provider in use is always visible: as a chip in
+the top bar, in the menu header, and on every answer. Click the chip to open **Settings** and
+configure one of:
+
+- **Claude**: an Anthropic API key and a model (default `claude-opus-5-5`).
+- **OpenAI-compatible endpoint**: a base URL, an optional key and a model. This covers a Cursor
+  proxy, OpenRouter, LM Studio, vLLM, or Ollama's `/v1` endpoint.
+- **Ollama**: the host (default `http://127.0.0.1:11434`), a model and the context window.
+
+**Test connection** checks the provider with the values in the dialog before you save. Settings
+are stored in `~/.config/refactor-diff/settings.json` (mode 600); the API key never leaves the
+machine except in requests to the provider you chose.
+
 ### Review marks survive restarts and new commits
 
 Reviewed marks are stored in `~/.config/refactor-diff/` (or `$XDG_CONFIG_HOME/refactor-diff/`),
@@ -338,6 +372,8 @@ Layout (`src/refactor_diff/`):
 | `categories.py` | file kinds (source, tests, docs, config, other) for filtering |
 | `engine.py` | `analyze()`, which turns a source into a `Report` |
 | `state.py` | reviewed marks and the previous analysis, in `~/.config/refactor-diff` |
+| `settings.py` | user settings (AI provider, key, model) next to the review marks |
+| `ai/` | the Ask menu: prompt context from a report (`context.py`), the predefined tasks (`tasks.py`), the Claude / OpenAI-compatible / Ollama providers (`providers.py`) |
 | `export.py` | the Markdown review summary |
 | `fileview.py` | whole-file diff of one changed file, for context and the old/new viewer |
 | `snapshots.py` | analyzable sources of a revision written to a temp dir, for navigation |

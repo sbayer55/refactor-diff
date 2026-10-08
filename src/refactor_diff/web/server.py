@@ -7,16 +7,20 @@ working tree) belong here as POST routes that take unit/group IDs from a cached 
 from __future__ import annotations
 
 import contextlib
+import json
+import time
 from pathlib import Path
 
 from starlette.applications import Starlette
-from starlette.concurrency import run_in_threadpool
+from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, PlainTextResponse
+from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from refactor_diff import sources
+from refactor_diff import settings, sources
+from refactor_diff.ai import providers, tasks
+from refactor_diff.ai.context import ContextBuilder, ContextError, render
 from refactor_diff.engine import analyze
 from refactor_diff.export import anchor_line, markdown_summary
 from refactor_diff.fileview import file_diff
@@ -38,11 +42,13 @@ def create_app(
     python: str | None = None,
     tsserver: str | None = None,
     state_dir: Path | None = None,
+    provider_factory=providers.build,
 ) -> Starlette:
     reports: dict[str, Report] = {}
     snapshots = Snapshots(repo)
     navigator = Navigator(repo, snapshots, python, tsserver)
     store = ReviewStore(repo, state_dir)
+    settings_root = state_dir
 
     def hunks_of(report: Report) -> dict[str, str]:
         return {h.fingerprint: h.path for h in report.hunks.values()}
@@ -256,6 +262,166 @@ def create_app(
             return JSONResponse({"error": str(e)}, status_code=400)
         return JSONResponse({"url": url, "path": path, "line": line, "side": side})
 
+    # --- settings and the Ask menu ---------------------------------------------------------
+
+    async def get_settings(request: Request):
+        return JSONResponse(settings.public_view(settings.load(settings_root)))
+
+    async def save_settings(request: Request):
+        body = await request.json()
+        try:
+            merged = settings.apply_update(settings.load(settings_root), body)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        saved = await run_in_threadpool(settings.save, merged, settings_root)
+        return JSONResponse(settings.public_view(saved))
+
+    async def test_settings(request: Request):
+        """Try the provider with ``{"provider", "config"}`` from the dialog (unsaved values)."""
+        body = await request.json()
+        try:
+            resolved = settings.resolve_test_config(
+                settings.load(settings_root), body.get("provider", ""), body.get("config")
+            )
+            provider = provider_factory(resolved)
+        except (ValueError, providers.ProviderError) as e:
+            return JSONResponse({"ok": False, "error": str(e), "latency_ms": None, "models": []})
+        return JSONResponse(await run_in_threadpool(provider.test))
+
+    def _focus(builder: ContextBuilder, body: dict):
+        line = body.get("line")
+        try:
+            line = int(line) if line not in (None, "") else None
+        except (TypeError, ValueError) as e:
+            raise ContextError("line must be an integer.") from e
+        return builder.focus(body.get("hunk_id", ""), body.get("side"), line)
+
+    async def ai_menu(request: Request):
+        """What the Ask menu shows for a location: the tasks with hints and availability."""
+        report = reports.get(request.path_params["report_id"])
+        if report is None:
+            return _unknown_report()
+        body = await request.json()
+        builder = ContextBuilder(report, repo, navigator)
+        try:
+            focus = _focus(builder, body)
+        except ContextError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        rows = await run_in_threadpool(tasks.menu, builder, focus)
+        fn = await run_in_threadpool(builder.function_piece, focus)
+        active = settings.public_view(settings.load(settings_root))["ai"]["active"]
+        return JSONResponse(
+            {
+                "focus": {
+                    "path": focus.path,
+                    "side": focus.side,
+                    "line": focus.line,
+                    "qualname": fn.qualname if fn else None,
+                },
+                "tasks": rows,
+                "provider": active,
+                "context": settings.load(settings_root)["ai"]["context"],
+            }
+        )
+
+    async def ai_refs_count(request: Request):
+        """How many references the enclosing def has (slow: runs code navigation)."""
+        report = reports.get(request.path_params["report_id"])
+        if report is None:
+            return _unknown_report()
+        body = await request.json()
+        builder = ContextBuilder(report, repo, navigator)
+        try:
+            focus = _focus(builder, body)
+        except ContextError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+
+        def count():
+            fn = builder.function_piece(focus)
+            refs = builder.references_piece(focus, fn)
+            if not refs or refs.get("error"):
+                return None
+            return refs["total"]
+
+        return JSONResponse({"count": await run_in_threadpool(count)})
+
+    async def ai_ask(request: Request):
+        """Run a task (or a custom prompt) for a location and stream the answer as SSE."""
+        report = reports.get(request.path_params["report_id"])
+        if report is None:
+            return _unknown_report()
+        body = await request.json()
+        task = tasks.BY_ID.get(body.get("task", ""))
+        if task is None:
+            return JSONResponse({"error": "Unknown task."}, status_code=400)
+        builder = ContextBuilder(report, repo, navigator)
+        try:
+            focus = _focus(builder, body)
+        except ContextError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        pieces = set(task.pieces)
+        prompt = ""
+        if task is tasks.CUSTOM:
+            prompt = (body.get("prompt") or "").strip()
+            if not prompt:
+                return JSONResponse({"error": "The prompt is empty."}, status_code=400)
+            want = body.get("pieces") or {}
+            pieces |= {p for p in ("function", "references", "pr") if want.get(p)}
+        history = body.get("history") or []
+        if not _valid_history(history):
+            return JSONResponse({"error": "Malformed follow-up history."}, status_code=400)
+        fn = await run_in_threadpool(builder.function_piece, focus)
+        why = task.unavailable(builder, focus, fn)
+        if why:
+            return JSONResponse(
+                {"error": f"{task.label} isn't available here: {why}."}, status_code=400
+            )
+        try:
+            provider = provider_factory(settings.load(settings_root))
+        except providers.ProviderError as e:
+            return JSONResponse({"error": str(e), "settings": True}, status_code=400)
+
+        def generate():
+            t0 = time.monotonic()
+            ctx = builder.collect(focus, pieces)
+            user = render(ctx)
+            if prompt:
+                user += f"\n\n## Question\n{prompt}"
+            sent = sorted(p for p in pieces if p in ctx and ctx[p] is not None)
+            yield _sse(
+                "meta",
+                {
+                    "provider": provider.name,
+                    "model": provider.model,
+                    "task": task.id,
+                    "focus": {"path": focus.path, "side": focus.side, "line": focus.line},
+                    "pieces": sent,
+                },
+            )
+            messages = [{"role": "user", "content": user}, *history]
+            try:
+                for text in provider.stream(tasks.system_prompt(task), messages):
+                    yield _sse("delta", {"text": text})
+            except providers.ProviderError as e:
+                yield _sse("error", {"message": str(e)})
+                return
+            yield _sse("done", {"elapsed_ms": int((time.monotonic() - t0) * 1000)})
+
+        gen = generate()
+
+        async def stream():
+            try:
+                async for chunk in iterate_in_threadpool(gen):
+                    yield chunk
+            finally:
+                await run_in_threadpool(gen.close)
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     @contextlib.asynccontextmanager
     async def lifespan(app):
         yield
@@ -284,9 +450,33 @@ def create_app(
             Route("/api/report/{report_id}/navigate", navigate, methods=["POST"]),
             Route("/api/report/{report_id}/source", get_source),
             Route("/api/library", get_library),
+            Route("/api/settings", get_settings),
+            Route("/api/settings", save_settings, methods=["POST"]),
+            Route("/api/settings/test", test_settings, methods=["POST"]),
+            Route("/api/report/{report_id}/ai/menu", ai_menu, methods=["POST"]),
+            Route("/api/report/{report_id}/ai/refs-count", ai_refs_count, methods=["POST"]),
+            Route("/api/report/{report_id}/ai/ask", ai_ask, methods=["POST"]),
             Mount("/static", StaticFiles(directory=STATIC), name="static"),
         ],
     )
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+def _valid_history(history) -> bool:
+    """Follow-up turns: alternating assistant/user, starting with assistant, ending with user."""
+    if not isinstance(history, list):
+        return False
+    if not history:
+        return True
+    for i, turn in enumerate(history):
+        if not isinstance(turn, dict) or not isinstance(turn.get("content"), str):
+            return False
+        if turn.get("role") != ("assistant" if i % 2 == 0 else "user"):
+            return False
+    return len(history) % 2 == 0
 
 
 def _unknown_report() -> JSONResponse:
