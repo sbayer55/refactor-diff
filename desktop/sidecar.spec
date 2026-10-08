@@ -43,7 +43,8 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=["tkinter", "pytest", "_pytest", "httpx2", "ruff"],
+    # httpx2 is a runtime dependency now (the Anthropic SDK and the Ollama/OpenAI providers).
+    excludes=["tkinter", "pytest", "_pytest", "ruff"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

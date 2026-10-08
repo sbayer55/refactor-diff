@@ -170,7 +170,7 @@ def _resolve_pr(repo: Path, number: int) -> ResolvedSource:
         "view",
         str(number),
         "--json",
-        "number,title,url,baseRefName,headRefName,baseRefOid,headRefOid",
+        "number,title,url,body,baseRefName,headRefName,baseRefOid,headRefOid",
     )
     base_sha, head_sha = info["baseRefOid"], info["headRefOid"]
     if not has_commit(repo, head_sha):

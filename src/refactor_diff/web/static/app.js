@@ -23,6 +23,9 @@ const state = {
   commits: [], // commits between base and head (see /api/report/{id}/commits)
   parent: null, // {id, label} of the whole-range report while viewing one of its commits
   postingOk: false, // the user confirmed posting to the PR in this session
+  ai: null, // the active AI provider {provider, model, configured} (see /api/settings)
+  aiContext: null, // default context pieces for custom prompts
+  answers: new Map(), // hunk id -> AI answers for this browser session (see ask())
 };
 
 // Side-by-side needs room for two code columns; narrower windows always get unified diffs.
@@ -883,11 +886,14 @@ function hunkHtml(h) {
       <label class="review-box" title="Reviewed (x)"><input type="checkbox" data-review-hunk="${h.fingerprint}" ${done ? "checked" : ""}></label>
       <span>@@ line ${h.new_start} @@</span>
       ${hunkIsNew(h) ? `<span class="badge-new" title="Not in the diff last time">new</span>` : ""}
+      <span class="badge-new" data-answers-badge ${answersOf(h.id).length ? "" : "hidden"}>${plural(answersOf(h.id).length, "answer")}</span>
       <span class="spacer"></span>
+      <button type="button" class="link ask" data-hunk-ask title="Ask the AI about this hunk (a)" ${
+        answersOf(h.id).some((a) => a.status === "streaming") ? "disabled" : ""}>${SPARK}Ask</button>
       ${state.report.source.pr ? `<button type="button" class="link" data-hunk-comment title="Comment on this hunk in the PR (c)">Comment</button>` : ""}
       <button type="button" class="link" data-hunk-open>${done ? "Show" : "Hide"}</button>
       <button type="button" class="link" data-hunk-context>Show context</button></div>
-    <table class="diff">${hunkRows(h)}</table></div>`;
+    <table class="diff">${hunkRows(h)}</table>${answersHtml(h.id)}</div>`;
 }
 
 // What changed since the previous analysis of the same comparison (new commits pushed).
@@ -926,7 +932,7 @@ function hunkRows(h) {
     }
     lines.push({ t: ln.type, o: ln.old_no, n: ln.new_no, text: ln.text, unit: ln.unit, hl: ln.hl });
   }
-  return diffRows(lines, { tags: true, path: h.path });
+  return diffRows(lines, { tags: true, path: h.path, ask: true });
 }
 
 // Rows for a list of diff lines ({t, o, n, text, unit, hl}) from the file at `opts.path`.
@@ -960,16 +966,17 @@ function tagRow(st, tagged, lead, span) {
 
 // `anchors` adds data-o / data-n line attributes and marks where each run of changes starts
 // (used by the file viewer for jumping to a line and between changes).
-function unifiedRows(lines, { tags = false, focus = null, anchors = false, path = null, syntax = null } = {}) {
+function unifiedRows(lines, { tags = false, focus = null, anchors = false, path = null, syntax = null, ask = false } = {}) {
   const sx = syntax || syntaxSpans(lines, path);
   const plain = oneSided(path);
   const tagged = new Set();
   let rows = "";
   let prevChanged = false;
+  const span = ask ? 2 : 1;
   for (const ln of lines) {
     const st = lineState(ln, focus);
-    if (tags) rows += tagRow(st, tagged, 3, 1);
-    if (ln.from) { rows += fromRow(ln, 3, 1); continue; }
+    if (tags) rows += tagRow(st, tagged, 3, span);
+    if (ln.from) { rows += fromRow(ln, 3, span); continue; }
     const changed = ln.t !== " ";
     const attrs = anchors ? anchorAttrs(ln.o, ln.n) : "";
     const p = ln.path || path;
@@ -978,10 +985,17 @@ function unifiedRows(lines, { tags = false, focus = null, anchors = false, path 
       <td class="no">${ln.o ?? ""}</td><td class="no">${ln.n ?? ""}</td>
       <td class="sign">${ln.t === " " ? "" : ln.t}</td>
       <td class="text${plain ? " plain" : ""}"${ln.t === "-" ? navAttrs(p, "o", ln.o) : navAttrs(p, "n", ln.n)}>${
-        codeHtml(ln, sx, plain)}</td></tr>`;
+        codeHtml(ln, sx, plain)}</td>${ask ? askCell(ln.t === "-" ? "o" : "n", ln.t === "-" ? ln.o : ln.n, changed) : ""}</tr>`;
     prevChanged = changed;
   }
   return rows;
+}
+
+// The right-edge cell of a hunk row: an Ask badge on changed lines (shown on hover).
+function askCell(side, num, changed) {
+  if (!changed || !num) return '<td class="act"></td>';
+  return `<td class="act"><button type="button" class="ask-line" data-ask-line data-sd="${side}" data-ln="${num}" title="Ask the AI about this line" aria-label="Ask about ${
+    side === "o" ? "original" : "new"} line ${num}">${SPARK}Ask</button></td>`;
 }
 
 // A label row above lines pulled in from elsewhere ("moved from a.py:12").
@@ -991,11 +1005,12 @@ function fromRow(ln, lead, span) {
 
 // Side by side: removed lines on the left, added lines on the right, paired in order within
 // each block of changes; unchanged lines appear on both sides.
-function splitRows(lines, { tags = false, focus = null, anchors = false, path = null, syntax = null } = {}) {
+function splitRows(lines, { tags = false, focus = null, anchors = false, path = null, syntax = null, ask = false } = {}) {
   const sx = syntax || syntaxSpans(lines, path);
   const tagged = new Set();
   let rows = "";
   let prevChanged = false;
+  const span = ask ? 4 : 3;
   const cell = (ln, side) => {
     if (!ln) return `<td class="no"></td><td class="side empty"></td>`;
     const st = lineState(ln, focus);
@@ -1007,14 +1022,14 @@ function splitRows(lines, { tags = false, focus = null, anchors = false, path = 
   for (const [left, right] of pairLines(lines)) {
     if (tags) {
       for (const ln of left === right ? [left] : [left, right].filter(Boolean)) {
-        rows += tagRow(lineState(ln, focus), tagged, 1, 3);
+        rows += tagRow(lineState(ln, focus), tagged, 1, span);
       }
     }
-    if (left && left.from) { rows += fromRow(left, 1, 3); continue; }
+    if (left && left.from) { rows += fromRow(left, 1, span); continue; }
     const changed = left !== right;
     const attrs = anchors ? anchorAttrs(left?.o, right?.n) : "";
     rows += `<tr class="split-row${anchors && changed && !prevChanged ? " chg-start" : ""}"${attrs}>${
-      cell(left, "old")}${cell(right, "new")}</tr>`;
+      cell(left, "old")}${cell(right, "new")}${ask ? askCell(right ? "n" : "o", right ? right.n : left?.o, changed) : ""}</tr>`;
     prevChanged = changed;
   }
   return rows;
@@ -1311,6 +1326,8 @@ async function onContentClick(e) {
       route({ keepScroll: true });
     } else if ("hunkComment" in btn.dataset) {
       openCommentBox(btn.closest(".hunk"));
+    } else if ("hunkAsk" in btn.dataset || "askLine" in btn.dataset || btn.closest(".ai-answer")) {
+      await onAskClick(btn);
     } else if (btn.dataset.analyzeCommit) {
       await analyzeCommit(btn.dataset.analyzeCommit);
     } else if (btn.id === "banner-new") {
@@ -1583,6 +1600,7 @@ const KEY_HELP = [
     ["e", "", "show context for the focused hunk; again to reveal more"],
     ["o", "", "open the focused hunk in your editor"],
     ["c", "", "comment on the focused hunk (pull requests)"],
+    ["a", "", "ask the AI about the focused hunk"],
   ]],
   ["Navigate", [
     ["]", "[", "next / previous mechanical pattern"],
@@ -1701,6 +1719,7 @@ function onKey(e) {
   const inField = e.target.closest?.("input, textarea, select, [contenteditable]");
   if (e.key === "Escape") {
     if ($("#help").open) $("#help").close();
+    if (askMenu) { closeAskMenu(); return; }
     hideNavPanel();
     if (inField) e.target.blur();
     $("#comment-box")?.remove();
@@ -1731,6 +1750,7 @@ function onKey(e) {
     case "e": expandFocused(); break;
     case "o": { const at = focusedLocation(); if (at) openInEditor(at.path, at.line); break; }
     case "c": { const el = focusedElement(); if (el) openCommentBox(el); break; }
+    case "a": { const el = focusedElement(); if (el?.dataset.hunk) openAskMenu(el, el.querySelector("[data-hunk-ask]")); break; }
     default: return;
   }
   e.preventDefault();
@@ -2072,6 +2092,19 @@ async function init() {
     if (i >= 0 && i !== state.focus) { state.focus = i; applyFocus(false); }
   });
   $("#content").addEventListener("click", onCodeClick, true);
+  $("#content").addEventListener("mouseover", (e) => { const c = e.target.closest(".cite"); if (c) setCiteHighlight(c, true); });
+  $("#content").addEventListener("mouseout", (e) => { const c = e.target.closest(".cite"); if (c) setCiteHighlight(c, false); });
+  $("#content").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.matches("[data-ai-follow]")) {
+      e.preventDefault();
+      e.target.closest(".ai-answer").querySelector("[data-ai-send]").click();
+    }
+  });
+  document.addEventListener("mousedown", (e) => { if (askMenu && !askMenu.el.contains(e.target)) closeAskMenu(); });
+  window.addEventListener("scroll", () => { if (askMenu) placeAskMenu(); }, { passive: true });
+  window.addEventListener("resize", () => { if (askMenu) placeAskMenu(); });
+  window.addEventListener("hashchange", closeAskMenu);
+  $("#ai-chip").addEventListener("click", (e) => { e.preventDefault(); showSettings(); });
   $("#content").addEventListener("mousedown", onCodeMouseDown);
   $("#content").addEventListener("mousemove", onCodeMouseMove);
   document.addEventListener("keyup", (e) => {
@@ -2098,8 +2131,661 @@ async function init() {
   if (defaults.head) form.head.value = defaults.head;
   if (defaults.pr) form.pr.value = defaults.pr;
   loadFilters(defaults.filters);
+  loadAiSettings();
   await loadSources(defaults);
   if (defaults.mode) runAnalysis();
+}
+
+// ---------- Ask: AI help on a hunk or a line ----------
+// An Ask link on every hunk bar and a badge on hovered diff lines open a menu of predefined
+// tasks (plus a custom prompt). The answer streams into a band under the hunk; it lives in
+// state.answers for this browser session only. Settings (provider, key, model) are on the
+// server in ~/.config/refactor-diff/settings.json; the top-bar chip shows what will be used.
+
+const ASK_TASKS = [
+  ["Understand", [
+    ["explain", "Explain this change"],
+    ["function", "How does this function work"],
+    ["compare", "Compare old vs new"],
+    ["uses", "Who uses this"],
+    ["why", "Why was this changed"],
+  ]],
+  ["Review and risk", [
+    ["review", "Review this change"],
+    ["preserving", "Is this behavior-preserving"],
+    ["break", "What could break"],
+  ]],
+];
+const ASK_LABELS = new Map(ASK_TASKS.flatMap(([, rows]) => rows));
+const PROVIDER_NAMES = { claude: "Claude", openai: "OpenAI-compatible", ollama: "Ollama" };
+const SPARK = '<svg class="spark" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"></path></svg>';
+let answerSeq = 0;
+
+function shortModel(model) {
+  return (model || "").replace(/^claude-/, "");
+}
+
+function providerLabel(ai = state.ai) {
+  if (!ai) return "";
+  const name = PROVIDER_NAMES[ai.provider] || ai.provider;
+  return ai.model ? `${name} · ${shortModel(ai.model)}` : name;
+}
+
+function providerPill(ai = state.ai) {
+  return `<span class="pill ai-provider">${esc(providerLabel(ai))}</span>`;
+}
+
+async function loadAiSettings() {
+  try {
+    const data = await api("/api/settings");
+    state.ai = data.ai.active;
+    state.aiContext = data.ai.context;
+  } catch {
+    state.ai = null;
+  }
+  renderAiChip();
+}
+
+function renderAiChip() {
+  const chip = $("#ai-chip");
+  if (!chip) return;
+  const ai = state.ai;
+  chip.innerHTML = ai && ai.configured
+    ? `${SPARK} AI <b>${esc(providerLabel(ai))}</b>`
+    : `${SPARK} AI <b>not set up</b>`;
+  chip.title = ai && ai.configured ? "AI provider · open settings" : "Set up an AI provider";
+}
+
+function answersOf(hunkId) {
+  return state.answers.get(hunkId) || [];
+}
+
+// The answer band under a hunk, from state (so re-renders keep it).
+function answersHtml(hunkId) {
+  const list = answersOf(hunkId);
+  if (!list.length) return "";
+  return `<div class="ai-band">${list.map(answerHtml).join("")}</div>`;
+}
+
+function answerHtml(a) {
+  const custom = a.task === "custom";
+  const turns = a.turns.map((t, i) => t.role === "user"
+    ? `<div class="ai-you"><span class="chip">You</span><div>${esc(t.text)}</div></div>`
+    : `<div class="ai-card" data-turn="${i}">${answerBody(a, t.text)}</div>`).join("");
+  return `<div class="ai-answer" data-answer="${a.id}">
+    <div class="ai-head">${answerHead(a)}</div>
+    <div class="ai-turns">${turns}</div>
+    ${a.status === "streaming" ? "" : `<div class="ai-follow">
+      <span class="chip loc">${esc(shortPath(a.focus.path))}:${a.focus.line}</span>
+      <input type="text" placeholder="Follow up… (${MOD_KEY}⏎)" data-ai-follow aria-label="Follow-up question">
+      <button type="button" class="link" data-ai-send>Send</button></div>`}
+  </div>`;
+}
+
+function answerHead(a) {
+  const status = a.status === "streaming" ? `<span class="ai-status live"><span class="dot"></span>answering…</span>`
+    : a.status === "error" ? `<span class="ai-status error">${esc(a.error)}</span>`
+    : a.status === "stopped" ? `<span class="ai-status">stopped</span>`
+    : a.elapsed ? `<span class="ai-status">${(a.elapsed / 1000).toFixed(1)} s</span>` : "";
+  const actions = a.status === "streaming"
+    ? `<button type="button" class="link stop" data-ai-stop>Stop</button>`
+    : `<button type="button" class="link" data-ai-copy>Copy</button>
+       ${a.status === "error" ? `<button type="button" class="link" data-ai-retry>Retry</button>` : ""}
+       ${prNumber() && a.status === "done" ? `<button type="button" class="link" data-ai-comment>Post as comment</button>` : ""}
+       <button type="button" class="link muted" data-ai-dismiss>Dismiss</button>`;
+  return `<span class="kind ai">AI</span><span class="ai-title">${esc(a.label)}</span>
+    ${providerPill({ provider: a.provider, model: a.model })}${status}<span class="spacer"></span>${actions}`;
+}
+
+function answerBody(a, text) {
+  if (!text) return a.status === "streaming" ? '<span class="cursor"></span>' : '<p class="muted">(no answer)</p>';
+  return citeLinks(renderMarkdown(text), a) + (a.status === "streaming" ? '<span class="cursor"></span>' : "");
+}
+
+// A small, escape-first Markdown renderer: paragraphs, lists, fenced code, bold, italics,
+// code spans, headings (as bold lines). Everything is HTML-escaped before any markup is added,
+// so model output can't inject HTML.
+function renderMarkdown(src) {
+  const lines = src.replace(/\r/g, "").split("\n");
+  const para = [];
+  let html = "";
+  let i = 0;
+  const flush = () => { if (para.length) { html += `<p>${mdInline(para.join(" "))}</p>`; para.length = 0; } };
+  const ITEM = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/;
+  while (i < lines.length) {
+    const ln = lines[i];
+    if (/^\s*```/.test(ln)) {
+      flush();
+      const buf = [];
+      i++;
+      while (i < lines.length && !/^\s*```/.test(lines[i])) buf.push(lines[i++]);
+      i++;
+      html += `<pre><code>${esc(buf.join("\n"))}</code></pre>`;
+      continue;
+    }
+    const item = ITEM.exec(ln);
+    if (item) {
+      flush();
+      const ordered = /^\s*\d/.test(ln);
+      const items = [];
+      while (i < lines.length) {
+        const m = ITEM.exec(lines[i]);
+        if (m) { items.push(m[1]); i++; continue; }
+        if (/^\s+\S/.test(lines[i]) && items.length) { items[items.length - 1] += " " + lines[i].trim(); i++; continue; }
+        break;
+      }
+      const tag = ordered ? "ol" : "ul";
+      html += `<${tag}>${items.map((x) => `<li>${mdInline(x)}</li>`).join("")}</${tag}>`;
+      continue;
+    }
+    const h = /^#{1,6}\s+(.*)$/.exec(ln);
+    if (h) { flush(); html += `<p><b>${mdInline(h[1])}</b></p>`; i++; continue; }
+    if (!ln.trim()) { flush(); i++; continue; }
+    para.push(ln.trim());
+    i++;
+  }
+  flush();
+  return html;
+}
+
+function mdInline(text) {
+  const codes = [];
+  let s = esc(text).replace(/`([^`]+)`/g, (_, c) => { codes.push(c); return `\u0000${codes.length - 1}\u0000`; });
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  s = s.replace(/(^|[\s(])\*([^*\s][^*]*)\*(?=[\s).,;:!?]|$)/g, "$1<i>$2</i>");
+  s = s.replace(/(^|[\s(])_([^_\s][^_]*)_(?=[\s).,;:!?]|$)/g, "$1<i>$2</i>");
+  return s.replace(/\u0000(\d+)\u0000/g, (_, k) => `<code>${codes[k]}</code>`);
+}
+
+// Turn `L21` / `O20` / `L17–18` into chips that highlight those rows of the hunk, and
+// `path:line` into links to the file viewer, when the hunk/report actually has them.
+function citeLinks(html, a) {
+  const h = state.report.hunks[a.hunkId];
+  const has = (side, n) => h && h.lines.some((ln) => (side === "n" ? ln.new_no : ln.old_no) === n);
+  html = html.replace(/(<code>)?\b([LO])(\d+)(?:[–-](\d+))?\b(<\/code>)?/g, (m, open, letter, from, to, close) => {
+    if (Boolean(open) !== Boolean(close)) return m;
+    const side = letter === "L" ? "n" : "o";
+    const lo = Number(from), hi = Number(to || from);
+    if (!has(side, lo) && !has(side, hi)) return m;
+    return `<button type="button" class="cite" data-cite-side="${side}" data-cite-from="${lo}" data-cite-to="${hi}" title="Highlight ${
+      side === "n" ? "new" : "original"} line${hi !== lo ? "s" : ""} ${lo}${hi !== lo ? `–${hi}` : ""}">${letter}${from}${to ? `–${to}` : ""}</button>`;
+  });
+  const files = new Set(state.report.files.map((f) => f.path));
+  return html.replace(/(<code>)?\b((?:[\w.-]+\/)*[\w.-]+\.(?:py|pyi|ts|tsx|mts|cts|js|jsx|mjs|cjs)):(\d+)\b(<\/code>)?/g,
+    (m, open, path, line, close) => {
+      if (Boolean(open) !== Boolean(close) || !files.has(path)) return m;
+      return `<a class="file-ref" href="${fileHref(path, "diff", "n" + line)}">${esc(path)}:${line}</a>`;
+    });
+}
+
+function hunkElement(hunkId) {
+  return document.querySelector(`#content .hunk[data-hunk="${CSS.escape(hunkId)}"]`);
+}
+
+// Re-render the band of one hunk (and the answers count on its bar) from state.
+function renderAnswers(hunkId) {
+  const el = hunkElement(hunkId);
+  if (!el) return;
+  el.querySelector(".ai-band")?.remove();
+  const html = answersHtml(hunkId);
+  if (html) el.insertAdjacentHTML("beforeend", html);
+  const badge = el.querySelector("[data-answers-badge]");
+  const n = answersOf(hunkId).length;
+  if (badge) {
+    badge.hidden = !n;
+    badge.textContent = `${n} answer${n === 1 ? "" : "s"}`;
+  }
+  const ask = el.querySelector("[data-hunk-ask]");
+  if (ask) ask.disabled = answersOf(hunkId).some((a) => a.status === "streaming");
+}
+
+// --- the menu ---
+
+let askMenu = null; // {el, hunkId, focus, anchor}
+
+function closeAskMenu() {
+  if (!askMenu) return;
+  askMenu.el.remove();
+  askMenu = null;
+}
+
+function openAskMenu(hunkEl, anchor, { side = null, line = null } = {}) {
+  closeAskMenu();
+  if (!hunkEl || !hunkEl.dataset.hunk) return;
+  const h = state.report.hunks[hunkEl.dataset.hunk];
+  let focus;
+  if (line) {
+    focus = { path: h.path, side: side === "o" ? "old" : "new", line };
+  } else {
+    const at = hunkAnchor(h);
+    focus = { path: h.path, side: at.new_no ? "new" : "old", line: at.new_no || at.old_no || h.new_start };
+  }
+  const menu = document.createElement("div");
+  menu.id = "ask-menu";
+  menu.setAttribute("role", "menu");
+  menu.setAttribute("aria-label", "Ask the AI");
+  const ready = state.ai && state.ai.configured;
+  const ctx = state.aiContext || { function: true, pr: true, references: false };
+  const rows = ASK_TASKS.map(([group, items]) => `<h4>${group}</h4>${items.map(([id, label]) =>
+    `<button type="button" class="ask-item" role="menuitem" data-task="${id}" ${ready ? "" : "disabled"}>
+      <span class="label">${esc(label)}</span><span class="hint" data-hint="${id}"></span></button>`).join("")}`).join("");
+  menu.innerHTML = `
+    <div class="ask-head">
+      <span class="mono">${esc(shortPath(focus.path))}:${focus.line}</span>
+      <span class="muted" data-ask-qualname></span>
+      <span class="spacer"></span>
+      <button type="button" class="pill ai-provider${ready ? "" : " unset"}" data-ask-settings title="${ready ? "Change the AI provider" : "Set up an AI provider"}">${
+        ready ? esc(providerLabel()) : "Set up AI"}</button>
+    </div>
+    ${rows}
+    <div class="ask-custom">
+      <div class="ask-prompt">
+        <span class="chip loc">${esc(shortPath(focus.path))}:${focus.line}</span>
+        <textarea rows="2" placeholder="Ask anything about this ${line ? "line" : "hunk"}…" ${ready ? "" : "disabled"} aria-label="Custom prompt"></textarea>
+      </div>
+      <div class="ask-ctx">
+        <label class="toggle"><input type="checkbox" checked disabled>Hunk</label>
+        <label class="toggle"><input type="checkbox" data-piece="function" ${ctx.function ? "checked" : ""}>Function</label>
+        <label class="toggle"><input type="checkbox" data-piece="references" ${ctx.references ? "checked" : ""}>References</label>
+        <label class="toggle" title="${prNumber() ? "Include the pull request description" : "Not a pull request"}"><input type="checkbox" data-piece="pr" ${ctx.pr && prNumber() ? "checked" : ""} ${prNumber() ? "" : "disabled"}>PR</label>
+        <span class="spacer"></span>
+        <button type="button" class="primary" data-ask-send ${ready ? "" : "disabled"}>Ask</button>
+      </div>
+      ${ready ? "" : `<p class="muted">Add a provider in <a href="#" data-ask-settings>Settings</a> to ask questions.</p>`}
+    </div>`;
+  document.body.appendChild(menu);
+  askMenu = { el: menu, hunkId: h.id, focus, anchor };
+  placeAskMenu();
+
+  menu.addEventListener("click", async (e) => {
+    const settingsBtn = e.target.closest("[data-ask-settings]");
+    if (settingsBtn) { e.preventDefault(); closeAskMenu(); showSettings(); return; }
+    const item = e.target.closest(".ask-item");
+    if (item && !item.disabled) {
+      const task = item.dataset.task;
+      closeAskMenu();
+      ask(h.id, focus, task, {});
+      return;
+    }
+    if (e.target.closest("[data-ask-send]")) submitCustom();
+  });
+  const submitCustom = () => {
+    const prompt = menu.querySelector("textarea").value.trim();
+    if (!prompt) { menu.querySelector("textarea").focus(); return; }
+    const pieces = {};
+    for (const box of menu.querySelectorAll("[data-piece]")) pieces[box.dataset.piece] = box.checked;
+    closeAskMenu();
+    ask(h.id, focus, "custom", { prompt, pieces });
+  };
+  menu.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { closeAskMenu(); anchor?.focus?.(); e.preventDefault(); return; }
+    if (e.target.tagName === "TEXTAREA") {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { submitCustom(); e.preventDefault(); }
+      return;
+    }
+    const items = [...menu.querySelectorAll(".ask-item:not(:disabled)")];
+    if (!items.length) return;
+    const cur = items.indexOf(document.activeElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      const next = e.key === "ArrowDown" ? (cur + 1) % items.length : (cur - 1 + items.length) % items.length;
+      items[next].focus();
+      e.preventDefault();
+    } else if (e.key === "Home") { items[0].focus(); e.preventDefault(); }
+    else if (e.key === "End") { items[items.length - 1].focus(); e.preventDefault(); }
+  });
+  (menu.querySelector(".ask-item:not(:disabled)") || menu.querySelector("[data-ask-settings]")).focus();
+  fillAskMenu(menu, h.id, focus);
+}
+
+function placeAskMenu() {
+  if (!askMenu) return;
+  const { el, anchor } = askMenu;
+  const r = anchor ? anchor.getBoundingClientRect() : { left: 80, right: 80, top: 80, bottom: 80 };
+  const w = el.offsetWidth, hgt = el.offsetHeight;
+  let left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8));
+  let top = r.bottom + 4;
+  if (top + hgt > window.innerHeight - 8) top = Math.max(8, r.top - hgt - 4);
+  el.style.left = `${left}px`;
+  el.style.top = `${top}px`;
+}
+
+// Hints and availability come from the server; the menu is usable before they arrive.
+async function fillAskMenu(menu, hunkId, focus) {
+  let res;
+  try {
+    res = await api(`/api/report/${state.report.id}/ai/menu`, { hunk_id: hunkId, side: focus.side, line: focus.line });
+  } catch (e) {
+    return;
+  }
+  if (!askMenu || askMenu.el !== menu) return;
+  const q = menu.querySelector("[data-ask-qualname]");
+  if (q && res.focus.qualname) q.textContent = `in ${res.focus.qualname}`;
+  let needRefs = false;
+  for (const t of res.tasks) {
+    const item = menu.querySelector(`.ask-item[data-task="${t.id}"]`);
+    if (!item) continue;
+    const hint = item.querySelector(".hint");
+    if (t.unavailable) {
+      item.disabled = true;
+      item.title = `Not available here: ${t.unavailable}`;
+      hint.textContent = "";
+    } else if (t.id === "preserving") {
+      hint.innerHTML = t.hint === "verified"
+        ? `<span class="tag verified">✓ verified</span>` : `<span class="tag near">not verified</span>`;
+    } else {
+      hint.textContent = t.hint || "";
+      if ((t.id === "uses" || t.id === "break") && state.ai?.configured) needRefs = true;
+    }
+  }
+  if (document.activeElement?.disabled) menu.querySelector(".ask-item:not(:disabled)")?.focus();
+  if (!needRefs) return;
+  try {
+    const { count } = await api(`/api/report/${state.report.id}/ai/refs-count`, { hunk_id: hunkId, side: focus.side, line: focus.line });
+    if (!askMenu || askMenu.el !== menu || count == null) return;
+    for (const id of ["uses", "break"]) {
+      const hint = menu.querySelector(`[data-hint="${id}"]`);
+      if (hint) hint.textContent = plural(count, "ref");
+    }
+  } catch {}
+}
+
+// --- asking ---
+
+function parseSse(buffer, onEvent) {
+  let idx;
+  while ((idx = buffer.indexOf("\n\n")) >= 0) {
+    const block = buffer.slice(0, idx);
+    buffer = buffer.slice(idx + 2);
+    let event = "message", data = "";
+    for (const line of block.split("\n")) {
+      if (line.startsWith("event:")) event = line.slice(6).trim();
+      else if (line.startsWith("data:")) data += line.slice(5).trim();
+    }
+    if (data) onEvent(event, JSON.parse(data));
+  }
+  return buffer;
+}
+
+async function ask(hunkId, focus, task, { prompt = "", pieces = null, answer = null, followUp = "" } = {}) {
+  if (!state.ai || !state.ai.configured) { showSettings(); return; }
+  let a = answer;
+  if (!a) {
+    a = {
+      id: `a${++answerSeq}`, hunkId, task, label: task === "custom" ? "Custom prompt" : ASK_LABELS.get(task),
+      focus, prompt, pieces, provider: state.ai.provider, model: state.ai.model,
+      status: "streaming", elapsed: 0, error: "", turns: [], controller: null,
+    };
+    if (task === "custom") a.turns.push({ role: "user", text: prompt });
+    a.turns.push({ role: "assistant", text: "" });
+    if (!state.answers.has(hunkId)) state.answers.set(hunkId, []);
+    state.answers.get(hunkId).push(a);
+  } else {
+    a.status = "streaming";
+    a.error = "";
+    if (followUp) a.turns.push({ role: "user", text: followUp });
+    if (a.turns[a.turns.length - 1].role !== "assistant") a.turns.push({ role: "assistant", text: "" });
+    else a.turns[a.turns.length - 1].text = "";
+  }
+  renderAnswers(hunkId);
+  const first = a.turns.findIndex((t) => t.role === "assistant");
+  const history = a.turns.slice(first, -1).map((t) => ({ role: t.role, content: t.text }));
+  const body = { task: a.task, hunk_id: hunkId, side: focus.side, line: focus.line, history };
+  if (a.task === "custom") { body.prompt = a.prompt; body.pieces = a.pieces || {}; }
+  const controller = new AbortController();
+  a.controller = controller;
+  const current = () => a.turns[a.turns.length - 1];
+  let frame = 0;
+  const paint = () => {
+    if (frame) return;
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      const card = document.querySelector(`[data-answer="${a.id}"] .ai-card:last-of-type`);
+      if (card) card.innerHTML = answerBody(a, current().text);
+    });
+  };
+  try {
+    const res = await fetch(`/api/report/${state.report.id}/ai/ask`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body), signal: controller.signal,
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { settings: data.settings });
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let finished = false;
+    while (!finished) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer = parseSse(buffer + decoder.decode(value, { stream: true }), (event, data) => {
+        if (event === "meta") { a.provider = data.provider; a.model = data.model; }
+        else if (event === "delta") { current().text += data.text; paint(); }
+        else if (event === "done") { a.status = "done"; a.elapsed = data.elapsed_ms; finished = true; }
+        else if (event === "error") { a.status = "error"; a.error = data.message; finished = true; }
+      });
+    }
+    if (a.status === "streaming") { a.status = "error"; a.error = "The connection closed before the answer finished."; }
+  } catch (e) {
+    if (e.name === "AbortError") {
+      a.status = "stopped";
+    } else {
+      a.status = "error";
+      a.error = e.message;
+      if (e.settings) toast(`${e.message}`, { error: true });
+    }
+  } finally {
+    cancelAnimationFrame(frame);
+    frame = 0;
+    a.controller = null;
+    if (a.status !== "streaming") renderAnswers(hunkId);
+  }
+}
+
+function answerById(id) {
+  for (const list of state.answers.values()) {
+    const a = list.find((x) => x.id === id);
+    if (a) return a;
+  }
+  return null;
+}
+
+function answerText(a) {
+  return a.turns.map((t) => (t.role === "user" ? `> ${t.text}` : t.text)).join("\n\n");
+}
+
+// Clicks inside answer bands and on line badges (called from onContentClick).
+async function onAskClick(btn) {
+  const answerEl = btn.closest(".ai-answer");
+  const a = answerEl ? answerById(answerEl.dataset.answer) : null;
+  if ("hunkAsk" in btn.dataset) {
+    openAskMenu(btn.closest(".hunk"), btn);
+  } else if ("askLine" in btn.dataset) {
+    openAskMenu(btn.closest(".hunk"), btn, { side: btn.dataset.s, line: Number(btn.dataset.l) });
+  } else if (a && "aiStop" in btn.dataset) {
+    a.controller?.abort();
+  } else if (a && "aiDismiss" in btn.dataset) {
+    a.controller?.abort();
+    const list = state.answers.get(a.hunkId) || [];
+    list.splice(list.indexOf(a), 1);
+    if (!list.length) state.answers.delete(a.hunkId);
+    renderAnswers(a.hunkId);
+  } else if (a && "aiCopy" in btn.dataset) {
+    try { await navigator.clipboard.writeText(answerText(a)); toast("Copied the answer."); }
+    catch { toast("Couldn't copy to the clipboard.", { error: true }); }
+  } else if (a && "aiRetry" in btn.dataset) {
+    ask(a.hunkId, a.focus, a.task, { answer: a });
+  } else if (a && "aiComment" in btn.dataset) {
+    const hunk = hunkElement(a.hunkId);
+    openCommentBox(hunk);
+    const ta = $("#comment-box textarea");
+    if (ta) { ta.value = answerText(a); ta.focus(); }
+  } else if (a && "aiSend" in btn.dataset) {
+    const input = answerEl.querySelector("[data-ai-follow]");
+    const text = input.value.trim();
+    if (!text) { input.focus(); return; }
+    ask(a.hunkId, a.focus, a.task, { answer: a, followUp: text });
+  } else if (btn.dataset.citeSide) {
+    const rows = citedRows(btn);
+    rows[0]?.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (!rows.length) {
+      const path = a ? a.focus.path : null;
+      if (path) location.hash = fileHref(path, "diff", (btn.dataset.citeSide === "n" ? "n" : "o") + btn.dataset.citeFrom);
+    }
+  }
+}
+
+function citedRows(cite) {
+  const hunk = cite.closest(".hunk");
+  if (!hunk) return [];
+  const side = cite.dataset.citeSide, lo = Number(cite.dataset.citeFrom), hi = Number(cite.dataset.citeTo);
+  const rows = [];
+  for (const cell of hunk.querySelectorAll(`.diff td.text[data-s="${side}"], .diff td.side[data-s="${side}"]`)) {
+    const n = Number(cell.dataset.l);
+    if (n >= lo && n <= hi) rows.push(cell.closest("tr"));
+  }
+  return rows;
+}
+
+function setCiteHighlight(cite, on) {
+  for (const row of citedRows(cite)) row.classList.toggle("cite", on);
+}
+
+// --- settings dialog ---
+
+async function showSettings() {
+  let data;
+  try { data = await api("/api/settings"); } catch (e) { toast(e.message, { error: true }); return; }
+  const ai = data.ai;
+  const dlg = $("#settings");
+  const field = (label, name, value, { type = "text", width = "", placeholder = "", list = "", hint = "" } = {}) =>
+    `<label class="field ${width}">${label}${hint ? ` <span class="muted">${hint}</span>` : ""}
+      <input name="${name}" type="${type}" value="${esc(String(value ?? ""))}" placeholder="${esc(placeholder)}" ${list ? `list="${list}"` : ""} autocomplete="off" spellcheck="false"></label>`;
+  const p = ai.providers;
+  dlg.innerHTML = `
+    <header><span class="kind ai">AI</span><h3>Assistant settings</h3><span class="meta muted">Used by Ask on every hunk and line</span>
+      <button type="button" class="close" aria-label="Close" id="settings-close">×</button></header>
+    <form id="settings-form" class="settings-body" autocomplete="off">
+      <div class="settings-row">
+        <span class="muted">Provider</span>
+        <div class="segmented" role="tablist" aria-label="AI provider">
+          ${["claude", "openai", "ollama"].map((id) => `<button type="button" role="tab" data-provider="${id}" aria-selected="${ai.provider === id}">${PROVIDER_NAMES[id]}</button>`).join("")}
+        </div>
+        <span class="ai-status" id="settings-status"></span>
+        <span class="spacer"></span>
+        <button type="button" class="toggle" id="settings-test">Test connection</button>
+      </div>
+      <div class="fields" data-fields="claude" ${ai.provider === "claude" ? "" : "hidden"}>
+        ${field("API key", "claude.api_key", p.claude.api_key, { type: "password", width: "wide", placeholder: "sk-ant-…" })}
+        ${field("Model", "claude.model", p.claude.model, { list: "claude-models" })}
+        ${field("Base URL", "claude.base_url", p.claude.base_url, { width: "wide", placeholder: "https://api.anthropic.com", hint: "(optional)" })}
+        <datalist id="claude-models"><option value="claude-opus-5-5"><option value="claude-sonnet-5-5"><option value="claude-haiku-5-5"></datalist>
+      </div>
+      <div class="fields" data-fields="openai" ${ai.provider === "openai" ? "" : "hidden"}>
+        ${field("Base URL", "openai.base_url", p.openai.base_url, { width: "wide", placeholder: "http://127.0.0.1:8080/v1" })}
+        ${field("API key", "openai.api_key", p.openai.api_key, { type: "password", hint: "(if required)" })}
+        ${field("Model", "openai.model", p.openai.model, { list: "openai-models" })}
+        <datalist id="openai-models"></datalist>
+        <p class="muted">Any endpoint that speaks the OpenAI chat-completions API: a Cursor proxy, OpenRouter, LM Studio, vLLM, or Ollama's <span class="mono">/v1</span>.</p>
+      </div>
+      <div class="fields" data-fields="ollama" ${ai.provider === "ollama" ? "" : "hidden"}>
+        ${field("Host", "ollama.host", p.ollama.host, { width: "wide" })}
+        ${field("Model", "ollama.model", p.ollama.model, { list: "ollama-models", placeholder: "qwen3-coder:30b" })}
+        ${field("Context window", "ollama.num_ctx", p.ollama.num_ctx, { type: "number", width: "narrow" })}
+        <datalist id="ollama-models"></datalist>
+      </div>
+      <div class="settings-preview">
+        <div class="filter-label">How it shows up</div>
+        <div class="row"><span class="muted">Top bar</span><span class="chip ai-chip">${SPARK} AI <b data-preview></b></span><span class="muted">always visible; click to reopen this dialog</span></div>
+        <div class="row"><span class="muted">Ask menu</span><span class="pill ai-provider" data-preview></span><span class="muted">on every menu before you pick a task</span></div>
+        <div class="row"><span class="muted">Each answer</span><span class="kind ai">AI</span><b>Explain this change</b><span class="pill ai-provider" data-preview></span><span class="muted">2.1 s</span></div>
+      </div>
+      <div class="settings-row toggles">
+        <span class="muted">Custom prompts include by default</span>
+        <label class="toggle"><input type="checkbox" name="context.function" ${ai.context.function ? "checked" : ""}>Enclosing function</label>
+        <label class="toggle"><input type="checkbox" name="context.pr" ${ai.context.pr ? "checked" : ""}>PR description</label>
+        <label class="toggle"><input type="checkbox" name="context.references" ${ai.context.references ? "checked" : ""}>References</label>
+      </div>
+    </form>
+    <footer><span class="meta muted">Saved to <span class="mono">~/.config/refactor-diff/settings.json</span> · the key only ever goes to the provider</span>
+      <span class="spacer"></span>
+      <button type="button" class="toggle" id="settings-cancel">Cancel</button>
+      <button type="button" class="primary" id="settings-save">Save</button></footer>`;
+  const form = $("#settings-form");
+  let provider = ai.provider;
+  const value = (name) => form.querySelector(`[name="${name}"]`).value;
+  const current = () => ({
+    provider,
+    providers: {
+      claude: { api_key: value("claude.api_key"), model: value("claude.model"), base_url: value("claude.base_url") },
+      openai: { base_url: value("openai.base_url"), api_key: value("openai.api_key"), model: value("openai.model") },
+      ollama: { host: value("ollama.host"), model: value("ollama.model"), num_ctx: value("ollama.num_ctx") },
+    },
+    context: {
+      function: form.querySelector('[name="context.function"]').checked,
+      pr: form.querySelector('[name="context.pr"]').checked,
+      references: form.querySelector('[name="context.references"]').checked,
+    },
+  });
+  const preview = () => {
+    const cfg = current();
+    const label = providerLabel({ provider, model: cfg.providers[provider].model });
+    for (const el of dlg.querySelectorAll("[data-preview]")) el.textContent = label;
+  };
+  const selectProvider = (id) => {
+    provider = id;
+    for (const b of dlg.querySelectorAll("[data-provider]")) b.setAttribute("aria-selected", String(b.dataset.provider === id));
+    for (const f of dlg.querySelectorAll("[data-fields]")) f.hidden = f.dataset.fields !== id;
+    $("#settings-status").textContent = "";
+    preview();
+  };
+  for (const b of dlg.querySelectorAll("[data-provider]")) b.addEventListener("click", () => selectProvider(b.dataset.provider));
+  form.addEventListener("input", preview);
+  preview();
+  const status = (text, cls = "") => { const el = $("#settings-status"); el.textContent = text; el.className = `ai-status ${cls}`; };
+  $("#settings-test").addEventListener("click", async () => {
+    status("Testing…", "live");
+    const btn = $("#settings-test");
+    btn.disabled = true;
+    try {
+      const res = await api("/api/settings/test", { provider, config: current().providers[provider] });
+      if (res.ok) {
+        status(`Connected · ${(res.latency_ms / 1000).toFixed(1)} s`, "ok");
+        const list = dlg.querySelector(`#${provider}-models`);
+        if (list && res.models?.length) list.innerHTML = res.models.map((m) => `<option value="${esc(m)}">`).join("");
+      } else {
+        status(res.error, "error");
+      }
+    } catch (e) {
+      status(e.message, "error");
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  const close = () => dlg.close();
+  $("#settings-close").addEventListener("click", close);
+  $("#settings-cancel").addEventListener("click", close);
+  $("#settings-save").addEventListener("click", async () => {
+    const btn = $("#settings-save");
+    btn.disabled = true;
+    try {
+      const saved = await api("/api/settings", { ai: current() });
+      state.ai = saved.ai.active;
+      state.aiContext = saved.ai.context;
+      renderAiChip();
+      toast(state.ai.configured ? `Ask will use ${providerLabel()}.` : "Saved. That provider still needs its details before Ask works.");
+      close();
+    } catch (e) {
+      status(e.message, "error");
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  form.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.tagName === "INPUT") { e.preventDefault(); $("#settings-save").click(); }
+  });
+  dlg.showModal();
 }
 
 init();
