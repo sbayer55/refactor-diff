@@ -78,17 +78,32 @@ refactor-diff main..HEAD --editor cursor                      # "Open" links tar
 
 ### What you see
 
-- **Summary**: how much of the diff was collapsed, and how many changes are left to review.
+The window is a workbench: the comparison in a command strip along the top, an **explorer**
+on the left, the diff stream in the middle, an **inspector** on the right, and a **status
+bar** along the bottom.
+
+- **Status bar**: how much of the diff was collapsed, how many changes are left to review,
+  `done / total` hunks, warnings, and the current diff settings.
+- **Explorer**: three tabs. **Files** lists every changed file by directory, with the number
+  of hunks it still has to review (click one to jump to it). **Patterns** lists the
+  mechanical patterns with their reviewed ticks. **Warnings** lists the warnings. The tab
+  follows the view, and you can switch it by hand. The buttons at either end of the command
+  strip (or `\` and `|`) hide and show the explorer and the inspector.
+- **Inspector**: facts about what's focused. On Needs review, the focused hunk: which
+  patterns explain its dimmed lines, what is left to read, whether it verified, and buttons
+  for the keyboard actions. On a pattern page, the pattern's counts and where it was applied.
+  Below that, always: review progress, the warnings, the report's source with
+  **Copy as Markdown** and **Post summary to PR**, and the main keys.
 - **Needs review**: the hunks that contain changes not explained by a repeated pattern.
   Lines that a pattern does explain are dimmed and tagged, so you keep the context. Tick a
-  hunk once you've read it: it folds up, and the summary shows `done / total` hunks.
+  hunk once you've read it: it folds up, and the status bar shows `done / total` hunks.
   **Mark all reviewed** on a file header ticks every hunk in that file.
 - **Mechanical patterns**: one entry per repeated edit, listing every occurrence grouped by
   file. Tick **Reviewed** as you go.
   A moved block is one pattern: its page shows the block as a diff from where it came from,
   followed by the import lines that changed because of the move.
 - **✓ verified**: a change whose enclosing statement is provably the same program on both
-  sides (see [Verification](#verification)). The summary counts them.
+  sides (see [Verification](#verification)). The status bar counts them.
 - **≈ almost …**: a leftover change that nearly matches a pattern — usually a typo. The
   **Only near misses** filter shows just those.
 - **Warnings**: places where the refactor may be incomplete or inconsistent (see below).
@@ -100,7 +115,7 @@ refactor-diff main..HEAD --editor cursor                      # "Open" links tar
 
 ### Getting the review out
 
-- **Copy as Markdown** (in the summary) copies the review: stats, a table of the mechanical
+- **Copy as Markdown** (in the inspector's Report card) copies the review: stats, a table of the mechanical
   patterns with their reviewed ticks, a task list of the hunks that need review, and the
   warnings. `GET /api/report/{id}/summary.md` serves the same text.
 - For a pull request, **Post summary to PR** shows that Markdown in an editable preview and
@@ -120,7 +135,7 @@ When you analyze the same comparison again after new commits, a banner at the to
 (badged **new** on their hunk, and on pattern occurrences), and which reviewed hunks were
 modified — those lose their mark so you read them again. **Show only what's new** (also a
 filter chip) narrows everything to the new changes; a reviewed pattern that gained
-occurrences shows **+N** in the sidebar.
+occurrences shows **+N** in the explorer's Patterns tab.
 
 ### Context and file versions
 
@@ -132,14 +147,15 @@ occurrences shows **+N** in the sidebar.
   complete diff of the file; the line stays in view. Use **↑ Prev change / ↓ Next change** or
   the `p` / `n` keys to move between changes.
 - **Unified / Split**: switch every diff on the page (review hunks, pattern occurrences,
-  context and the full-file diff) between unified and side-by-side layout. The toggle is at
-  the right of the filter bar and in the file viewer. Your choice is remembered. Added and
+  context and the full-file diff) between unified and side-by-side layout. The toggle is in
+  the toolbar above the diffs and in the file viewer. Your choice is remembered. Added and
   deleted files, which have only one side, and windows narrower than 760px always use unified.
 
 ### Filtering
 
-The filter bar under the summary narrows everything on the page to what you care about. The
-summary, patterns, review list and warnings all recount for the visible changes. Filtering
+The filters under the explorer, and the search box in the toolbar, narrow everything on the
+page to what you care about. The status bar, patterns, review list and warnings all recount
+for the visible changes. Filtering
 happens in the browser and never re-runs the analysis. Your filters are remembered per
 repository.
 
@@ -188,7 +204,7 @@ checked out.
 
 In both modes the gutter (line numbers and the `-`/`+` sign) is tinted red or green for removed
 and added lines, so changes stay visible. The Diff | Syntax toggle sits next to Unified |
-Split in the filter bar and the file viewer, and is remembered per browser. Highlighting is
+Split in the toolbar and the file viewer, and is remembered per browser. Highlighting is
 done in the browser (`web/static/syntax.js`) for Python, TypeScript and JavaScript.
 
 ### Code navigation
