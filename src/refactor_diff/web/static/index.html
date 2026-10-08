@@ -81,6 +81,14 @@
 
   <aside id="nav-panel" class="nav-panel" aria-label="Navigation results" hidden></aside>
   <dialog id="help" class="help" aria-label="Keyboard shortcuts"></dialog>
+  <dialog id="palette" class="help palette" aria-label="Command palette">
+    <div class="search">
+      <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="7" cy="7" r="5"/><path d="M11 11l4 4"/></svg>
+      <input id="palette-input" type="text" spellcheck="false" autocomplete="off" autofocus
+        placeholder="Type a command…" aria-label="Command" role="combobox" aria-controls="palette-list" aria-expanded="true">
+    </div>
+    <div id="palette-list" class="palette-list" role="listbox"></div>
+  </dialog>
   <dialog id="modal" class="help modal"></dialog>
   <dialog id="settings" class="help modal settings" aria-label="Assistant settings"></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>

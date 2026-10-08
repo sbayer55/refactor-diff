@@ -223,7 +223,9 @@ To pre-set filters from the command line, use `--hide` (any of `source`, `tests`
 
 ### Keyboard
 
-Press `?` for the full list. The review loop is `j` / `k` to move between hunks (or
+Press `?` for the full list, or `⌘⇧P` (`Ctrl+Shift+P` elsewhere) for a command palette that
+lists every action, filter, file and pattern: type to narrow it down, `Enter` to run.
+The review loop is `j` / `k` to move between hunks (or
 occurrences on a pattern page), `x` to mark the focused one reviewed (focus moves on to the
 next unreviewed hunk), `e` to show its context and then reveal more, `o` to open it in your
 editor, `]` / `[` to step through the mechanical patterns, `g r` / `g w` / `g f` to jump to
