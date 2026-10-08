@@ -324,6 +324,10 @@ uv run pytest
 uv run ruff check . && uv run ruff format --check .
 ```
 
+With [just](https://github.com/casey/just) installed, `just` lists the project's recipes:
+`just check` runs the linters and tests, `just fmt` formats, `just run main..HEAD` starts
+the CLI from the checkout, and the `desktop-*` recipes wrap the desktop app's build steps.
+
 Layout (`src/refactor_diff/`):
 
 | Module | Purpose |
