@@ -588,6 +588,20 @@ mark.search { background: var(--warn-bg); color: var(--warn-fg); outline: 1px so
 .help table { margin: 0 14px 8px; border-collapse: collapse; font-size: 12.5px; }
 .help td { padding: 3px 12px 3px 0; vertical-align: top; }
 .help td:first-child { white-space: nowrap; }
+.palette { width: min(560px, 92vw); min-width: 0; margin: 12vh auto auto; }
+.palette .search { width: auto; height: 32px; margin: 10px 12px; }
+.palette .search input { font: 13px var(--sans); }
+.palette-list { max-height: 50vh; overflow-y: auto; padding: 2px 0 6px; border-top: 1px solid var(--border); }
+.palette-row { display: flex; align-items: baseline; gap: 10px; padding: 5px 14px; cursor: pointer; font-size: 12.5px; }
+.palette-row:hover { background: var(--panel-2); }
+.palette-row.current { background: var(--panel-3); box-shadow: inset 2px 0 0 var(--accent); }
+.palette-row .group {
+  flex: none; min-width: 64px; font: 500 10.5px var(--mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+}
+.palette-row .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-row mark { background: var(--accent-soft); color: var(--accent); border-radius: 2px; }
+.palette-row kbd { flex: none; margin-left: auto; }
+.palette-note { padding: 8px 14px; color: var(--muted); font-size: 11.5px; }
 .comment-box { padding: 8px 10px 10px; background: var(--panel-2); border-bottom: 1px solid var(--border); }
 .comment-box textarea, .modal textarea {
   width: 100%; min-height: 72px; resize: vertical; padding: 8px; border: 1px solid var(--border);

@@ -7,8 +7,11 @@ from refactor_diff import sources
 
 def test_index_and_static(rename_repo, serve):
     client = serve(rename_repo)
-    assert "refactor-diff" in client.get("/").text
+    index = client.get("/").text
+    assert "refactor-diff" in index
+    assert 'id="palette"' in index
     assert client.get("/static/app.js").status_code == 200
+    assert client.get("/static/app.css").status_code == 200
 
 
 def test_sources_lists_branches(rename_repo, serve):

@@ -180,6 +180,25 @@ function filtersActive() {
   return f.hidden.size > 0 || f.hideDocs || f.hideImports || f.hideFileMoves || f.hideMoves
     || f.exclude.length > 0 || f.nearOnly || f.newOnly || Boolean(f.search);
 }
+// One code path for the filter bar and the command palette. These read state.filters at call
+// time rather than a captured object, so they stay valid after resetFilters() replaces it.
+function toggleCategory(cat) {
+  const h = state.filters.hidden;
+  if (h.has(cat)) h.delete(cat); else h.add(cat);
+  saveFilters();
+  rerender();
+}
+// nearOnly / newOnly are per-session (never persisted); everything else is saved.
+function toggleFilter(key, { persist = true } = {}) {
+  state.filters[key] = !state.filters[key];
+  if (persist) saveFilters();
+  rerender();
+}
+function resetFilters() {
+  state.filters = emptyFilters();
+  saveFilters();
+  rerender();
+}
 function emptyFilters() {
   return {
     hidden: new Set(), hideDocs: false, hideImports: false, hideFileMoves: false, hideMoves: false,
@@ -338,34 +357,15 @@ function renderFilters() {
       <button type="button" class="link" id="reset-filters">Reset</button>` : ""}`;
 
   for (const b of foot.querySelectorAll("[data-cat]")) {
-    b.addEventListener("click", () => {
-      const cat = b.dataset.cat;
-      if (f.hidden.has(cat)) f.hidden.delete(cat); else f.hidden.add(cat);
-      saveFilters();
-      rerender();
-    });
+    b.addEventListener("click", () => toggleCategory(b.dataset.cat));
   }
   bindLayoutToggle(bar);
-  $("#docs-toggle").addEventListener("click", () => {
-    f.hideDocs = !f.hideDocs;
-    saveFilters();
-    rerender();
-  });
+  $("#docs-toggle").addEventListener("click", () => toggleFilter("hideDocs"));
   for (const c of CHANGE_FILTERS) {
-    $(`#${c.id}`).addEventListener("click", () => {
-      f[c.key] = !f[c.key];
-      saveFilters();
-      rerender();
-    });
+    $(`#${c.id}`).addEventListener("click", () => toggleFilter(c.key));
   }
-  $("#near-toggle")?.addEventListener("click", () => {
-    f.nearOnly = !f.nearOnly;
-    rerender();
-  });
-  $("#new-toggle")?.addEventListener("click", () => {
-    f.newOnly = !f.newOnly;
-    rerender();
-  });
+  $("#near-toggle")?.addEventListener("click", () => toggleFilter("nearOnly", { persist: false }));
+  $("#new-toggle")?.addEventListener("click", () => toggleFilter("newOnly", { persist: false }));
   const input = $("#exclude-input");
   input.addEventListener("change", () => {
     f.exclude = input.value.split(",").map((s) => s.trim()).filter(Boolean);
@@ -383,16 +383,8 @@ function renderFilters() {
     if (e.key === "Enter") search.blur();
     if (e.key === "Escape") { search.value = ""; search.blur(); if (f.search) { f.search = ""; saveFilters(); rerender(); } }
   });
-  $("#regex-toggle").addEventListener("click", () => {
-    f.regex = !f.regex;
-    saveFilters();
-    rerender();
-  });
-  $("#reset-filters")?.addEventListener("click", () => {
-    state.filters = emptyFilters();
-    saveFilters();
-    rerender();
-  });
+  $("#regex-toggle").addEventListener("click", () => toggleFilter("regex"));
+  $("#reset-filters")?.addEventListener("click", resetFilters);
 }
 
 // ---------- source form ----------
@@ -1991,6 +1983,7 @@ const KEY_HELP = [
   ["Other", [
     [`${MOD_KEY}-click`, `${MOD_KEY}⇧-click`, "go to definition / find references"],
     ["\\", "|", "show / hide the explorer, the inspector"],
+    [`${MOD_KEY}⇧P`, "", "command palette"],
     ["?", "", "this help"],
     ["esc", "", "close panels, clear the search box"],
   ]],
@@ -2101,7 +2094,238 @@ function showHelp(on = !$("#help").open) {
   dlg.showModal();
 }
 
+// ---------- command palette ----------
+
+const PALETTE_MAX = 50; // rows rendered; the rest are summarized in a footer
+
+const hasReport = () => Boolean(state.report);
+const inFileView = () => location.hash.startsWith("#file/") || location.hash.startsWith("#lib/");
+
+// Each command: { id, title, group, keys?, when?, dynamic?, run }
+//   title    shown and fuzzy-matched; describes the *next* state ("Hide docs edits")
+//   keys     shortcut in KEY_HELP style ("j", "g r", `${MOD_KEY}⇧P`), rendered in <kbd>
+//   when     () => boolean; omitted means always available
+//   dynamic  one entry per file / pattern; hidden until the query is non-empty
+// Built on every open so titles reflect the current state.
+function paletteCommands() {
+  const f = state.filters, v = state.view;
+  const go = (hash) => () => { location.hash = hash; };
+  const tab = (name) => () => {
+    if (!state.panes.explorer) setPane("explorer", true);
+    state.explorerTab = name;
+    renderExplorer();
+  };
+  const reviewing = () => hasReport() && !inFileView();
+  const needFocus = (fn) => () => {
+    const el = focusedElement();
+    if (el) fn(el); else toast("Focus a hunk first (j / k).", { error: true });
+  };
+  const cmds = [
+    { id: "view.review", group: "View", title: "Go to Needs review", keys: "g r", when: hasReport, run: go("#review") },
+    { id: "view.warnings", group: "View", title: "Go to Warnings", keys: "g w", when: hasReport, run: go("#warnings") },
+    { id: "view.files", group: "View", title: "Go to Files", keys: "g f", when: hasReport, run: go("#files") },
+    { id: "view.commits", group: "View", title: "Go to Commits", keys: "g c", when: hasReport, run: go("#commits") },
+
+    { id: "pane.explorer", group: "Panes", title: `${state.panes.explorer ? "Hide" : "Show"} the explorer`, keys: "\\",
+      run: () => setPane("explorer", !state.panes.explorer) },
+    { id: "pane.inspector", group: "Panes", title: `${state.panes.inspector ? "Hide" : "Show"} the inspector`, keys: "|",
+      run: () => setPane("inspector", !state.panes.inspector) },
+    { id: "pane.tab.files", group: "Panes", title: "Explorer: Files", when: hasReport, run: tab("files") },
+    { id: "pane.tab.patterns", group: "Panes", title: "Explorer: Patterns", when: hasReport, run: tab("patterns") },
+    { id: "pane.tab.warnings", group: "Panes", title: "Explorer: Warnings", when: hasReport, run: tab("warnings") },
+
+    { id: "layout.unified", group: "Layout", title: "Diff layout: unified",
+      when: () => hasReport() && splitActive(), run: () => setSplit(false) },
+    { id: "layout.split", group: "Layout", title: "Diff layout: side by side",
+      when: () => hasReport() && !splitActive() && !narrowQuery.matches, run: () => setSplit(true) },
+    { id: "layout.diff", group: "Layout", title: "Highlighting: diff",
+      when: () => hasReport() && state.syntax, run: () => setSyntax(false) },
+    { id: "layout.syntax", group: "Layout", title: "Highlighting: syntax",
+      when: () => hasReport() && !state.syntax, run: () => setSyntax(true) },
+
+    ...CATEGORIES.map(([cat, label]) => ({
+      id: `filter.cat.${cat}`, group: "Filter", title: `${f.hidden.has(cat) ? "Show" : "Hide"} ${label.toLowerCase()} files`,
+      when: () => hasReport() && state.report.files.some((x) => x.category === cat), run: () => toggleCategory(cat) })),
+    { id: "filter.docs", group: "Filter", title: `${f.hideDocs ? "Show" : "Hide"} docs edits`,
+      when: hasReport, run: () => toggleFilter("hideDocs") },
+    ...CHANGE_FILTERS.map((c) => ({
+      id: `filter.${c.key}`, group: "Filter", title: `${f[c.key] ? "Show" : "Hide"} ${c.label.toLowerCase()}`,
+      when: hasReport, run: () => toggleFilter(c.key) })),
+    { id: "filter.near", group: "Filter", title: f.nearOnly ? "Show all changes (not only near misses)" : "Only near misses",
+      when: () => hasReport() && (v.nearUnits > 0 || f.nearOnly), run: () => toggleFilter("nearOnly", { persist: false }) },
+    { id: "filter.new", group: "Filter", title: f.newOnly ? "Show all changes (not only new)" : "Only changes new since last analysis",
+      when: () => hasReport() && (state.delta.newHunks.size > 0 || f.newOnly), run: () => toggleFilter("newOnly", { persist: false }) },
+    { id: "filter.regex", group: "Filter", title: `Search as ${f.regex ? "plain text" : "regular expression"}`,
+      when: hasReport, run: () => toggleFilter("regex") },
+    { id: "filter.reset", group: "Filter", title: "Reset filters", when: () => hasReport() && filtersActive(), run: resetFilters },
+    { id: "filter.search", group: "Filter", title: "Focus search", keys: "/", when: hasReport, run: () => $("#search-input")?.focus() },
+
+    { id: "review.next", group: "Review", title: "Next hunk", keys: "j", when: reviewing, run: () => moveFocus(1) },
+    { id: "review.prev", group: "Review", title: "Previous hunk", keys: "k", when: reviewing, run: () => moveFocus(-1) },
+    { id: "review.mark", group: "Review", title: "Mark focused hunk reviewed", keys: "x", when: reviewing, run: toggleFocusedReviewed },
+    { id: "review.context", group: "Review", title: "Show context for focused hunk", keys: "e", when: reviewing, run: expandFocused },
+    { id: "review.editor", group: "Review", title: "Open focused hunk in editor", keys: "o",
+      when: () => hasReport() && Boolean(state.editor),
+      run: needFocus(() => { const at = focusedLocation(); openInEditor(at.path, at.line); }) },
+    { id: "review.comment", group: "Review", title: "Comment on focused hunk", keys: "c",
+      when: () => hasReport() && Boolean(prNumber()), run: needFocus(openCommentBox) },
+    { id: "review.ask", group: "Review", title: "Ask the AI about focused hunk", keys: "a", when: reviewing,
+      run: needFocus((el) => { if (el.dataset.hunk) openAskMenu(el, el.querySelector("[data-hunk-ask]")); }) },
+
+    { id: "nav.pattern.next", group: "Navigate", title: "Next mechanical pattern", keys: "]",
+      when: () => hasReport() && v.groups.some((g) => g.mechanical), run: () => patternStep(1) },
+    { id: "nav.pattern.prev", group: "Navigate", title: "Previous mechanical pattern", keys: "[",
+      when: () => hasReport() && v.groups.some((g) => g.mechanical), run: () => patternStep(-1) },
+    { id: "nav.commit.next", group: "Navigate", title: "Next commit", keys: "}",
+      when: () => hasReport() && state.commits.length > 0, run: () => commitStep(1) },
+    { id: "nav.commit.prev", group: "Navigate", title: "Previous commit", keys: "{",
+      when: () => hasReport() && state.commits.length > 0, run: () => commitStep(-1) },
+    { id: "nav.range", group: "Navigate", title: "Back to the whole range",
+      when: () => Boolean(state.parent), run: () => showReport(state.parent.id) },
+    { id: "nav.change.next", group: "Navigate", title: "Next change in file", keys: "n",
+      when: () => hasReport() && inFileView(), run: () => jumpChange(1) },
+    { id: "nav.change.prev", group: "Navigate", title: "Previous change in file", keys: "p",
+      when: () => hasReport() && inFileView(), run: () => jumpChange(-1) },
+
+    { id: "source.refs", group: "Source", title: "Compare branches", run: () => { setMode("refs"); $("[name=base]").focus(); } },
+    { id: "source.pr", group: "Source", title: "Compare a pull request", run: () => { setMode("pr"); $("[name=pr]").focus(); } },
+    { id: "source.worktree", group: "Source", title: "Compare the working tree", run: () => { setMode("worktree"); $("[name=base]").focus(); } },
+    { id: "source.run", group: "Source", title: hasReport() ? "Re-run analysis" : "Analyze", run: () => runAnalysis() },
+
+    { id: "summary.copy", group: "Summary", title: "Copy summary as Markdown", when: hasReport, run: copySummary },
+    { id: "summary.post", group: "Summary", title: "Post summary to the pull request",
+      when: () => hasReport() && Boolean(prNumber()), run: postSummary },
+
+    { id: "help.settings", group: "Help", title: "Assistant settings", run: showSettings },
+    { id: "help.keys", group: "Help", title: "Keyboard shortcuts", keys: "?", run: () => showHelp(true) },
+  ];
+  if (v) {
+    for (const x of v.files) {
+      cmds.push({ id: `file:${x.path}`, group: "File", dynamic: true, title: `Open file: ${x.path}`, run: go(fileHref(x.path, "diff")) });
+    }
+    for (const g of v.groups) {
+      if (!g.mechanical) continue;
+      cmds.push({ id: `group:${g.id}`, group: "Pattern", dynamic: true, title: `Go to pattern: ${g.label}`, run: go(`#group/${g.id}`) });
+    }
+  }
+  return cmds;
+}
+
+// Case-insensitive subsequence match of `query` in `text`: {score, ranges} for highlight(), or
+// null. Consecutive matches and matches at the start of a word score higher; shorter titles win
+// ties. Greedy (nearest next occurrence), which is plenty for a few hundred titles.
+function fuzzyMatch(query, text) {
+  const q = query.toLowerCase(), t = text.toLowerCase();
+  const ranges = [];
+  let score = 0, pos = 0, prev = -2;
+  for (const ch of q) {
+    if (ch === " ") continue; // "open foo" matches "Open file: src/foo.py"
+    const i = t.indexOf(ch, pos);
+    if (i < 0) return null;
+    const wordStart = i === 0 || /[^a-z0-9]/.test(t[i - 1]);
+    score += 1 + (i === prev + 1 ? 2 : 0) + (wordStart ? 3 : 0);
+    if (i === prev + 1) ranges[ranges.length - 1][1] = i + 1; else ranges.push([i, i + 1]);
+    prev = i;
+    pos = i + 1;
+  }
+  return { score: score - t.length / 100, ranges };
+}
+
+let paletteAll = []; // commands available when the palette was opened (after `when`)
+let paletteRows = []; // [{cmd, ranges}] currently rendered
+let paletteSel = 0;
+
+function openPalette() {
+  const dlg = $("#palette"), input = $("#palette-input");
+  if (dlg.open) { input.select(); return; } // showModal() throws on an open dialog
+  if ($("#help").open) $("#help").close();
+  closeAskMenu();
+  paletteAll = paletteCommands().filter((c) => !c.when || c.when());
+  input.value = "";
+  paletteSel = 0;
+  renderPalette();
+  dlg.showModal();
+  input.focus();
+}
+
+function closePalette() {
+  const dlg = $("#palette");
+  if (dlg.open) dlg.close(); // restores focus to the element that had it before opening
+}
+
+function renderPalette() {
+  const q = $("#palette-input").value.trim();
+  let rows;
+  if (!q) {
+    rows = paletteAll.filter((c) => !c.dynamic).map((cmd) => ({ cmd, ranges: null, score: 0 }));
+  } else {
+    rows = paletteAll.map((cmd) => { const m = fuzzyMatch(q, cmd.title); return m && { cmd, ...m }; })
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score); // stable: registry order (static first) breaks ties
+  }
+  const total = rows.length;
+  paletteRows = rows.slice(0, PALETTE_MAX);
+  paletteSel = Math.min(paletteSel, Math.max(0, paletteRows.length - 1));
+  $("#palette-list").innerHTML = paletteRows.map(({ cmd, ranges }, i) => `
+    <div class="palette-row${i === paletteSel ? " current" : ""}" role="option" id="palette-opt-${i}"
+      aria-selected="${i === paletteSel}" data-i="${i}">
+      <span class="group">${esc(cmd.group)}</span>
+      <span class="title">${highlight(cmd.title, ranges)}</span>
+      ${cmd.keys ? `<kbd>${esc(cmd.keys)}</kbd>` : ""}
+    </div>`).join("")
+    + (total > paletteRows.length ? `<div class="palette-note">${plural(total - paletteRows.length, "more command")} · keep typing</div>` : "")
+    + (!total ? '<div class="palette-note">No matching command</div>' : "");
+  $("#palette-input").setAttribute("aria-activedescendant", paletteRows.length ? `palette-opt-${paletteSel}` : "");
+}
+
+function movePaletteSel(delta) {
+  const n = paletteRows.length;
+  if (!n) return;
+  paletteSel = (paletteSel + delta + n) % n; // wrap around
+  const list = $("#palette-list");
+  list.querySelector(".current")?.classList.remove("current");
+  const row = list.children[paletteSel];
+  row.classList.add("current");
+  row.scrollIntoView({ block: "nearest" });
+  $("#palette-input").setAttribute("aria-activedescendant", row.id);
+}
+
+function runPaletteCommand(cmd) {
+  closePalette(); // first, so commands that focus an input or open a dialog aren't undone
+  cmd.run();
+}
+
+function onPaletteKey(e) {
+  if (e.isComposing) return;
+  switch (e.key) {
+    case "ArrowDown": movePaletteSel(1); break;
+    case "ArrowUp": movePaletteSel(-1); break;
+    case "Enter": { const row = paletteRows[paletteSel]; if (row) runPaletteCommand(row.cmd); break; }
+    case "Tab": break; // keep focus in the input
+    default: return; // Escape: the dialog's native cancel closes it
+  }
+  e.preventDefault();
+}
+
+function initPalette() {
+  const dlg = $("#palette"), list = $("#palette-list");
+  dlg.addEventListener("keydown", onPaletteKey);
+  $("#palette-input").addEventListener("input", () => { paletteSel = 0; renderPalette(); });
+  list.addEventListener("mousedown", (e) => e.preventDefault()); // keep the input focused
+  list.addEventListener("click", (e) => {
+    const row = e.target.closest("[data-i]");
+    if (row) runPaletteCommand(paletteRows[Number(row.dataset.i)].cmd);
+  });
+  dlg.addEventListener("click", (e) => { if (e.target === dlg) closePalette(); }); // backdrop
+}
+
 function onKey(e) {
+  if (modDown(e) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "p") {
+    e.preventDefault();
+    openPalette();
+    return;
+  }
+  if ($("#palette").open) return; // the palette owns the keyboard while it is up (see onPaletteKey)
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const inField = e.target.closest?.("input, textarea, select, [contenteditable]");
   if (e.key === "Escape") {
@@ -2478,6 +2702,8 @@ async function init() {
   }
   $("#source-form").addEventListener("submit", runAnalysis);
   $("#help-btn").addEventListener("click", () => showHelp(true));
+  $("#help-btn").title = `Keyboard shortcuts (?) · command palette (${MOD_KEY}⇧P)`;
+  initPalette();
   for (const b of document.querySelectorAll(".pane-toggle")) {
     b.addEventListener("click", () => setPane(b.dataset.pane, !state.panes[b.dataset.pane]));
   }
