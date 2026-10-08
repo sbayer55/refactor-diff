@@ -45,7 +45,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--hide",
         metavar="KINDS",
         help="pre-set filters: comma-separated file kinds to hide (source, tests, docs, config, "
-        "other) and/or 'comments' to hide comment- and docstring-only edits",
+        "other) and/or kinds of change: 'comments' (comment- and docstring-only edits), "
+        "'imports' (import-only edits), 'file-moves' (renamed files and the import updates "
+        "they cause), 'moves' (functions and classes moved verbatim)",
     )
     p.add_argument(
         "--exclude",
@@ -115,15 +117,25 @@ def _source_defaults(args: argparse.Namespace) -> dict:
     return {}
 
 
+# --hide values for kinds of change, and the UI filter each one sets.
+_CHANGE_FILTERS = {
+    "comments": "hideDocs",
+    "imports": "hideImports",
+    "file-moves": "hideFileMoves",
+    "moves": "hideMoves",
+}
+
+
 def _filter_defaults(args: argparse.Namespace) -> dict:
     filters: dict = {}
     if args.hide:
         kinds = {k.strip().lower() for k in args.hide.split(",") if k.strip()}
-        unknown = kinds - set(CATEGORIES) - {"comments"}
+        unknown = kinds - set(CATEGORIES) - set(_CHANGE_FILTERS)
         if unknown:
             sys.exit(f"refactor-diff: unknown --hide value(s): {', '.join(sorted(unknown))}")
         filters["hidden"] = sorted(kinds & set(CATEGORIES))
-        filters["hideDocs"] = "comments" in kinds
+        for kind, key in _CHANGE_FILTERS.items():
+            filters[key] = kind in kinds
     if args.exclude:
         filters["exclude"] = args.exclude
     return filters

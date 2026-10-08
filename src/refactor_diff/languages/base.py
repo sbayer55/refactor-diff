@@ -107,6 +107,7 @@ class Binding:
     name: str | None
     alias: str  # the name bound in the importing module
     level: int = 0
+    text: str = field(default="", compare=False)  # display form, when not Python's syntax
 
 
 @dataclass(frozen=True)

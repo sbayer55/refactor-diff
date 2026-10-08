@@ -18,6 +18,7 @@ from refactor_diff.languages import analyzer_for
 from refactor_diff.languages.base import FileAnalysis, LanguageAnalyzer, split_lines
 from refactor_diff.model import (
     RENAME,
+    TAG_IMPORTS,
     ChangeUnit,
     FileChange,
     FileSummary,
@@ -28,8 +29,14 @@ from refactor_diff.model import (
     Warning,
     short_hash,
 )
-from refactor_diff.moves import detect_moves, link_imports, resync_hunks
-from refactor_diff.patterns import Classification, classify, make_unit
+from refactor_diff.moves import (
+    detect_moves,
+    link_file_renames,
+    link_imports,
+    resync_hunks,
+    tag_moves,
+)
+from refactor_diff.patterns import Classification, classify, imports_only, make_unit
 from refactor_diff.verify import verify_units
 
 
@@ -60,6 +67,7 @@ def analyze(
             additions=0,
             deletions=0,
             category=categorize(change.path, analyzed=analyzer is not None),
+            pure_rename=change.status == "R" and change.old_text == change.new_text,
         )
         files.append(summary)
         texts[change.path] = (change.old_text, change.new_text)
@@ -80,6 +88,9 @@ def analyze(
     moves = detect_moves(units, hunks, analyses, analyzer_for)
     link_imports(units, moves, analyses)
     resync_hunks(hunks, units)
+    _tag_imports(units, analyses)
+    tag_moves(units, moves)
+    link_file_renames(units, files)
     groups = build_groups(list(units.values()), min_count)
     verify_units(units, analyses, groups, analyzer_for)
     by_path: dict[str, list[ChangeUnit]] = {}
@@ -106,6 +117,18 @@ def analyze(
         warnings=warnings,
         texts=texts,
     )
+
+
+def _tag_imports(
+    units: dict[str, ChangeUnit], analyses: dict[str, tuple[FileAnalysis, FileAnalysis]]
+) -> None:
+    for u in units.values():
+        old_an, new_an = analyses[u.path]
+        old_rng = (u.old_start, u.old_start + len(u.old) - 1) if u.old else None
+        new_rng = (u.new_start, u.new_start + len(u.new) - 1) if u.new else None
+        analyzer = analyzer_for(u.path)
+        if analyzer is not None and imports_only(analyzer, old_an, new_an, old_rng, new_rng):
+            u.tags.append(TAG_IMPORTS)
 
 
 def _diff_file(

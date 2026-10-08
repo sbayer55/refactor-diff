@@ -156,3 +156,51 @@ def test_columns_count_characters():
 def test_builtins_and_keywords():
     assert TS.is_builtin("Promise") and TS.is_builtin("console") and not TS.is_builtin("getUser")
     assert TS.is_keyword("interface") and not TS.is_keyword("getUser")
+
+
+def test_statement_spans():
+    an = TS.analyze(
+        "import { a } from './m';\n"
+        "@dec\n"
+        "export class C {\n"
+        "  @x\n"
+        "  m(a: number) { return 1; }\n"
+        "  f = 2;\n"
+        "}\n"
+        "export const g = (x) => x;\n"
+        "function h() {}\n"
+        "interface I { a: number }\n"
+        "let z = 1;\n"
+    )
+    spans = [(s.start, s.end, s.kind, s.qualname) for s in an.statements]
+    assert spans == [
+        (1, 1, "stmt", ""),
+        (2, 7, "class", "C"),
+        (8, 8, "def", "g"),
+        (9, 9, "def", "h"),
+        (10, 10, "class", "I"),
+        (11, 11, "stmt", ""),
+    ]
+    members = [(s.start, s.end, s.kind, s.qualname) for s in an.statements[1].children]
+    assert members == [(4, 5, "def", "C.m"), (6, 6, "stmt", "")]
+
+
+def test_import_bindings():
+    an = TS.analyze(
+        "import d, { a as b, c } from './m';\nimport * as ns from \"../n\";\nimport 'side';\n"
+    )
+    found = [(b.module, b.name, b.alias) for s in an.imports for b in s.bindings]
+    assert found == [
+        ("./m", "default", "d"),
+        ("./m", "a", "b"),
+        ("./m", "c", "c"),
+        ("../n", None, "ns"),
+        ("side", None, ""),
+    ]
+    assert [(s.start, s.end) for s in an.imports] == [(1, 1), (2, 2), (3, 3)]
+
+
+def test_import_path_change():
+    assert sigs('import { a } from "./old";\n', 'import { a } from "./new";\n') == [
+        ("import", "./old", "./new", "a")
+    ]

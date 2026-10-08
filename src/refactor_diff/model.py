@@ -22,6 +22,11 @@ IMPORT = "import"  # an import changed module path or gained/lost a name
 # Kinds that are never logic changes, so they count as mechanical even when they don't repeat.
 ALWAYS_MECHANICAL = {FORMATTING, DOCS, MOVE}
 
+# Unit tags: what a change is, so the UI can filter it out (see ChangeUnit.tags).
+TAG_IMPORTS = "imports"  # touches import statements only
+TAG_FILE_MOVE = "file-move"  # an import update that only follows a renamed/moved file
+TAG_MOVED = "moved"  # half of a certain move of whole functions/classes (see moves.py)
+
 
 def short_hash(*parts: object) -> str:
     return hashlib.sha1("\x1f".join(map(str, parts)).encode()).hexdigest()[:12]
@@ -94,6 +99,7 @@ class ChangeUnit:
     partner: str | None = None  # the other half of a move (see moves.py)
     verified: bool = False  # AST-identical after normalization (see verify.py)
     near: list[NearMiss] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)  # TAG_* values
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -166,6 +172,7 @@ class FileSummary:
     residual_units: int = 0
     parse_ok: bool = True
     category: str = "source"  # see categories.py
+    pure_rename: bool = False  # renamed/moved with identical content
 
 
 @dataclass

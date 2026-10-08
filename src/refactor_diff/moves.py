@@ -5,17 +5,35 @@ every file has been diffed, deletion-only and insertion-only units are compared 
 streams (layout and comments ignored): exact matches pair first, then near matches. A paired
 unit gets a ``move`` signature, which is always mechanical, so an exact move disappears from
 review; a move with edits inside leaves only those edits, classified like any other change.
+
+A move is *certain* only when nothing about the pairing is in doubt (see ``_certain``). Only
+certain moves are tagged for the "Moved functions" filter; the others still show as moves.
 """
 
 from __future__ import annotations
 
+import posixpath
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
 from refactor_diff.hunks import Opcode
 from refactor_diff.languages.base import COMMENT, NAME, STRUCTURAL, FileAnalysis, LanguageAnalyzer
-from refactor_diff.model import FORMATTING, IMPORT, MOVE, ChangeUnit, Hunk, Signature, short_hash
+from refactor_diff.languages.typescript import JS_SUFFIXES, TS_SUFFIXES, TSX_SUFFIXES
+from refactor_diff.model import (
+    FORMATTING,
+    IMPORT,
+    MOVE,
+    TAG_FILE_MOVE,
+    TAG_IMPORTS,
+    TAG_MOVED,
+    ChangeUnit,
+    FileSummary,
+    Hunk,
+    Signature,
+    short_hash,
+)
 from refactor_diff.patterns import classify, make_unit, merge_ranges, tokens_in_range
 
 MIN_LINES = 3  # non-blank lines a block needs before it can count as moved
@@ -24,6 +42,8 @@ FUZZY_MIN = 0.75  # token-stream similarity for a "moved with edits" pair
 MAX_FUZZY_PAIRS = 5000  # comparisons before giving up on near matches (large diffs)
 
 Analyses = dict[str, tuple[FileAnalysis, FileAnalysis]]
+
+_JS_LIKE = (*TS_SUFFIXES, *TSX_SUFFIXES, *JS_SUFFIXES)
 
 
 @dataclass
@@ -37,6 +57,7 @@ class Move:
     new_range: tuple[int, int]
     ratio: float
     names: tuple[str, ...]  # defs/classes in the block
+    certain: bool = False  # whole definitions, moved verbatim, with no other candidate
     linked_units: list[str] = field(default_factory=list)  # import edits explained by it
 
     @property
@@ -109,14 +130,24 @@ def detect_moves(
     def resolve(b: _Block) -> ChangeUnit:
         return units[b.unit_id] if b.whole else pieces[(b.unit_id, b.start, b.end)]
 
+    # The same code deleted (or inserted) more than once: which copy went where is a guess.
+    del_counts = Counter(b.stream for b in dels)
+    ins_counts = Counter(b.stream for b in ins)
     moves = []
     for d, i, ratio in pairs:
         analyzer = analyzer_for(i.path)
         if analyzer is None:
             continue
+        unique = del_counts[d.stream] == 1 and ins_counts[i.stream] == 1
         moves.append(
             _apply_move(
-                resolve(d), resolve(i), analyzer, analyses[d.path][0], analyses[i.path][1], ratio
+                resolve(d),
+                resolve(i),
+                analyzer,
+                analyses[d.path][0],
+                analyses[i.path][1],
+                ratio,
+                unique,
             )
         )
     return moves
@@ -269,6 +300,7 @@ def _apply_move(
     from_old_an: FileAnalysis,
     to_new_an: FileAnalysis,
     ratio: float,
+    unique: bool = False,
 ) -> Move:
     old_range = (d_unit.old_start, d_unit.old_start + len(d_unit.old) - 1)
     new_range = (i_unit.new_start, i_unit.new_start + len(i_unit.new) - 1)
@@ -289,6 +321,7 @@ def _apply_move(
         new_range=new_range,
         ratio=ratio,
         names=names,
+        certain=_certain(cls, from_old_an, old_range, to_new_an, new_range, ratio, unique),
     )
     # The edits made inside the moved block live on the new side only, so that a one-off edit
     # isn't counted twice and mistaken for a repeated pattern.
@@ -296,6 +329,49 @@ def _apply_move(
     i_unit.signatures = [move.signature, *(s for s in cls.signatures if s.kind != FORMATTING)]
     d_unit.partner, i_unit.partner = i_unit.id, d_unit.id
     return move
+
+
+def _certain(cls, old_an, old_range, new_an, new_range, ratio: float, unique: bool) -> bool:
+    """Whether the pair is a move beyond doubt: an exact copy (comments included), of whole
+    functions or classes that keep their qualified names, and the only candidate either way.
+    A method that went to another class, a function that became a method, loose statements
+    or code that appears twice are not certain."""
+    if ratio != 1.0 or not unique:
+        return False
+    if any(s.kind != FORMATTING for s in cls.signatures):
+        return False  # e.g. a comment edited on the way
+    old_defs = _defs_only(old_an, old_range)
+    return old_defs is not None and old_defs == _defs_only(new_an, new_range)
+
+
+def _defs_only(analysis: FileAnalysis, rng: tuple[int, int]) -> tuple[str, ...] | None:
+    """Qualified names of the defs/classes in the range, or None when the range holds code
+    outside of them (or none at all)."""
+    spans = [
+        s
+        for s in _flat(analysis.statements)
+        if s.kind != "stmt" and s.qualname and rng[0] <= s.start and s.end <= rng[1]
+    ]
+    if not spans:
+        return None
+    for t in tokens_in_range(analysis, rng).tokens:
+        if t.kind in (STRUCTURAL, COMMENT):
+            continue
+        if not any(s.start <= t.start[0] <= s.end for s in spans):
+            return None
+    return tuple(s.qualname for s in spans)
+
+
+def tag_moves(units: dict[str, ChangeUnit], moves: list[Move]) -> None:
+    """Tag both halves of each certain move, and the import edits it explains, as moved."""
+    certain = {m.signature.key for m in moves if m.certain}
+    for m in moves:
+        if not m.certain:
+            continue
+        for uid in (m.from_unit, m.to_unit, *m.linked_units):
+            u = units[uid]
+            if u.signatures and all(s.key in certain for s in u.signatures):
+                u.tags.append(TAG_MOVED)
 
 
 def _names(analysis: FileAnalysis, rng: tuple[int, int]) -> tuple[str, ...]:
@@ -370,17 +446,82 @@ def _names_in(analysis: FileAnalysis, rng: tuple[int, int] | None) -> set[str]:
 
 
 def module_matches(module: str, path: str, importer: str) -> bool:
-    """Whether dotted ``module`` (possibly relative to ``importer``'s package) names ``path``."""
+    """Whether ``module`` (a dotted Python module, possibly relative to ``importer``'s package,
+    or a relative TS/JS specifier) names ``path``."""
+    if importer.endswith(_JS_LIKE):
+        target = _relative_target(module, importer)
+        return target is not None and path.endswith(_JS_LIKE) and target in _js_stems(path)
     if not path.endswith((".py", ".pyi")):
         return False
     parts = path.rsplit(".", 1)[0].split("/")
     if parts[-1] == "__init__":
         parts.pop()
     if module.startswith("."):
-        level = len(module) - len(module.lstrip("."))
-        pkg = importer.split("/")[:-1]
-        base = pkg[: len(pkg) - (level - 1)] if level > 1 else pkg
-        target = base + [p for p in module.lstrip(".").split(".") if p]
-        return parts == target
+        return parts == _relative_target(module, importer)
     mod_parts = module.split(".")
     return parts[-len(mod_parts) :] == mod_parts
+
+
+def _relative_target(module: str, importer: str):
+    """What a relative import in ``importer`` points at: path parts for Python, an
+    extensionless path for TS/JS. None for an absolute import or a package specifier."""
+    if importer.endswith(_JS_LIKE):
+        if not (module in (".", "..") or module.startswith(("./", "../"))):
+            return None
+        target = posixpath.normpath(posixpath.join(posixpath.dirname(importer), module))
+        for suffix in _JS_LIKE:  # "./m.js" names m.ts under ESM conventions
+            if target.endswith(suffix):
+                return target[: -len(suffix)]
+        return target
+    if not module.startswith("."):
+        return None
+    level = len(module) - len(module.lstrip("."))
+    pkg = importer.split("/")[:-1]
+    base = pkg[: len(pkg) - (level - 1)] if level > 1 else pkg
+    return base + [p for p in module.lstrip(".").split(".") if p]
+
+
+def _js_stems(path: str) -> set[str]:
+    stem = next(path[: -len(s)] for s in _JS_LIKE if path.endswith(s))
+    stems = {stem}
+    if stem == "index" or stem.endswith("/index"):
+        stems.add(posixpath.dirname(stem) or ".")
+    return stems
+
+
+# --- import churn caused by a renamed file ---------------------------------------------------
+
+
+def link_file_renames(units: dict[str, ChangeUnit], files: list[FileSummary]) -> None:
+    """Tag the import edits that only follow a renamed (moved) file: every edit on the unit
+    points the same name at the file's new module instead of its old one. Run after the
+    units are tagged as import-only."""
+    renamed = [f for f in files if f.status == "R" and f.old_path]
+    if not renamed:
+        return
+    old_path_of = {f.path: f.old_path for f in renamed}
+    for u in units.values():
+        if TAG_IMPORTS not in u.tags or not u.signatures:
+            continue
+        importer_old = old_path_of.get(u.path, u.path)
+        if all(_follows_rename(s, importer_old, u.path, renamed) for s in u.signatures):
+            u.tags.append(TAG_FILE_MOVE)
+
+
+def _follows_rename(sig: Signature, importer_old: str, importer: str, renamed) -> bool:
+    if sig.kind != IMPORT:
+        return False
+    _, old_mod, new_mod = sig.key.split("\0", 2)
+    if not old_mod or not new_mod:
+        return False  # a name was added or removed: more than a path update
+    if any(
+        module_matches(old_mod, f.old_path, importer_old)
+        and module_matches(new_mod, f.path, importer)
+        for f in renamed
+    ):
+        return True
+    # The importer moved, and its relative import was adjusted to keep the same target.
+    if importer_old == importer:
+        return False
+    old_target = _relative_target(old_mod, importer_old)
+    return old_target is not None and old_target == _relative_target(new_mod, importer)
