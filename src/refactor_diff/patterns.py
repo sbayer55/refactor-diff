@@ -428,6 +428,49 @@ def _import_classification(a: _Side, b: _Side, ops, old_range, new_range) -> Cla
     return result
 
 
+def imports_only(
+    analyzer: LanguageAnalyzer,
+    old: FileAnalysis,
+    new: FileAnalysis,
+    old_range: LineRange,
+    new_range: LineRange,
+) -> bool:
+    """Whether all the code on both sides is import statements (and there is some code at
+    all): a change that only touches imports, whatever it did to them."""
+    code = 0
+    for analysis, rng in ((old, old_range), (new, new_range)):
+        side = tokens_in_range(analysis, rng)
+        if _import_sites(side, rng) is None:
+            return False
+        if not _statements_start_with(side, analyzer.import_keywords()):
+            return False  # e.g. ``import os; x = 1``
+        code += sum(1 for t in side.tokens if t.kind not in (STRUCTURAL, COMMENT))
+    return code > 0
+
+
+def _statements_start_with(side: _Side, keywords: frozenset[str]) -> bool:
+    """Whether every statement the side's tokens belong to starts with one of ``keywords``
+    (statements that begin before the range included)."""
+    toks = side.analysis.tokens
+
+    def ends(t: Token) -> bool:
+        return t.kind == STRUCTURAL or (t.kind == OP and t.value == ";")
+
+    for i in range(side.offset, side.offset + len(side.tokens)):
+        t = toks[i]
+        if t.kind == COMMENT or ends(t):
+            continue
+        if i > side.offset and not ends(toks[i - 1]) and toks[i - 1].kind != COMMENT:
+            continue  # same statement as the token before
+        j = i
+        while j > 0 and not ends(toks[j - 1]):
+            j -= 1
+        head = next((x for x in toks[j : i + 1] if x.kind != COMMENT), t)
+        if head.value not in keywords:
+            return False
+    return True
+
+
 def _import_sites(side: _Side, rng: LineRange) -> list | None:
     """The import statements overlapping the range, or None if the range holds anything
     else (an empty side counts as all imports)."""
@@ -448,6 +491,8 @@ def _dotted(binding) -> str:
 
 
 def _import_text(binding) -> str:
+    if binding.text:
+        return binding.text
     if binding.name is None:
         text = f"import {binding.module}"
     else:

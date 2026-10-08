@@ -12,7 +12,7 @@ const state = {
   reviewedHunks: new Set(), // reviewed hunk fingerprints
   delta: { prevHead: null, newHunks: new Set(), changed: [] }, // since the previous analysis
   shown: PAGE,
-  filters: { hidden: new Set(), hideDocs: false, exclude: [], nearOnly: false, newOnly: false, search: "", regex: false },
+  filters: emptyFilters(),
   view: null, // the report as filtered by state.filters; see applyFilters()
   fileDiffs: new Map(), // path -> Promise of the whole-file diff (see /api/report/{id}/file)
   split: false, // side-by-side diffs (preference; see splitActive())
@@ -147,6 +147,9 @@ function loadFilters(cliDefaults) {
   state.filters = {
     hidden: new Set(f.hidden || []),
     hideDocs: Boolean(f.hideDocs),
+    hideImports: Boolean(f.hideImports),
+    hideFileMoves: Boolean(f.hideFileMoves),
+    hideMoves: Boolean(f.hideMoves),
     exclude: f.exclude || [],
     nearOnly: false,
     newOnly: false,
@@ -158,16 +161,35 @@ function saveFilters() {
   const f = state.filters;
   try {
     localStorage.setItem(filtersKey(), JSON.stringify({
-      hidden: [...f.hidden], hideDocs: f.hideDocs, exclude: f.exclude, search: f.search, regex: f.regex,
+      hidden: [...f.hidden], hideDocs: f.hideDocs, hideImports: f.hideImports, hideFileMoves: f.hideFileMoves,
+      hideMoves: f.hideMoves, exclude: f.exclude, search: f.search, regex: f.regex,
     }));
   } catch {}
 }
 function filtersActive() {
   const f = state.filters;
-  return f.hidden.size > 0 || f.hideDocs || f.exclude.length > 0 || f.nearOnly || f.newOnly || Boolean(f.search);
+  return f.hidden.size > 0 || f.hideDocs || f.hideImports || f.hideFileMoves || f.hideMoves
+    || f.exclude.length > 0 || f.nearOnly || f.newOnly || Boolean(f.search);
 }
 function emptyFilters() {
-  return { hidden: new Set(), hideDocs: false, exclude: [], nearOnly: false, newOnly: false, search: "", regex: false };
+  return {
+    hidden: new Set(), hideDocs: false, hideImports: false, hideFileMoves: false, hideMoves: false,
+    exclude: [], nearOnly: false, newOnly: false, search: "", regex: false,
+  };
+}
+
+// Kinds of change the filter bar can hide, by the unit tag the analysis gives them.
+const CHANGE_FILTERS = [
+  { key: "hideImports", tag: "imports", id: "imports-toggle", label: "Import edits",
+    title: "Changes that only touch import statements" },
+  { key: "hideFileMoves", tag: "file-move", id: "file-moves-toggle", label: "File renames",
+    title: "Files renamed or moved without changes, and import updates that only follow a renamed file" },
+  { key: "hideMoves", tag: "moved", id: "moves-toggle", label: "Moved functions",
+    title: "Functions and classes moved verbatim. Only certain moves: an exact copy under the same name, "
+      + "with no other candidate. Moves with any edit stay visible" },
+];
+function hiddenByTag(u) {
+  return CHANGE_FILTERS.some((c) => state.filters[c.key] && u.tags.includes(c.tag));
 }
 
 // The search box as a RegExp (case-insensitive), null when empty, false when invalid.
@@ -187,6 +209,7 @@ function applyFilters() {
   const fileVisible = (path) => {
     const file = fileOf.get(path);
     if (file && f.hidden.has(file.category)) return false;
+    if (file && file.pure_rename && f.hideFileMoves) return false;
     return !excludes.some((re) => re.test(path));
   };
   const docsOnly = (u) => u.signatures.length > 0 && u.signatures.every((k) => k === "docs");
@@ -195,7 +218,7 @@ function applyFilters() {
   const matches = (u) => !re || test(u.path)
     || u.old.some((ln) => test(ln.text)) || u.new.some((ln) => test(ln.text))
     || u.signatures.some((k) => { const g = state.groupsByKey.get(k); return g && test(g.label); });
-  const unitVisible = (u) => fileVisible(u.path) && !(f.hideDocs && docsOnly(u))
+  const unitVisible = (u) => fileVisible(u.path) && !(f.hideDocs && docsOnly(u)) && !hiddenByTag(u)
     && !(f.nearOnly && !u.explained && !(u.near && u.near.length))
     && !(f.newOnly && !hunkIsNew(r.hunks[u.hunk_id]))
     && matches(u);
@@ -261,6 +284,12 @@ function renderFilters() {
       ${label} <span class="n">${counts[cat]}</span></button>`).join("");
   const docsTotal = Object.values(r.units)
     .filter((u) => u.signatures.length && u.signatures.every((k) => k === "docs")).length;
+  const changeChips = CHANGE_FILTERS.map((c) => {
+    let n = Object.values(r.units).filter((u) => u.tags.includes(c.tag)).length;
+    if (c.tag === "file-move") n += r.files.filter((x) => x.pure_rename).length;
+    return `<button type="button" class="filter-chip" id="${c.id}" aria-pressed="${!f[c.key]}"
+      title="${esc(c.title)}" ${n ? "" : "disabled"}>${c.label} <span class="n">${n}</span></button>`;
+  }).join("");
   const v = state.view;
   el.innerHTML = `
     <span class="filter-label">Show files</span>
@@ -268,6 +297,7 @@ function renderFilters() {
     <button type="button" class="filter-chip" id="docs-toggle" aria-pressed="${!f.hideDocs}"
       title="Changes that only touch comments or docstrings" ${docsTotal ? "" : "disabled"}>
       Comment &amp; docstring edits <span class="n">${docsTotal}</span></button>
+    ${changeChips}
     ${v.nearUnits ? `<button type="button" class="filter-chip mode" id="near-toggle" aria-pressed="${f.nearOnly}"
       title="Only leftover changes that almost match a mechanical pattern (likely typos)">
       Only near misses <span class="n">${v.nearUnits}</span></button>` : ""}
@@ -305,6 +335,13 @@ function renderFilters() {
     saveFilters();
     rerender();
   });
+  for (const c of CHANGE_FILTERS) {
+    $(`#${c.id}`).addEventListener("click", () => {
+      f[c.key] = !f[c.key];
+      saveFilters();
+      rerender();
+    });
+  }
   $("#near-toggle")?.addEventListener("click", () => {
     f.nearOnly = !f.nearOnly;
     rerender();

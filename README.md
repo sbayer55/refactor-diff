@@ -150,6 +150,16 @@ repository.
   - *source*: other analyzed files; *other*: everything else
 - **Comment & docstring edits**: hide changes that only touch comments or docstrings. Even
   when shown, these are collapsed into their own `docs` pattern, not listed under Needs review.
+- **Import edits**: hide changes made only of import statements, whatever they did to them
+  (added, removed, reordered or re-pointed imports). A line that mixes an import with other
+  code (`import os; x = 1`) stays.
+- **File renames**: hide files that were renamed or moved without any change, and import
+  updates that only follow a renamed file (`from pkg.models import User` →
+  `from pkg.entities import User` after `models.py` became `entities.py`, or a relative import
+  adjusted because the importing file moved). Edits inside a renamed file stay.
+- **Moved functions**: hide functions, methods and classes that were moved verbatim, together
+  with the import edits the move explains. Only certain moves are hidden (see
+  [Moved code](#how-it-works)); a move with any edit inside, even to a comment, stays visible.
 - **Exclude**: comma-separated globs. A pattern without `/` matches any path segment
   (`migrations`, `*_pb2.py`); a pattern with `/` matches the whole path (`src/legacy/**`).
 
@@ -158,7 +168,8 @@ repository.
   matches are highlighted. `/` focuses the box, `Esc` clears it.
 
 To pre-set filters from the command line, use `--hide` (any of `source`, `tests`, `docs`,
-`config`, `other`, `comments`) and `--exclude GLOB` (repeatable).
+`config`, `other`, `comments`, `imports`, `file-moves`, `moves`) and `--exclude GLOB`
+(repeatable).
 
 ### Keyboard
 
@@ -261,6 +272,13 @@ code at that revision rather than your current checkout.
    the new module, or the destination gained an import the block needs — is folded into the
    move. Not detected: a block that replaces other code in the same hunk (that is one
    `replace`, not a deletion plus an insertion).
+
+   A move is *certain*, and only then hidden by the **Moved functions** filter, when all of
+   these hold: the token streams match exactly and no comment changed; the block is made only
+   of whole functions, methods or classes; they keep their qualified names (a method moved to
+   another class, or a function turned into a method, is not certain); and the same code was
+   not deleted or inserted anywhere else, so there is no other way to pair it. Anything less
+   is still shown as a move, but stays visible under that filter.
 
 6. **Verification.** For every statement (function, method, top-level statement) whose
    changes are all formatting, docs, rename or retype, the old and new versions are parsed and
