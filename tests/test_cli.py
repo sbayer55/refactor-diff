@@ -16,12 +16,15 @@ def test_range_defaults():
 
 def test_filter_defaults():
     args = parse_args(
-        ["--hide", "tests, docs,comments", "--exclude", "migrations", "--exclude", "*_pb2.py"]
+        ["--hide", "tests, docs,comments,moves", "--exclude", "migrations", "--exclude", "*_pb2.py"]
     )
     assert defaults_from(args) == {
         "filters": {
             "hidden": ["docs", "tests"],
             "hideDocs": True,
+            "hideImports": False,
+            "hideFileMoves": False,
+            "hideMoves": True,
             "exclude": ["migrations", "*_pb2.py"],
         },
         "editor": "vscode://file/{path}:{line}:{col}",

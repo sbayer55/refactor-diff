@@ -20,8 +20,11 @@ from refactor_diff.languages.base import (
     STRING,
     STRUCTURAL,
     Annotation,
+    Binding,
     FileAnalysis,
+    ImportSite,
     Pos,
+    StmtSpan,
     Token,
     char_col,
     split_lines,
@@ -83,6 +86,10 @@ _FUNCTIONS = {
     "method_signature",
     "abstract_method_signature",
 }
+_FUNCTION_DECLS = {"function_declaration", "generator_function_declaration"}
+_FUNCTION_VALUES = {"arrow_function", "function_expression", "function", "generator_function"}
+_CLASS_DECLS = {"class_declaration", "abstract_class_declaration"}
+_TYPE_DECLS = {"interface_declaration", "type_alias_declaration", "enum_declaration"}
 _IDENT_RE = re.compile(r"[A-Za-z_$][\w$]*\Z")
 _ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", "b": "\b", "f": "\f", "v": "\v"}
 _ESCAPE_RE = re.compile(r"\\(u\{[0-9a-fA-F]+\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|.)", re.S)
@@ -124,6 +131,8 @@ class TypeScriptAnalyzer:
             tokens=walker.tokens,
             annotations=walker.annotations,
             parsed=not tree.root_node.has_error,
+            statements=_statements(tree.root_node),
+            imports=_imports(tree.root_node),
         )
 
 
@@ -267,3 +276,105 @@ def _annotation_target(node: Node) -> str | None:
     if parent.type in ("public_field_definition", "property_signature"):
         return f"property {label}"
     return None
+
+
+# --- statements and imports ------------------------------------------------------------------
+
+
+def _text(node: Node | None) -> str:
+    return node.text.decode("utf-8", errors="replace") if node is not None and node.text else ""
+
+
+def _statements(root: Node) -> list[StmtSpan]:
+    """Top-level statements; class bodies recurse one level so that methods are spans of
+    their own. A statement's span includes its ``export`` and decorators."""
+    return [_span(c, c, "") for c in root.named_children if c.type != "comment"]
+
+
+def _span(outer: Node, node: Node, prefix: str, start: int | None = None) -> StmtSpan:
+    first = outer.start_point[0] + 1 if start is None else start
+    last = outer.end_point[0] + 1
+    if node.type == "export_statement":
+        inner = node.child_by_field_name("declaration")
+        if inner is not None:
+            return _span(outer, inner, prefix, first)
+        return StmtSpan(first, last, "stmt", "", outer)
+    name = _text(node.child_by_field_name("name"))
+    if node.type in _FUNCTION_DECLS and name:
+        return StmtSpan(first, last, "def", prefix + name, outer)
+    if node.type in _CLASS_DECLS and name:
+        qual = prefix + name
+        body = node.child_by_field_name("body")
+        children = tuple(_members(body, qual + ".")) if body is not None else ()
+        return StmtSpan(first, last, "class", qual, outer, children)
+    if node.type in _TYPE_DECLS and name:
+        return StmtSpan(first, last, "class", prefix + name, outer)
+    if node.type in ("lexical_declaration", "variable_declaration"):
+        decls = [c for c in node.named_children if c.type == "variable_declarator"]
+        if len(decls) == 1:
+            value = decls[0].child_by_field_name("value")
+            held = decls[0].child_by_field_name("name")
+            if value is not None and value.type in _FUNCTION_VALUES and held.type == "identifier":
+                return StmtSpan(first, last, "def", prefix + _text(held), outer)
+    return StmtSpan(first, last, "stmt", "", outer)
+
+
+def _members(body: Node, prefix: str) -> list[StmtSpan]:
+    """Class members; a member's decorators (siblings before it) belong to its span."""
+    spans = []
+    decorated: int | None = None
+    for c in body.named_children:
+        if c.type == "comment":
+            continue
+        if c.type == "decorator":
+            if decorated is None:
+                decorated = c.start_point[0] + 1
+            continue
+        start = decorated if decorated is not None else c.start_point[0] + 1
+        decorated = None
+        name = _text(c.child_by_field_name("name"))
+        if c.type == "method_definition" and name:
+            spans.append(StmtSpan(start, c.end_point[0] + 1, "def", prefix + name, c))
+        else:
+            spans.append(StmtSpan(start, c.end_point[0] + 1, "stmt", "", c))
+    return spans
+
+
+def _imports(root: Node) -> list[ImportSite]:
+    sites = []
+    for node in root.named_children:
+        if node.type != "import_statement":
+            continue
+        source = node.child_by_field_name("source")
+        if source is None:
+            continue
+        module = "".join(_text(c) for c in source.named_children) if source.named_children else ""
+        bindings: list[Binding] = []
+        quoted = f'"{module}"'
+        for clause in (c for c in node.named_children if c.type == "import_clause"):
+            for part in clause.named_children:
+                if part.type == "identifier":
+                    alias = _text(part)
+                    bindings.append(
+                        Binding(module, "default", alias, text=f"import {alias} from {quoted}")
+                    )
+                elif part.type == "namespace_import":
+                    ids = [c for c in part.named_children if c.type == "identifier"]
+                    alias = _text(ids[-1]) if ids else ""
+                    bindings.append(
+                        Binding(module, None, alias, text=f"import * as {alias} from {quoted}")
+                    )
+                elif part.type == "named_imports":
+                    for spec in part.named_children:
+                        if spec.type != "import_specifier":
+                            continue
+                        name = _text(spec.child_by_field_name("name"))
+                        alias = _text(spec.child_by_field_name("alias")) or name
+                        shown = name if alias == name else f"{name} as {alias}"
+                        bindings.append(
+                            Binding(module, name, alias, text=f"import {{ {shown} }} from {quoted}")
+                        )
+        if not bindings:
+            bindings.append(Binding(module, None, "", text=f"import {quoted}"))
+        sites.append(ImportSite(node.start_point[0] + 1, node.end_point[0] + 1, tuple(bindings)))
+    return sites

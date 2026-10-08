@@ -239,6 +239,6 @@ def test_moves_in_typescript_do_not_need_verification(tmp_path):
     )
     report = analyze(repo, "main", "feature")
     [move] = move_groups(report)
-    assert move.label == "moved block: a.ts → b.ts"
+    assert move.label == "moved helper: a.ts → b.ts"
     assert report.stats()["residual_units"] == 0
     assert not any(u.verified for u in report.units.values())
