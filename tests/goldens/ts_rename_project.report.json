@@ -1,0 +1,1563 @@
+{
+  "files": [
+    {
+      "additions": 5,
+      "analyzed": true,
+      "category": "source",
+      "deletions": 5,
+      "old_path": null,
+      "parse_ok": true,
+      "path": "api.ts",
+      "pure_rename": false,
+      "residual_units": 1,
+      "status": "M",
+      "units": 5
+    },
+    {
+      "additions": 6,
+      "analyzed": true,
+      "category": "source",
+      "deletions": 6,
+      "old_path": null,
+      "parse_ok": true,
+      "path": "billing.ts",
+      "pure_rename": false,
+      "residual_units": 0,
+      "status": "M",
+      "units": 6
+    },
+    {
+      "additions": 0,
+      "analyzed": true,
+      "category": "source",
+      "deletions": 0,
+      "old_path": null,
+      "parse_ok": true,
+      "path": "legacy.js",
+      "pure_rename": false,
+      "residual_units": 0,
+      "status": "M",
+      "units": 0
+    },
+    {
+      "additions": 3,
+      "analyzed": true,
+      "category": "source",
+      "deletions": 3,
+      "old_path": null,
+      "parse_ok": true,
+      "path": "models.ts",
+      "pure_rename": false,
+      "residual_units": 0,
+      "status": "M",
+      "units": 3
+    },
+    {
+      "additions": 0,
+      "analyzed": false,
+      "category": "config",
+      "deletions": 0,
+      "old_path": null,
+      "parse_ok": true,
+      "path": "package.json",
+      "pure_rename": false,
+      "residual_units": 0,
+      "status": "M",
+      "units": 0
+    },
+    {
+      "additions": 3,
+      "analyzed": true,
+      "category": "source",
+      "deletions": 3,
+      "old_path": null,
+      "parse_ok": true,
+      "path": "reports.ts",
+      "pure_rename": false,
+      "residual_units": 0,
+      "status": "M",
+      "units": 3
+    },
+    {
+      "additions": 0,
+      "analyzed": false,
+      "category": "config",
+      "deletions": 0,
+      "old_path": null,
+      "parse_ok": true,
+      "path": "tsconfig.json",
+      "pure_rename": false,
+      "residual_units": 0,
+      "status": "M",
+      "units": 0
+    },
+    {
+      "additions": 1,
+      "analyzed": true,
+      "category": "source",
+      "deletions": 1,
+      "old_path": null,
+      "parse_ok": true,
+      "path": "users.ts",
+      "pure_rename": false,
+      "residual_units": 0,
+      "status": "M",
+      "units": 1
+    }
+  ],
+  "groups": [
+    {
+      "details": {
+        "call": 4,
+        "definition": 1,
+        "import": 3
+      },
+      "files": [
+        "api.ts",
+        "billing.ts",
+        "reports.ts",
+        "users.ts"
+      ],
+      "id": "5a08f7f5a812",
+      "key": "rename\u0000getUser\u0000fetchUser",
+      "kind": "rename",
+      "label": "getUser → fetchUser",
+      "mechanical": true,
+      "new": "fetchUser",
+      "old": "getUser",
+      "unit_ids": [
+        "5223f177cc60",
+        "c30168c2deb6",
+        "95f1c322a913",
+        "b8079d50c12c",
+        "89f3a44bab44",
+        "125a5ec8afcf",
+        "83e48aeef12f",
+        "eacb2a6ca498"
+      ]
+    },
+    {
+      "details": {
+        "param ownerId": 1,
+        "param userId": 4,
+        "property ownerId": 1
+      },
+      "files": [
+        "api.ts",
+        "billing.ts",
+        "models.ts",
+        "users.ts"
+      ],
+      "id": "49ec759f6500",
+      "key": "retype\u0000number\u0000string",
+      "kind": "retype",
+      "label": "number → string",
+      "mechanical": true,
+      "new": "string",
+      "old": "number",
+      "unit_ids": [
+        "e3f827cbc982",
+        "3023746d54ac",
+        "3de274e033ab",
+        "e8b782a09af9",
+        "aa0771c86b7d",
+        "eacb2a6ca498"
+      ]
+    },
+    {
+      "details": {},
+      "files": [
+        "api.ts",
+        "billing.ts",
+        "models.ts",
+        "reports.ts"
+      ],
+      "id": "5b4cda6058ea",
+      "key": "formatting",
+      "kind": "formatting",
+      "label": "Whitespace / layout only",
+      "mechanical": true,
+      "new": "",
+      "old": "",
+      "unit_ids": [
+        "9611ff1649d1",
+        "46028c63f655",
+        "a566d0d73581",
+        "906cfdfb35b0"
+      ]
+    },
+    {
+      "details": {},
+      "files": [
+        "api.ts"
+      ],
+      "id": "3b2d9179a71f",
+      "key": "replace\u0000\u0001\u0000||\u0000request\u0000===\u0000undefined",
+      "kind": "replace",
+      "label": "insert || request === undefined",
+      "mechanical": false,
+      "new": "|| request === undefined",
+      "old": "",
+      "unit_ids": [
+        "a2a6dabe10c4"
+      ]
+    }
+  ],
+  "hunks": {
+    "274108cc36ef": {
+      "fingerprint": "70f0644dccea",
+      "id": "274108cc36ef",
+      "lines": [
+        {
+          "hl": [
+            [
+              9,
+              16
+            ]
+          ],
+          "new_no": null,
+          "old_no": 1,
+          "text": "import { getUser } from \"./users\";",
+          "type": "-",
+          "unit": "125a5ec8afcf"
+        },
+        {
+          "hl": [
+            [
+              9,
+              18
+            ]
+          ],
+          "new_no": 1,
+          "old_no": null,
+          "text": "import { fetchUser } from \"./users\";",
+          "type": "+",
+          "unit": "125a5ec8afcf"
+        },
+        {
+          "hl": [],
+          "new_no": 2,
+          "old_no": 2,
+          "text": "",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [],
+          "new_no": 3,
+          "old_no": 3,
+          "text": "export function summary(ids: string[]) {",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [
+            [
+              31,
+              38
+            ]
+          ],
+          "new_no": null,
+          "old_no": 4,
+          "text": "  const users = ids.map((i) => getUser(i))",
+          "type": "-",
+          "unit": "83e48aeef12f"
+        },
+        {
+          "hl": [],
+          "new_no": null,
+          "old_no": 5,
+          "text": "  return { count: users.length, label: 'users' }",
+          "type": "-",
+          "unit": "906cfdfb35b0"
+        },
+        {
+          "hl": [
+            [
+              31,
+              40
+            ]
+          ],
+          "new_no": 4,
+          "old_no": null,
+          "text": "  const users = ids.map((i) => fetchUser(i));",
+          "type": "+",
+          "unit": "83e48aeef12f"
+        },
+        {
+          "hl": [],
+          "new_no": 5,
+          "old_no": null,
+          "text": "  return { count: users.length, label: \"users\" };",
+          "type": "+",
+          "unit": "906cfdfb35b0"
+        },
+        {
+          "hl": [],
+          "new_no": 6,
+          "old_no": 6,
+          "text": "}",
+          "type": " ",
+          "unit": null
+        }
+      ],
+      "new_start": 1,
+      "old_start": 1,
+      "path": "reports.ts",
+      "unit_ids": [
+        "125a5ec8afcf",
+        "83e48aeef12f",
+        "906cfdfb35b0"
+      ]
+    },
+    "286de60f47d2": {
+      "fingerprint": "483f616e8b94",
+      "id": "286de60f47d2",
+      "lines": [
+        {
+          "hl": [
+            [
+              9,
+              16
+            ]
+          ],
+          "new_no": null,
+          "old_no": 1,
+          "text": "import { getUser } from \"./users\";",
+          "type": "-",
+          "unit": "95f1c322a913"
+        },
+        {
+          "hl": [],
+          "new_no": null,
+          "old_no": 2,
+          "text": "",
+          "type": "-",
+          "unit": "46028c63f655"
+        },
+        {
+          "hl": [
+            [
+              31,
+              37
+            ]
+          ],
+          "new_no": null,
+          "old_no": 3,
+          "text": "export function charge(userId: number) {",
+          "type": "-",
+          "unit": "3023746d54ac"
+        },
+        {
+          "hl": [
+            [
+              15,
+              22
+            ]
+          ],
+          "new_no": null,
+          "old_no": 4,
+          "text": "  const user = getUser(userId);",
+          "type": "-",
+          "unit": "b8079d50c12c"
+        },
+        {
+          "hl": [
+            [
+              9,
+              18
+            ]
+          ],
+          "new_no": 1,
+          "old_no": null,
+          "text": "import { fetchUser } from \"./users\";",
+          "type": "+",
+          "unit": "95f1c322a913"
+        },
+        {
+          "hl": [],
+          "new_no": 2,
+          "old_no": null,
+          "text": "",
+          "type": "+",
+          "unit": "46028c63f655"
+        },
+        {
+          "hl": [
+            [
+              31,
+              37
+            ]
+          ],
+          "new_no": 3,
+          "old_no": null,
+          "text": "export function charge(userId: string) {",
+          "type": "+",
+          "unit": "3023746d54ac"
+        },
+        {
+          "hl": [
+            [
+              15,
+              24
+            ]
+          ],
+          "new_no": 4,
+          "old_no": null,
+          "text": "  const user = fetchUser(userId);",
+          "type": "+",
+          "unit": "b8079d50c12c"
+        },
+        {
+          "hl": [],
+          "new_no": 5,
+          "old_no": 5,
+          "text": "  return user;",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [],
+          "new_no": 6,
+          "old_no": 6,
+          "text": "}",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [],
+          "new_no": 7,
+          "old_no": 7,
+          "text": "",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [
+            [
+              31,
+              37
+            ]
+          ],
+          "new_no": null,
+          "old_no": 8,
+          "text": "export function refund(userId: number) {",
+          "type": "-",
+          "unit": "3de274e033ab"
+        },
+        {
+          "hl": [
+            [
+              9,
+              16
+            ]
+          ],
+          "new_no": null,
+          "old_no": 9,
+          "text": "  return getUser(userId);",
+          "type": "-",
+          "unit": "89f3a44bab44"
+        },
+        {
+          "hl": [
+            [
+              31,
+              37
+            ]
+          ],
+          "new_no": 8,
+          "old_no": null,
+          "text": "export function refund(userId: string) {",
+          "type": "+",
+          "unit": "3de274e033ab"
+        },
+        {
+          "hl": [
+            [
+              9,
+              18
+            ]
+          ],
+          "new_no": 9,
+          "old_no": null,
+          "text": "  return fetchUser(userId);",
+          "type": "+",
+          "unit": "89f3a44bab44"
+        },
+        {
+          "hl": [],
+          "new_no": 10,
+          "old_no": 10,
+          "text": "}",
+          "type": " ",
+          "unit": null
+        }
+      ],
+      "new_start": 1,
+      "old_start": 1,
+      "path": "billing.ts",
+      "unit_ids": [
+        "95f1c322a913",
+        "46028c63f655",
+        "3023746d54ac",
+        "b8079d50c12c",
+        "3de274e033ab",
+        "89f3a44bab44"
+      ]
+    },
+    "973118603ece": {
+      "fingerprint": "f3f32ad10bdb",
+      "id": "973118603ece",
+      "lines": [
+        {
+          "hl": [],
+          "new_no": 1,
+          "old_no": 1,
+          "text": "/** User lookups. */",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [],
+          "new_no": 2,
+          "old_no": 2,
+          "text": "",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [
+            [
+              16,
+              23
+            ],
+            [
+              32,
+              38
+            ]
+          ],
+          "new_no": null,
+          "old_no": 3,
+          "text": "export function getUser(userId: number): object {",
+          "type": "-",
+          "unit": "eacb2a6ca498"
+        },
+        {
+          "hl": [
+            [
+              16,
+              25
+            ],
+            [
+              34,
+              40
+            ]
+          ],
+          "new_no": 3,
+          "old_no": null,
+          "text": "export function fetchUser(userId: string): object {",
+          "type": "+",
+          "unit": "eacb2a6ca498"
+        },
+        {
+          "hl": [],
+          "new_no": 4,
+          "old_no": 4,
+          "text": "  return { id: userId };",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [],
+          "new_no": 5,
+          "old_no": 5,
+          "text": "}",
+          "type": " ",
+          "unit": null
+        }
+      ],
+      "new_start": 1,
+      "old_start": 1,
+      "path": "users.ts",
+      "unit_ids": [
+        "eacb2a6ca498"
+      ]
+    },
+    "a079256f3af3": {
+      "fingerprint": "66b7cfd61fe4",
+      "id": "a079256f3af3",
+      "lines": [
+        {
+          "hl": [],
+          "new_no": 1,
+          "old_no": 1,
+          "text": "export class Account {",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [
+            [
+              12,
+              18
+            ]
+          ],
+          "new_no": null,
+          "old_no": 2,
+          "text": "  ownerId?: number;",
+          "type": "-",
+          "unit": "e8b782a09af9"
+        },
+        {
+          "hl": [],
+          "new_no": null,
+          "old_no": 3,
+          "text": "",
+          "type": "-",
+          "unit": "a566d0d73581"
+        },
+        {
+          "hl": [
+            [
+              16,
+              22
+            ]
+          ],
+          "new_no": null,
+          "old_no": 4,
+          "text": "  load(ownerId: number): void {",
+          "type": "-",
+          "unit": "aa0771c86b7d"
+        },
+        {
+          "hl": [
+            [
+              12,
+              18
+            ]
+          ],
+          "new_no": 2,
+          "old_no": null,
+          "text": "  ownerId?: string;",
+          "type": "+",
+          "unit": "e8b782a09af9"
+        },
+        {
+          "hl": [],
+          "new_no": 3,
+          "old_no": null,
+          "text": "",
+          "type": "+",
+          "unit": "a566d0d73581"
+        },
+        {
+          "hl": [
+            [
+              16,
+              22
+            ]
+          ],
+          "new_no": 4,
+          "old_no": null,
+          "text": "  load(ownerId: string): void {",
+          "type": "+",
+          "unit": "aa0771c86b7d"
+        },
+        {
+          "hl": [],
+          "new_no": 5,
+          "old_no": 5,
+          "text": "    this.ownerId = ownerId;",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [],
+          "new_no": 6,
+          "old_no": 6,
+          "text": "  }",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [],
+          "new_no": 7,
+          "old_no": 7,
+          "text": "}",
+          "type": " ",
+          "unit": null
+        }
+      ],
+      "new_start": 1,
+      "old_start": 1,
+      "path": "models.ts",
+      "unit_ids": [
+        "e8b782a09af9",
+        "a566d0d73581",
+        "aa0771c86b7d"
+      ]
+    },
+    "aed260d2d14e": {
+      "fingerprint": "411ab40f3348",
+      "id": "aed260d2d14e",
+      "lines": [
+        {
+          "hl": [
+            [
+              9,
+              16
+            ]
+          ],
+          "new_no": null,
+          "old_no": 1,
+          "text": "import { getUser } from \"./users\";",
+          "type": "-",
+          "unit": "5223f177cc60"
+        },
+        {
+          "hl": [],
+          "new_no": null,
+          "old_no": 2,
+          "text": "",
+          "type": "-",
+          "unit": "9611ff1649d1"
+        },
+        {
+          "hl": [
+            [
+              49,
+              55
+            ]
+          ],
+          "new_no": null,
+          "old_no": 3,
+          "text": "export function handle(request: unknown, userId: number) {",
+          "type": "-",
+          "unit": "e3f827cbc982"
+        },
+        {
+          "hl": [
+            [
+              15,
+              22
+            ]
+          ],
+          "new_no": null,
+          "old_no": 4,
+          "text": "  const user = getUser(userId);",
+          "type": "-",
+          "unit": "c30168c2deb6"
+        },
+        {
+          "hl": [],
+          "new_no": null,
+          "old_no": 5,
+          "text": "  if (user === null) {",
+          "type": "-",
+          "unit": "a2a6dabe10c4"
+        },
+        {
+          "hl": [
+            [
+              9,
+              18
+            ]
+          ],
+          "new_no": 1,
+          "old_no": null,
+          "text": "import { fetchUser } from \"./users\";",
+          "type": "+",
+          "unit": "5223f177cc60"
+        },
+        {
+          "hl": [],
+          "new_no": 2,
+          "old_no": null,
+          "text": "",
+          "type": "+",
+          "unit": "9611ff1649d1"
+        },
+        {
+          "hl": [
+            [
+              49,
+              55
+            ]
+          ],
+          "new_no": 3,
+          "old_no": null,
+          "text": "export function handle(request: unknown, userId: string) {",
+          "type": "+",
+          "unit": "e3f827cbc982"
+        },
+        {
+          "hl": [
+            [
+              15,
+              24
+            ]
+          ],
+          "new_no": 4,
+          "old_no": null,
+          "text": "  const user = fetchUser(userId);",
+          "type": "+",
+          "unit": "c30168c2deb6"
+        },
+        {
+          "hl": [
+            [
+              20,
+              22
+            ],
+            [
+              23,
+              30
+            ],
+            [
+              31,
+              34
+            ],
+            [
+              35,
+              44
+            ]
+          ],
+          "new_no": 5,
+          "old_no": null,
+          "text": "  if (user === null || request === undefined) {",
+          "type": "+",
+          "unit": "a2a6dabe10c4"
+        },
+        {
+          "hl": [],
+          "new_no": 6,
+          "old_no": 6,
+          "text": "    return 404;",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [],
+          "new_no": 7,
+          "old_no": 7,
+          "text": "  }",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [],
+          "new_no": 8,
+          "old_no": 8,
+          "text": "  return 200;",
+          "type": " ",
+          "unit": null
+        }
+      ],
+      "new_start": 1,
+      "old_start": 1,
+      "path": "api.ts",
+      "unit_ids": [
+        "5223f177cc60",
+        "9611ff1649d1",
+        "e3f827cbc982",
+        "c30168c2deb6",
+        "a2a6dabe10c4"
+      ]
+    }
+  },
+  "id": "b7101a1e0ad5",
+  "residual_hunk_ids": [
+    "aed260d2d14e"
+  ],
+  "source": {
+    "base": "main",
+    "base_sha": "0123456789abcdef0123456789abcdef01234567",
+    "head": "feature",
+    "head_sha": "89abcdef0123456789abcdef0123456789abcdef",
+    "identity": "refs:main:feature",
+    "label": "main...feature",
+    "min_count": 2,
+    "pr": null
+  },
+  "stats": {
+    "collapsed_pct": 94,
+    "explained_units": 17,
+    "files_analyzed": 6,
+    "files_changed": 8,
+    "mechanical_groups": 3,
+    "moves": 0,
+    "residual_units": 1,
+    "units": 18,
+    "verified_units": 0
+  },
+  "units": {
+    "125a5ec8afcf": {
+      "explained": true,
+      "hunk_id": "274108cc36ef",
+      "id": "125a5ec8afcf",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              9,
+              18
+            ]
+          ],
+          "text": "import { fetchUser } from \"./users\";"
+        }
+      ],
+      "new_start": 1,
+      "old": [
+        {
+          "hl": [
+            [
+              9,
+              16
+            ]
+          ],
+          "text": "import { getUser } from \"./users\";"
+        }
+      ],
+      "old_start": 1,
+      "partner": null,
+      "path": "reports.ts",
+      "signatures": [
+        "rename\u0000getUser\u0000fetchUser"
+      ],
+      "tags": [
+        "imports"
+      ],
+      "verified": false
+    },
+    "3023746d54ac": {
+      "explained": true,
+      "hunk_id": "286de60f47d2",
+      "id": "3023746d54ac",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              31,
+              37
+            ]
+          ],
+          "text": "export function charge(userId: string) {"
+        }
+      ],
+      "new_start": 3,
+      "old": [
+        {
+          "hl": [
+            [
+              31,
+              37
+            ]
+          ],
+          "text": "export function charge(userId: number) {"
+        }
+      ],
+      "old_start": 3,
+      "partner": null,
+      "path": "billing.ts",
+      "signatures": [
+        "retype\u0000number\u0000string"
+      ],
+      "tags": [],
+      "verified": false
+    },
+    "3de274e033ab": {
+      "explained": true,
+      "hunk_id": "286de60f47d2",
+      "id": "3de274e033ab",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              31,
+              37
+            ]
+          ],
+          "text": "export function refund(userId: string) {"
+        }
+      ],
+      "new_start": 8,
+      "old": [
+        {
+          "hl": [
+            [
+              31,
+              37
+            ]
+          ],
+          "text": "export function refund(userId: number) {"
+        }
+      ],
+      "old_start": 8,
+      "partner": null,
+      "path": "billing.ts",
+      "signatures": [
+        "retype\u0000number\u0000string"
+      ],
+      "tags": [],
+      "verified": false
+    },
+    "46028c63f655": {
+      "explained": true,
+      "hunk_id": "286de60f47d2",
+      "id": "46028c63f655",
+      "near": [],
+      "new": [
+        {
+          "hl": [],
+          "text": ""
+        }
+      ],
+      "new_start": 2,
+      "old": [
+        {
+          "hl": [],
+          "text": ""
+        }
+      ],
+      "old_start": 2,
+      "partner": null,
+      "path": "billing.ts",
+      "signatures": [
+        "formatting"
+      ],
+      "tags": [],
+      "verified": false
+    },
+    "5223f177cc60": {
+      "explained": true,
+      "hunk_id": "aed260d2d14e",
+      "id": "5223f177cc60",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              9,
+              18
+            ]
+          ],
+          "text": "import { fetchUser } from \"./users\";"
+        }
+      ],
+      "new_start": 1,
+      "old": [
+        {
+          "hl": [
+            [
+              9,
+              16
+            ]
+          ],
+          "text": "import { getUser } from \"./users\";"
+        }
+      ],
+      "old_start": 1,
+      "partner": null,
+      "path": "api.ts",
+      "signatures": [
+        "rename\u0000getUser\u0000fetchUser"
+      ],
+      "tags": [
+        "imports"
+      ],
+      "verified": false
+    },
+    "83e48aeef12f": {
+      "explained": true,
+      "hunk_id": "274108cc36ef",
+      "id": "83e48aeef12f",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              31,
+              40
+            ]
+          ],
+          "text": "  const users = ids.map((i) => fetchUser(i));"
+        }
+      ],
+      "new_start": 4,
+      "old": [
+        {
+          "hl": [
+            [
+              31,
+              38
+            ]
+          ],
+          "text": "  const users = ids.map((i) => getUser(i))"
+        }
+      ],
+      "old_start": 4,
+      "partner": null,
+      "path": "reports.ts",
+      "signatures": [
+        "rename\u0000getUser\u0000fetchUser"
+      ],
+      "tags": [],
+      "verified": false
+    },
+    "89f3a44bab44": {
+      "explained": true,
+      "hunk_id": "286de60f47d2",
+      "id": "89f3a44bab44",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              9,
+              18
+            ]
+          ],
+          "text": "  return fetchUser(userId);"
+        }
+      ],
+      "new_start": 9,
+      "old": [
+        {
+          "hl": [
+            [
+              9,
+              16
+            ]
+          ],
+          "text": "  return getUser(userId);"
+        }
+      ],
+      "old_start": 9,
+      "partner": null,
+      "path": "billing.ts",
+      "signatures": [
+        "rename\u0000getUser\u0000fetchUser"
+      ],
+      "tags": [],
+      "verified": false
+    },
+    "906cfdfb35b0": {
+      "explained": true,
+      "hunk_id": "274108cc36ef",
+      "id": "906cfdfb35b0",
+      "near": [],
+      "new": [
+        {
+          "hl": [],
+          "text": "  return { count: users.length, label: \"users\" };"
+        }
+      ],
+      "new_start": 5,
+      "old": [
+        {
+          "hl": [],
+          "text": "  return { count: users.length, label: 'users' }"
+        }
+      ],
+      "old_start": 5,
+      "partner": null,
+      "path": "reports.ts",
+      "signatures": [
+        "formatting"
+      ],
+      "tags": [],
+      "verified": false
+    },
+    "95f1c322a913": {
+      "explained": true,
+      "hunk_id": "286de60f47d2",
+      "id": "95f1c322a913",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              9,
+              18
+            ]
+          ],
+          "text": "import { fetchUser } from \"./users\";"
+        }
+      ],
+      "new_start": 1,
+      "old": [
+        {
+          "hl": [
+            [
+              9,
+              16
+            ]
+          ],
+          "text": "import { getUser } from \"./users\";"
+        }
+      ],
+      "old_start": 1,
+      "partner": null,
+      "path": "billing.ts",
+      "signatures": [
+        "rename\u0000getUser\u0000fetchUser"
+      ],
+      "tags": [
+        "imports"
+      ],
+      "verified": false
+    },
+    "9611ff1649d1": {
+      "explained": true,
+      "hunk_id": "aed260d2d14e",
+      "id": "9611ff1649d1",
+      "near": [],
+      "new": [
+        {
+          "hl": [],
+          "text": ""
+        }
+      ],
+      "new_start": 2,
+      "old": [
+        {
+          "hl": [],
+          "text": ""
+        }
+      ],
+      "old_start": 2,
+      "partner": null,
+      "path": "api.ts",
+      "signatures": [
+        "formatting"
+      ],
+      "tags": [],
+      "verified": false
+    },
+    "a2a6dabe10c4": {
+      "explained": false,
+      "hunk_id": "aed260d2d14e",
+      "id": "a2a6dabe10c4",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              20,
+              22
+            ],
+            [
+              23,
+              30
+            ],
+            [
+              31,
+              34
+            ],
+            [
+              35,
+              44
+            ]
+          ],
+          "text": "  if (user === null || request === undefined) {"
+        }
+      ],
+      "new_start": 5,
+      "old": [
+        {
+          "hl": [],
+          "text": "  if (user === null) {"
+        }
+      ],
+      "old_start": 5,
+      "partner": null,
+      "path": "api.ts",
+      "signatures": [
+        "replace\u0000\u0001\u0000||\u0000request\u0000===\u0000undefined"
+      ],
+      "tags": [],
+      "verified": false
+    },
+    "a566d0d73581": {
+      "explained": true,
+      "hunk_id": "a079256f3af3",
+      "id": "a566d0d73581",
+      "near": [],
+      "new": [
+        {
+          "hl": [],
+          "text": ""
+        }
+      ],
+      "new_start": 3,
+      "old": [
+        {
+          "hl": [],
+          "text": ""
+        }
+      ],
+      "old_start": 3,
+      "partner": null,
+      "path": "models.ts",
+      "signatures": [
+        "formatting"
+      ],
+      "tags": [],
+      "verified": false
+    },
+    "aa0771c86b7d": {
+      "explained": true,
+      "hunk_id": "a079256f3af3",
+      "id": "aa0771c86b7d",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              16,
+              22
+            ]
+          ],
+          "text": "  load(ownerId: string): void {"
+        }
+      ],
+      "new_start": 4,
+      "old": [
+        {
+          "hl": [
+            [
+              16,
+              22
+            ]
+          ],
+          "text": "  load(ownerId: number): void {"
+        }
+      ],
+      "old_start": 4,
+      "partner": null,
+      "path": "models.ts",
+      "signatures": [
+        "retype\u0000number\u0000string"
+      ],
+      "tags": [],
+      "verified": false
+    },
+    "b8079d50c12c": {
+      "explained": true,
+      "hunk_id": "286de60f47d2",
+      "id": "b8079d50c12c",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              15,
+              24
+            ]
+          ],
+          "text": "  const user = fetchUser(userId);"
+        }
+      ],
+      "new_start": 4,
+      "old": [
+        {
+          "hl": [
+            [
+              15,
+              22
+            ]
+          ],
+          "text": "  const user = getUser(userId);"
+        }
+      ],
+      "old_start": 4,
+      "partner": null,
+      "path": "billing.ts",
+      "signatures": [
+        "rename\u0000getUser\u0000fetchUser"
+      ],
+      "tags": [],
+      "verified": false
+    },
+    "c30168c2deb6": {
+      "explained": true,
+      "hunk_id": "aed260d2d14e",
+      "id": "c30168c2deb6",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              15,
+              24
+            ]
+          ],
+          "text": "  const user = fetchUser(userId);"
+        }
+      ],
+      "new_start": 4,
+      "old": [
+        {
+          "hl": [
+            [
+              15,
+              22
+            ]
+          ],
+          "text": "  const user = getUser(userId);"
+        }
+      ],
+      "old_start": 4,
+      "partner": null,
+      "path": "api.ts",
+      "signatures": [
+        "rename\u0000getUser\u0000fetchUser"
+      ],
+      "tags": [],
+      "verified": false
+    },
+    "e3f827cbc982": {
+      "explained": true,
+      "hunk_id": "aed260d2d14e",
+      "id": "e3f827cbc982",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              49,
+              55
+            ]
+          ],
+          "text": "export function handle(request: unknown, userId: string) {"
+        }
+      ],
+      "new_start": 3,
+      "old": [
+        {
+          "hl": [
+            [
+              49,
+              55
+            ]
+          ],
+          "text": "export function handle(request: unknown, userId: number) {"
+        }
+      ],
+      "old_start": 3,
+      "partner": null,
+      "path": "api.ts",
+      "signatures": [
+        "retype\u0000number\u0000string"
+      ],
+      "tags": [],
+      "verified": false
+    },
+    "e8b782a09af9": {
+      "explained": true,
+      "hunk_id": "a079256f3af3",
+      "id": "e8b782a09af9",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              12,
+              18
+            ]
+          ],
+          "text": "  ownerId?: string;"
+        }
+      ],
+      "new_start": 2,
+      "old": [
+        {
+          "hl": [
+            [
+              12,
+              18
+            ]
+          ],
+          "text": "  ownerId?: number;"
+        }
+      ],
+      "old_start": 2,
+      "partner": null,
+      "path": "models.ts",
+      "signatures": [
+        "retype\u0000number\u0000string"
+      ],
+      "tags": [],
+      "verified": false
+    },
+    "eacb2a6ca498": {
+      "explained": true,
+      "hunk_id": "973118603ece",
+      "id": "eacb2a6ca498",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              16,
+              25
+            ],
+            [
+              34,
+              40
+            ]
+          ],
+          "text": "export function fetchUser(userId: string): object {"
+        }
+      ],
+      "new_start": 3,
+      "old": [
+        {
+          "hl": [
+            [
+              16,
+              23
+            ],
+            [
+              32,
+              38
+            ]
+          ],
+          "text": "export function getUser(userId: number): object {"
+        }
+      ],
+      "old_start": 3,
+      "partner": null,
+      "path": "users.ts",
+      "signatures": [
+        "rename\u0000getUser\u0000fetchUser",
+        "retype\u0000number\u0000string"
+      ],
+      "tags": [],
+      "verified": false
+    }
+  },
+  "warnings": [
+    {
+      "group_id": "5a08f7f5a812",
+      "kind": "missed-rename",
+      "locations": [
+        {
+          "line": 1,
+          "path": "legacy.js",
+          "text": "import { getUser } from \"./users\";"
+        },
+        {
+          "line": 4,
+          "path": "legacy.js",
+          "text": "  return getUser(userId);"
+        }
+      ],
+      "message": "getUser was renamed to fetchUser and is no longer defined, but 2 references remain",
+      "total": 2
+    }
+  ]
+}

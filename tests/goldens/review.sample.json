@@ -1,0 +1,28 @@
+{
+ "comparisons": {
+  "refs:main:feature": {
+   "groups": [
+    "g1",
+    "g2"
+   ],
+   "head_sha": "bbbb",
+   "hunks": [],
+   "previous": {
+    "head_sha": "aaaa",
+    "hunks": [
+     "fp1"
+    ],
+    "seen": {
+     "fp1": "a.py",
+     "fp2": "b.py"
+    }
+   },
+   "seen": {
+    "fp2": "b.py",
+    "fp3": "c.py"
+   },
+   "updated": "2026-10-08T12:00:00+00:00"
+  }
+ },
+ "repo": "/srv/example-repo"
+}

@@ -34,7 +34,7 @@ fn save(app: &AppHandle, recents: &[String]) {
             )
         });
     if let Err(e) = result {
-        log::warn!("couldn't save {}: {e}", f.display());
+        tracing::warn!("couldn't save {}: {e}", f.display());
     }
 }
 

@@ -1,0 +1,35 @@
+{
+  "ai": {
+    "active": {
+      "configured": true,
+      "model": "llama3",
+      "provider": "ollama"
+    },
+    "context": {
+      "function": true,
+      "pr": true,
+      "references": true
+    },
+    "provider": "ollama",
+    "providers": {
+      "claude": {
+        "api_key": "••••1234",
+        "base_url": "",
+        "configured": true,
+        "model": "claude-opus-5-5"
+      },
+      "ollama": {
+        "configured": true,
+        "host": "http://127.0.0.1:11434",
+        "model": "llama3",
+        "num_ctx": 65536
+      },
+      "openai": {
+        "api_key": "",
+        "base_url": "http://localhost:1/v1",
+        "configured": true,
+        "model": "m"
+      }
+    }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "cases": [
+    {
+      "hash": "bfa2f3f7e985",
+      "parts": [
+        "a",
+        1,
+        "xé"
+      ]
+    },
+    {
+      "hash": "da39a3ee5e6b",
+      "parts": []
+    },
+    {
+      "hash": "2362274b0e98",
+      "parts": [
+        "api.py",
+        0,
+        2
+      ]
+    },
+    {
+      "hash": "6b1152100697",
+      "parts": [
+        "api.py",
+        "-old line",
+        "+new line"
+      ]
+    },
+    {
+      "hash": "b0962e9729bb",
+      "parts": [
+        "/srv/example-repo"
+      ]
+    },
+    {
+      "hash": "7562652f5995",
+      "parts": [
+        "0123456789abcdef0123456789abcdef01234567",
+        "worktree",
+        2
+      ]
+    }
+  ]
+}

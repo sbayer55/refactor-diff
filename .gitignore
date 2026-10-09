@@ -1,20 +1,8 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-build/
-dist/
+# Rust
+/target/
 
 # Environments
-.venv/
 .env
-
-# Tooling caches
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.coverage
-htmlcov/
 
 # Editors / OS
 .DS_Store
@@ -23,10 +11,7 @@ htmlcov/
 
 # Desktop app (Tauri)
 desktop/node_modules/
-desktop/src-tauri/target/
-desktop/src-tauri/sidecar/
 desktop/src-tauri/gen/
-desktop/.venv-x86_64/
 
 # Local
 .claude/

@@ -1,33 +1,30 @@
 [package]
 name = "refactor-diff-desktop"
-version = "0.1.0"
-description = "Review refactor-heavy diffs and PRs by collapsing repeated mechanical edits."
-authors = ["Steven Bayer"]
-edition = "2021"
-rust-version = "1.77"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description.workspace = true
+publish = false
 
 [lib]
 name = "refactor_diff_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { workspace = true, features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
-tauri-plugin-shell = "2"
-tauri-plugin-dialog = "2"
-tauri-plugin-opener = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-url = "2"
-libc = "0.2"
-log = "0.4"
-env_logger = "0.11"
+refactor-diff-server.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri = { workspace = true, features = [] }
+tauri-plugin-dialog.workspace = true
+tauri-plugin-opener.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
 
-[profile.release]
-codegen-units = 1
-lto = true
-opt-level = "s"
-panic = "abort"
-strip = true
+[lints]
+workspace = true

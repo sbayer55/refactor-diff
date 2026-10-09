@@ -1,0 +1,1588 @@
+{
+  "files": [
+    {
+      "additions": 1,
+      "analyzed": false,
+      "category": "docs",
+      "deletions": 0,
+      "old_path": null,
+      "parse_ok": true,
+      "path": "README.txt",
+      "pure_rename": false,
+      "residual_units": 0,
+      "status": "M",
+      "units": 0
+    },
+    {
+      "additions": 6,
+      "analyzed": true,
+      "category": "source",
+      "deletions": 6,
+      "old_path": null,
+      "parse_ok": true,
+      "path": "api.py",
+      "pure_rename": false,
+      "residual_units": 1,
+      "status": "M",
+      "units": 6
+    },
+    {
+      "additions": 4,
+      "analyzed": true,
+      "category": "source",
+      "deletions": 4,
+      "old_path": null,
+      "parse_ok": true,
+      "path": "billing.py",
+      "pure_rename": false,
+      "residual_units": 0,
+      "status": "M",
+      "units": 4
+    },
+    {
+      "additions": 0,
+      "analyzed": true,
+      "category": "source",
+      "deletions": 0,
+      "old_path": null,
+      "parse_ok": true,
+      "path": "legacy.py",
+      "pure_rename": false,
+      "residual_units": 0,
+      "status": "M",
+      "units": 0
+    },
+    {
+      "additions": 3,
+      "analyzed": true,
+      "category": "source",
+      "deletions": 3,
+      "old_path": null,
+      "parse_ok": true,
+      "path": "models.py",
+      "pure_rename": false,
+      "residual_units": 0,
+      "status": "M",
+      "units": 3
+    },
+    {
+      "additions": 4,
+      "analyzed": true,
+      "category": "source",
+      "deletions": 4,
+      "old_path": null,
+      "parse_ok": true,
+      "path": "reports.py",
+      "pure_rename": false,
+      "residual_units": 0,
+      "status": "M",
+      "units": 4
+    },
+    {
+      "additions": 1,
+      "analyzed": true,
+      "category": "source",
+      "deletions": 1,
+      "old_path": null,
+      "parse_ok": true,
+      "path": "users.py",
+      "pure_rename": false,
+      "residual_units": 0,
+      "status": "M",
+      "units": 1
+    }
+  ],
+  "groups": [
+    {
+      "details": {
+        "call": 4,
+        "definition": 1,
+        "import": 3
+      },
+      "files": [
+        "api.py",
+        "billing.py",
+        "reports.py",
+        "users.py"
+      ],
+      "id": "717eafd02191",
+      "key": "rename\u0000get_user\u0000fetch_user",
+      "kind": "rename",
+      "label": "get_user → fetch_user",
+      "mechanical": true,
+      "new": "fetch_user",
+      "old": "get_user",
+      "unit_ids": [
+        "912bf17500df",
+        "63b819ecd7bb",
+        "504222a75e9c",
+        "ddd41bf8b066",
+        "90f5bfe70b56",
+        "056a1e59a826",
+        "8de74156070f",
+        "0c4883d7b59b"
+      ]
+    },
+    {
+      "details": {
+        "param owner_id": 1,
+        "param user_id": 2,
+        "variable owner_id": 1
+      },
+      "files": [
+        "api.py",
+        "models.py",
+        "users.py"
+      ],
+      "id": "1939905c6a15",
+      "key": "retype\u0000int\u0000str",
+      "kind": "retype",
+      "label": "int → str",
+      "mechanical": true,
+      "new": "str",
+      "old": "int",
+      "unit_ids": [
+        "5336245d3c93",
+        "aa991af12b60",
+        "a7dd7dd0e1da",
+        "0c4883d7b59b"
+      ]
+    },
+    {
+      "details": {},
+      "files": [
+        "billing.py",
+        "reports.py"
+      ],
+      "id": "cdfd92ec508d",
+      "key": "replace\u0000cfg\u0000.\u0000get\u0000(\u0000'timeout'\u0000)\u0000\u0001\u0000settings\u0000.\u0000timeout",
+      "kind": "replace",
+      "label": "cfg.get(\"timeout\") → settings.timeout",
+      "mechanical": true,
+      "new": "settings.timeout",
+      "old": "cfg.get(\"timeout\")",
+      "unit_ids": [
+        "5b0d1e85ba2a",
+        "9f31fbd731b4"
+      ]
+    },
+    {
+      "details": {},
+      "files": [
+        "api.py",
+        "models.py",
+        "reports.py"
+      ],
+      "id": "5b4cda6058ea",
+      "key": "formatting",
+      "kind": "formatting",
+      "label": "Whitespace / layout only",
+      "mechanical": true,
+      "new": "",
+      "old": "",
+      "unit_ids": [
+        "b5daedf3e868",
+        "7e6269b1ca63",
+        "c739d04bd7b2",
+        "791f20bd5333"
+      ]
+    },
+    {
+      "details": {},
+      "files": [
+        "api.py"
+      ],
+      "id": "e758b8260499",
+      "key": "replace\u0000\u0001\u0000or\u0000not\u0000user\u0000.\u0000get\u0000(\u0000'active'\u0000)",
+      "kind": "replace",
+      "label": "insert or not user.get(\"active\")",
+      "mechanical": false,
+      "new": "or not user.get(\"active\")",
+      "old": "",
+      "unit_ids": [
+        "9da9c00a475f"
+      ]
+    }
+  ],
+  "hunks": {
+    "00345ec2d5f7": {
+      "fingerprint": "95e483d6ec34",
+      "id": "00345ec2d5f7",
+      "lines": [
+        {
+          "hl": [
+            [
+              18,
+              26
+            ]
+          ],
+          "new_no": null,
+          "old_no": 1,
+          "text": "from users import get_user",
+          "type": "-",
+          "unit": "056a1e59a826"
+        },
+        {
+          "hl": [
+            [
+              18,
+              28
+            ]
+          ],
+          "new_no": 1,
+          "old_no": null,
+          "text": "from users import fetch_user",
+          "type": "+",
+          "unit": "056a1e59a826"
+        },
+        {
+          "hl": [],
+          "new_no": 2,
+          "old_no": 2,
+          "text": "",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [],
+          "new_no": 3,
+          "old_no": 3,
+          "text": "",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [],
+          "new_no": 4,
+          "old_no": 4,
+          "text": "def summary(cfg, ids):",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [
+            [
+              14,
+              17
+            ],
+            [
+              18,
+              32
+            ]
+          ],
+          "new_no": null,
+          "old_no": 5,
+          "text": "    timeout = cfg.get(\"timeout\")",
+          "type": "-",
+          "unit": "9f31fbd731b4"
+        },
+        {
+          "hl": [
+            [
+              13,
+              21
+            ]
+          ],
+          "new_no": null,
+          "old_no": 6,
+          "text": "    users = [get_user(i) for i in ids]",
+          "type": "-",
+          "unit": "8de74156070f"
+        },
+        {
+          "hl": [],
+          "new_no": null,
+          "old_no": 7,
+          "text": "    return {'count': len(users), 'timeout': timeout}",
+          "type": "-",
+          "unit": "791f20bd5333"
+        },
+        {
+          "hl": [
+            [
+              14,
+              22
+            ],
+            [
+              23,
+              30
+            ]
+          ],
+          "new_no": 5,
+          "old_no": null,
+          "text": "    timeout = settings.timeout",
+          "type": "+",
+          "unit": "9f31fbd731b4"
+        },
+        {
+          "hl": [
+            [
+              13,
+              23
+            ]
+          ],
+          "new_no": 6,
+          "old_no": null,
+          "text": "    users = [fetch_user(i) for i in ids]",
+          "type": "+",
+          "unit": "8de74156070f"
+        },
+        {
+          "hl": [],
+          "new_no": 7,
+          "old_no": null,
+          "text": "    return {\"count\": len(users), \"timeout\": timeout}",
+          "type": "+",
+          "unit": "791f20bd5333"
+        }
+      ],
+      "new_start": 1,
+      "old_start": 1,
+      "path": "reports.py",
+      "unit_ids": [
+        "056a1e59a826",
+        "9f31fbd731b4",
+        "8de74156070f",
+        "791f20bd5333"
+      ]
+    },
+    "42187467e3d8": {
+      "fingerprint": "3d7b7778bda0",
+      "id": "42187467e3d8",
+      "lines": [
+        {
+          "hl": [
+            [
+              18,
+              26
+            ]
+          ],
+          "new_no": null,
+          "old_no": 1,
+          "text": "from users import get_user",
+          "type": "-",
+          "unit": "912bf17500df"
+        },
+        {
+          "hl": [],
+          "new_no": null,
+          "old_no": 2,
+          "text": "",
+          "type": "-",
+          "unit": "b5daedf3e868"
+        },
+        {
+          "hl": [],
+          "new_no": null,
+          "old_no": 3,
+          "text": "",
+          "type": "-",
+          "unit": "7e6269b1ca63"
+        },
+        {
+          "hl": [
+            [
+              29,
+              32
+            ]
+          ],
+          "new_no": null,
+          "old_no": 4,
+          "text": "def handle(request, user_id: int):",
+          "type": "-",
+          "unit": "5336245d3c93"
+        },
+        {
+          "hl": [
+            [
+              11,
+              19
+            ]
+          ],
+          "new_no": null,
+          "old_no": 5,
+          "text": "    user = get_user(user_id)",
+          "type": "-",
+          "unit": "63b819ecd7bb"
+        },
+        {
+          "hl": [],
+          "new_no": null,
+          "old_no": 6,
+          "text": "    if user is None:",
+          "type": "-",
+          "unit": "9da9c00a475f"
+        },
+        {
+          "hl": [
+            [
+              18,
+              28
+            ]
+          ],
+          "new_no": 1,
+          "old_no": null,
+          "text": "from users import fetch_user",
+          "type": "+",
+          "unit": "912bf17500df"
+        },
+        {
+          "hl": [],
+          "new_no": 2,
+          "old_no": null,
+          "text": "",
+          "type": "+",
+          "unit": "b5daedf3e868"
+        },
+        {
+          "hl": [],
+          "new_no": 3,
+          "old_no": null,
+          "text": "",
+          "type": "+",
+          "unit": "7e6269b1ca63"
+        },
+        {
+          "hl": [
+            [
+              29,
+              32
+            ]
+          ],
+          "new_no": 4,
+          "old_no": null,
+          "text": "def handle(request, user_id: str):",
+          "type": "+",
+          "unit": "5336245d3c93"
+        },
+        {
+          "hl": [
+            [
+              11,
+              21
+            ]
+          ],
+          "new_no": 5,
+          "old_no": null,
+          "text": "    user = fetch_user(user_id)",
+          "type": "+",
+          "unit": "63b819ecd7bb"
+        },
+        {
+          "hl": [
+            [
+              20,
+              22
+            ],
+            [
+              23,
+              26
+            ],
+            [
+              27,
+              45
+            ]
+          ],
+          "new_no": 6,
+          "old_no": null,
+          "text": "    if user is None or not user.get(\"active\"):",
+          "type": "+",
+          "unit": "9da9c00a475f"
+        },
+        {
+          "hl": [],
+          "new_no": 7,
+          "old_no": 7,
+          "text": "        return 404",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [],
+          "new_no": 8,
+          "old_no": 8,
+          "text": "    return 200",
+          "type": " ",
+          "unit": null
+        }
+      ],
+      "new_start": 1,
+      "old_start": 1,
+      "path": "api.py",
+      "unit_ids": [
+        "912bf17500df",
+        "b5daedf3e868",
+        "7e6269b1ca63",
+        "5336245d3c93",
+        "63b819ecd7bb",
+        "9da9c00a475f"
+      ]
+    },
+    "ae85e94069b9": {
+      "fingerprint": "61ee2f8d2eb4",
+      "id": "ae85e94069b9",
+      "lines": [
+        {
+          "hl": [],
+          "new_no": 1,
+          "old_no": 1,
+          "text": "class Account:",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [
+            [
+              14,
+              17
+            ]
+          ],
+          "new_no": null,
+          "old_no": 2,
+          "text": "    owner_id: int = 0",
+          "type": "-",
+          "unit": "aa991af12b60"
+        },
+        {
+          "hl": [],
+          "new_no": null,
+          "old_no": 3,
+          "text": "",
+          "type": "-",
+          "unit": "c739d04bd7b2"
+        },
+        {
+          "hl": [
+            [
+              29,
+              32
+            ]
+          ],
+          "new_no": null,
+          "old_no": 4,
+          "text": "    def load(self, owner_id: int) -> None:",
+          "type": "-",
+          "unit": "a7dd7dd0e1da"
+        },
+        {
+          "hl": [
+            [
+              14,
+              17
+            ]
+          ],
+          "new_no": 2,
+          "old_no": null,
+          "text": "    owner_id: str = 0",
+          "type": "+",
+          "unit": "aa991af12b60"
+        },
+        {
+          "hl": [],
+          "new_no": 3,
+          "old_no": null,
+          "text": "",
+          "type": "+",
+          "unit": "c739d04bd7b2"
+        },
+        {
+          "hl": [
+            [
+              29,
+              32
+            ]
+          ],
+          "new_no": 4,
+          "old_no": null,
+          "text": "    def load(self, owner_id: str) -> None:",
+          "type": "+",
+          "unit": "a7dd7dd0e1da"
+        },
+        {
+          "hl": [],
+          "new_no": 5,
+          "old_no": 5,
+          "text": "        self.owner_id = owner_id",
+          "type": " ",
+          "unit": null
+        }
+      ],
+      "new_start": 1,
+      "old_start": 1,
+      "path": "models.py",
+      "unit_ids": [
+        "aa991af12b60",
+        "c739d04bd7b2",
+        "a7dd7dd0e1da"
+      ]
+    },
+    "ccffc450208b": {
+      "fingerprint": "d7d37f1c4422",
+      "id": "ccffc450208b",
+      "lines": [
+        {
+          "hl": [
+            [
+              18,
+              26
+            ]
+          ],
+          "new_no": null,
+          "old_no": 1,
+          "text": "from users import get_user",
+          "type": "-",
+          "unit": "504222a75e9c"
+        },
+        {
+          "hl": [
+            [
+              18,
+              28
+            ]
+          ],
+          "new_no": 1,
+          "old_no": null,
+          "text": "from users import fetch_user",
+          "type": "+",
+          "unit": "504222a75e9c"
+        },
+        {
+          "hl": [],
+          "new_no": 2,
+          "old_no": 2,
+          "text": "",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [],
+          "new_no": 3,
+          "old_no": 3,
+          "text": "",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [],
+          "new_no": 4,
+          "old_no": 4,
+          "text": "def charge(cfg, user_id):",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [
+            [
+              11,
+              19
+            ]
+          ],
+          "new_no": null,
+          "old_no": 5,
+          "text": "    user = get_user(user_id)",
+          "type": "-",
+          "unit": "ddd41bf8b066"
+        },
+        {
+          "hl": [
+            [
+              14,
+              17
+            ],
+            [
+              18,
+              32
+            ]
+          ],
+          "new_no": null,
+          "old_no": 6,
+          "text": "    timeout = cfg.get(\"timeout\")",
+          "type": "-",
+          "unit": "5b0d1e85ba2a"
+        },
+        {
+          "hl": [
+            [
+              11,
+              21
+            ]
+          ],
+          "new_no": 5,
+          "old_no": null,
+          "text": "    user = fetch_user(user_id)",
+          "type": "+",
+          "unit": "ddd41bf8b066"
+        },
+        {
+          "hl": [
+            [
+              14,
+              22
+            ],
+            [
+              23,
+              30
+            ]
+          ],
+          "new_no": 6,
+          "old_no": null,
+          "text": "    timeout = settings.timeout",
+          "type": "+",
+          "unit": "5b0d1e85ba2a"
+        },
+        {
+          "hl": [],
+          "new_no": 7,
+          "old_no": 7,
+          "text": "    return user, timeout",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [],
+          "new_no": 8,
+          "old_no": 8,
+          "text": "",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [],
+          "new_no": 9,
+          "old_no": 9,
+          "text": "",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [],
+          "new_no": 10,
+          "old_no": 10,
+          "text": "def refund(cfg, user_id):",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [
+            [
+              11,
+              19
+            ]
+          ],
+          "new_no": null,
+          "old_no": 11,
+          "text": "    return get_user(user_id)",
+          "type": "-",
+          "unit": "90f5bfe70b56"
+        },
+        {
+          "hl": [
+            [
+              11,
+              21
+            ]
+          ],
+          "new_no": 11,
+          "old_no": null,
+          "text": "    return fetch_user(user_id)",
+          "type": "+",
+          "unit": "90f5bfe70b56"
+        }
+      ],
+      "new_start": 1,
+      "old_start": 1,
+      "path": "billing.py",
+      "unit_ids": [
+        "504222a75e9c",
+        "ddd41bf8b066",
+        "5b0d1e85ba2a",
+        "90f5bfe70b56"
+      ]
+    },
+    "d1b92befca1d": {
+      "fingerprint": "26267b0bcf57",
+      "id": "d1b92befca1d",
+      "lines": [
+        {
+          "hl": [],
+          "new_no": 1,
+          "old_no": 1,
+          "text": "\"\"\"User lookups.\"\"\"",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [],
+          "new_no": 2,
+          "old_no": 2,
+          "text": "",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [],
+          "new_no": 3,
+          "old_no": 3,
+          "text": "",
+          "type": " ",
+          "unit": null
+        },
+        {
+          "hl": [
+            [
+              4,
+              12
+            ],
+            [
+              22,
+              25
+            ]
+          ],
+          "new_no": null,
+          "old_no": 4,
+          "text": "def get_user(user_id: int) -> dict:",
+          "type": "-",
+          "unit": "0c4883d7b59b"
+        },
+        {
+          "hl": [
+            [
+              4,
+              14
+            ],
+            [
+              24,
+              27
+            ]
+          ],
+          "new_no": 4,
+          "old_no": null,
+          "text": "def fetch_user(user_id: str) -> dict:",
+          "type": "+",
+          "unit": "0c4883d7b59b"
+        },
+        {
+          "hl": [],
+          "new_no": 5,
+          "old_no": 5,
+          "text": "    return {\"id\": user_id}",
+          "type": " ",
+          "unit": null
+        }
+      ],
+      "new_start": 1,
+      "old_start": 1,
+      "path": "users.py",
+      "unit_ids": [
+        "0c4883d7b59b"
+      ]
+    }
+  },
+  "id": "b7101a1e0ad5",
+  "residual_hunk_ids": [
+    "42187467e3d8"
+  ],
+  "source": {
+    "base": "main",
+    "base_sha": "0123456789abcdef0123456789abcdef01234567",
+    "head": "feature",
+    "head_sha": "89abcdef0123456789abcdef0123456789abcdef",
+    "identity": "refs:main:feature",
+    "label": "main...feature",
+    "min_count": 2,
+    "pr": null
+  },
+  "stats": {
+    "collapsed_pct": 94,
+    "explained_units": 17,
+    "files_analyzed": 6,
+    "files_changed": 7,
+    "mechanical_groups": 4,
+    "moves": 0,
+    "residual_units": 1,
+    "units": 18,
+    "verified_units": 9
+  },
+  "units": {
+    "056a1e59a826": {
+      "explained": true,
+      "hunk_id": "00345ec2d5f7",
+      "id": "056a1e59a826",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              18,
+              28
+            ]
+          ],
+          "text": "from users import fetch_user"
+        }
+      ],
+      "new_start": 1,
+      "old": [
+        {
+          "hl": [
+            [
+              18,
+              26
+            ]
+          ],
+          "text": "from users import get_user"
+        }
+      ],
+      "old_start": 1,
+      "partner": null,
+      "path": "reports.py",
+      "signatures": [
+        "rename\u0000get_user\u0000fetch_user"
+      ],
+      "tags": [
+        "imports"
+      ],
+      "verified": true
+    },
+    "0c4883d7b59b": {
+      "explained": true,
+      "hunk_id": "d1b92befca1d",
+      "id": "0c4883d7b59b",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              4,
+              14
+            ],
+            [
+              24,
+              27
+            ]
+          ],
+          "text": "def fetch_user(user_id: str) -> dict:"
+        }
+      ],
+      "new_start": 4,
+      "old": [
+        {
+          "hl": [
+            [
+              4,
+              12
+            ],
+            [
+              22,
+              25
+            ]
+          ],
+          "text": "def get_user(user_id: int) -> dict:"
+        }
+      ],
+      "old_start": 4,
+      "partner": null,
+      "path": "users.py",
+      "signatures": [
+        "rename\u0000get_user\u0000fetch_user",
+        "retype\u0000int\u0000str"
+      ],
+      "tags": [],
+      "verified": true
+    },
+    "504222a75e9c": {
+      "explained": true,
+      "hunk_id": "ccffc450208b",
+      "id": "504222a75e9c",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              18,
+              28
+            ]
+          ],
+          "text": "from users import fetch_user"
+        }
+      ],
+      "new_start": 1,
+      "old": [
+        {
+          "hl": [
+            [
+              18,
+              26
+            ]
+          ],
+          "text": "from users import get_user"
+        }
+      ],
+      "old_start": 1,
+      "partner": null,
+      "path": "billing.py",
+      "signatures": [
+        "rename\u0000get_user\u0000fetch_user"
+      ],
+      "tags": [
+        "imports"
+      ],
+      "verified": true
+    },
+    "5336245d3c93": {
+      "explained": true,
+      "hunk_id": "42187467e3d8",
+      "id": "5336245d3c93",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              29,
+              32
+            ]
+          ],
+          "text": "def handle(request, user_id: str):"
+        }
+      ],
+      "new_start": 4,
+      "old": [
+        {
+          "hl": [
+            [
+              29,
+              32
+            ]
+          ],
+          "text": "def handle(request, user_id: int):"
+        }
+      ],
+      "old_start": 4,
+      "partner": null,
+      "path": "api.py",
+      "signatures": [
+        "retype\u0000int\u0000str"
+      ],
+      "tags": [],
+      "verified": false
+    },
+    "5b0d1e85ba2a": {
+      "explained": true,
+      "hunk_id": "ccffc450208b",
+      "id": "5b0d1e85ba2a",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              14,
+              22
+            ],
+            [
+              23,
+              30
+            ]
+          ],
+          "text": "    timeout = settings.timeout"
+        }
+      ],
+      "new_start": 6,
+      "old": [
+        {
+          "hl": [
+            [
+              14,
+              17
+            ],
+            [
+              18,
+              32
+            ]
+          ],
+          "text": "    timeout = cfg.get(\"timeout\")"
+        }
+      ],
+      "old_start": 6,
+      "partner": null,
+      "path": "billing.py",
+      "signatures": [
+        "replace\u0000cfg\u0000.\u0000get\u0000(\u0000'timeout'\u0000)\u0000\u0001\u0000settings\u0000.\u0000timeout"
+      ],
+      "tags": [],
+      "verified": false
+    },
+    "63b819ecd7bb": {
+      "explained": true,
+      "hunk_id": "42187467e3d8",
+      "id": "63b819ecd7bb",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              11,
+              21
+            ]
+          ],
+          "text": "    user = fetch_user(user_id)"
+        }
+      ],
+      "new_start": 5,
+      "old": [
+        {
+          "hl": [
+            [
+              11,
+              19
+            ]
+          ],
+          "text": "    user = get_user(user_id)"
+        }
+      ],
+      "old_start": 5,
+      "partner": null,
+      "path": "api.py",
+      "signatures": [
+        "rename\u0000get_user\u0000fetch_user"
+      ],
+      "tags": [],
+      "verified": false
+    },
+    "791f20bd5333": {
+      "explained": true,
+      "hunk_id": "00345ec2d5f7",
+      "id": "791f20bd5333",
+      "near": [],
+      "new": [
+        {
+          "hl": [],
+          "text": "    return {\"count\": len(users), \"timeout\": timeout}"
+        }
+      ],
+      "new_start": 7,
+      "old": [
+        {
+          "hl": [],
+          "text": "    return {'count': len(users), 'timeout': timeout}"
+        }
+      ],
+      "old_start": 7,
+      "partner": null,
+      "path": "reports.py",
+      "signatures": [
+        "formatting"
+      ],
+      "tags": [],
+      "verified": false
+    },
+    "7e6269b1ca63": {
+      "explained": true,
+      "hunk_id": "42187467e3d8",
+      "id": "7e6269b1ca63",
+      "near": [],
+      "new": [
+        {
+          "hl": [],
+          "text": ""
+        }
+      ],
+      "new_start": 3,
+      "old": [
+        {
+          "hl": [],
+          "text": ""
+        }
+      ],
+      "old_start": 3,
+      "partner": null,
+      "path": "api.py",
+      "signatures": [
+        "formatting"
+      ],
+      "tags": [],
+      "verified": true
+    },
+    "8de74156070f": {
+      "explained": true,
+      "hunk_id": "00345ec2d5f7",
+      "id": "8de74156070f",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              13,
+              23
+            ]
+          ],
+          "text": "    users = [fetch_user(i) for i in ids]"
+        }
+      ],
+      "new_start": 6,
+      "old": [
+        {
+          "hl": [
+            [
+              13,
+              21
+            ]
+          ],
+          "text": "    users = [get_user(i) for i in ids]"
+        }
+      ],
+      "old_start": 6,
+      "partner": null,
+      "path": "reports.py",
+      "signatures": [
+        "rename\u0000get_user\u0000fetch_user"
+      ],
+      "tags": [],
+      "verified": false
+    },
+    "90f5bfe70b56": {
+      "explained": true,
+      "hunk_id": "ccffc450208b",
+      "id": "90f5bfe70b56",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              11,
+              21
+            ]
+          ],
+          "text": "    return fetch_user(user_id)"
+        }
+      ],
+      "new_start": 11,
+      "old": [
+        {
+          "hl": [
+            [
+              11,
+              19
+            ]
+          ],
+          "text": "    return get_user(user_id)"
+        }
+      ],
+      "old_start": 11,
+      "partner": null,
+      "path": "billing.py",
+      "signatures": [
+        "rename\u0000get_user\u0000fetch_user"
+      ],
+      "tags": [],
+      "verified": true
+    },
+    "912bf17500df": {
+      "explained": true,
+      "hunk_id": "42187467e3d8",
+      "id": "912bf17500df",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              18,
+              28
+            ]
+          ],
+          "text": "from users import fetch_user"
+        }
+      ],
+      "new_start": 1,
+      "old": [
+        {
+          "hl": [
+            [
+              18,
+              26
+            ]
+          ],
+          "text": "from users import get_user"
+        }
+      ],
+      "old_start": 1,
+      "partner": null,
+      "path": "api.py",
+      "signatures": [
+        "rename\u0000get_user\u0000fetch_user"
+      ],
+      "tags": [
+        "imports"
+      ],
+      "verified": true
+    },
+    "9da9c00a475f": {
+      "explained": false,
+      "hunk_id": "42187467e3d8",
+      "id": "9da9c00a475f",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              20,
+              22
+            ],
+            [
+              23,
+              26
+            ],
+            [
+              27,
+              45
+            ]
+          ],
+          "text": "    if user is None or not user.get(\"active\"):"
+        }
+      ],
+      "new_start": 6,
+      "old": [
+        {
+          "hl": [],
+          "text": "    if user is None:"
+        }
+      ],
+      "old_start": 6,
+      "partner": null,
+      "path": "api.py",
+      "signatures": [
+        "replace\u0000\u0001\u0000or\u0000not\u0000user\u0000.\u0000get\u0000(\u0000'active'\u0000)"
+      ],
+      "tags": [],
+      "verified": false
+    },
+    "9f31fbd731b4": {
+      "explained": true,
+      "hunk_id": "00345ec2d5f7",
+      "id": "9f31fbd731b4",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              14,
+              22
+            ],
+            [
+              23,
+              30
+            ]
+          ],
+          "text": "    timeout = settings.timeout"
+        }
+      ],
+      "new_start": 5,
+      "old": [
+        {
+          "hl": [
+            [
+              14,
+              17
+            ],
+            [
+              18,
+              32
+            ]
+          ],
+          "text": "    timeout = cfg.get(\"timeout\")"
+        }
+      ],
+      "old_start": 5,
+      "partner": null,
+      "path": "reports.py",
+      "signatures": [
+        "replace\u0000cfg\u0000.\u0000get\u0000(\u0000'timeout'\u0000)\u0000\u0001\u0000settings\u0000.\u0000timeout"
+      ],
+      "tags": [],
+      "verified": false
+    },
+    "a7dd7dd0e1da": {
+      "explained": true,
+      "hunk_id": "ae85e94069b9",
+      "id": "a7dd7dd0e1da",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              29,
+              32
+            ]
+          ],
+          "text": "    def load(self, owner_id: str) -> None:"
+        }
+      ],
+      "new_start": 4,
+      "old": [
+        {
+          "hl": [
+            [
+              29,
+              32
+            ]
+          ],
+          "text": "    def load(self, owner_id: int) -> None:"
+        }
+      ],
+      "old_start": 4,
+      "partner": null,
+      "path": "models.py",
+      "signatures": [
+        "retype\u0000int\u0000str"
+      ],
+      "tags": [],
+      "verified": true
+    },
+    "aa991af12b60": {
+      "explained": true,
+      "hunk_id": "ae85e94069b9",
+      "id": "aa991af12b60",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              14,
+              17
+            ]
+          ],
+          "text": "    owner_id: str = 0"
+        }
+      ],
+      "new_start": 2,
+      "old": [
+        {
+          "hl": [
+            [
+              14,
+              17
+            ]
+          ],
+          "text": "    owner_id: int = 0"
+        }
+      ],
+      "old_start": 2,
+      "partner": null,
+      "path": "models.py",
+      "signatures": [
+        "retype\u0000int\u0000str"
+      ],
+      "tags": [],
+      "verified": true
+    },
+    "b5daedf3e868": {
+      "explained": true,
+      "hunk_id": "42187467e3d8",
+      "id": "b5daedf3e868",
+      "near": [],
+      "new": [
+        {
+          "hl": [],
+          "text": ""
+        }
+      ],
+      "new_start": 2,
+      "old": [
+        {
+          "hl": [],
+          "text": ""
+        }
+      ],
+      "old_start": 2,
+      "partner": null,
+      "path": "api.py",
+      "signatures": [
+        "formatting"
+      ],
+      "tags": [],
+      "verified": true
+    },
+    "c739d04bd7b2": {
+      "explained": true,
+      "hunk_id": "ae85e94069b9",
+      "id": "c739d04bd7b2",
+      "near": [],
+      "new": [
+        {
+          "hl": [],
+          "text": ""
+        }
+      ],
+      "new_start": 3,
+      "old": [
+        {
+          "hl": [],
+          "text": ""
+        }
+      ],
+      "old_start": 3,
+      "partner": null,
+      "path": "models.py",
+      "signatures": [
+        "formatting"
+      ],
+      "tags": [],
+      "verified": false
+    },
+    "ddd41bf8b066": {
+      "explained": true,
+      "hunk_id": "ccffc450208b",
+      "id": "ddd41bf8b066",
+      "near": [],
+      "new": [
+        {
+          "hl": [
+            [
+              11,
+              21
+            ]
+          ],
+          "text": "    user = fetch_user(user_id)"
+        }
+      ],
+      "new_start": 5,
+      "old": [
+        {
+          "hl": [
+            [
+              11,
+              19
+            ]
+          ],
+          "text": "    user = get_user(user_id)"
+        }
+      ],
+      "old_start": 5,
+      "partner": null,
+      "path": "billing.py",
+      "signatures": [
+        "rename\u0000get_user\u0000fetch_user"
+      ],
+      "tags": [],
+      "verified": false
+    }
+  },
+  "warnings": [
+    {
+      "group_id": "717eafd02191",
+      "kind": "missed-rename",
+      "locations": [
+        {
+          "line": 1,
+          "path": "legacy.py",
+          "text": "from users import get_user"
+        },
+        {
+          "line": 5,
+          "path": "legacy.py",
+          "text": "    return get_user(user_id)"
+        }
+      ],
+      "message": "get_user was renamed to fetch_user and is no longer defined, but 2 references remain",
+      "total": 2
+    }
+  ]
+}
