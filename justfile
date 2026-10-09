@@ -3,60 +3,82 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 desktop := justfile_directory() / "desktop"
-bundle := desktop / "src-tauri/target/aarch64-apple-darwin/release/bundle"
-# tauri-build checks bundled resources exist; unit tests don't need the frozen sidecar.
-no_sidecar := '{"bundle":{"resources":[]}}'
+vendor  := justfile_directory() / "crates/refactor-diff-server/python/vendor"
+bundle  := justfile_directory() / "target/release/bundle"
+
+# Pinned pure-Python dependencies bundled into the binary for Python code navigation.
+jedi_version  := "0.20.0"
+parso_version := "0.8.7"
 
 # List recipes
 default:
     @just --list --unsorted
 
-# ---------------------------------------------------------------- Python ---
+# ------------------------------------------------------------------ Rust ---
 
-# Install the Python environment with dev dependencies
+# Install the toolchain components and the desktop app's npm dependencies
 setup:
-    uv sync
+    rustup component add rustfmt clippy
+    cd "{{ desktop }}" && npm install
 
-# Run the test suite (extra args go to pytest, e.g. `just test -k typescript`)
+# Run the test suite (extra args go to cargo test, e.g. `just test -p refactor-diff-core seqmatch`)
 test *args:
-    uv run pytest {{ args }}
+    cargo test {{ args }}
 
 # Lint and check formatting
 lint:
-    uv run ruff check .
-    uv run ruff format --check .
+    cargo fmt --all --check
+    cargo clippy --all-targets -- -D warnings
 
-# Format code and apply safe lint fixes
+# Format code
 fmt:
-    uv run ruff format .
-    uv run ruff check --fix .
+    cargo fmt --all
 
 # Lint, format check and tests: what should pass before a PR
 check: lint test
 
 # Run the CLI from the checkout (e.g. `just run main..HEAD --no-browser`)
 run *args:
-    uv run refactor-diff {{ args }}
+    cargo run -p refactor-diff -- {{ args }}
 
-# Install the CLI as a uv tool from this checkout
+# Install the CLI into ~/.cargo/bin from this checkout
 install:
-    uv tool install --force .
+    cargo install --path crates/refactor-diff --locked
 
-# Build the sdist and wheel into dist/
+# Build the release binary (target/release/refactor-diff)
 build:
-    uv build
+    cargo build --release -p refactor-diff
 
-# Remove caches and build output
+# Remove build output
 clean:
-    rm -rf build dist .pytest_cache .ruff_cache .coverage htmlcov
-    find . -path ./.venv -prune -o -path ./desktop/node_modules -prune -o -name __pycache__ -type d -print0 | xargs -0 rm -rf
+    cargo clean
+    rm -rf "{{ desktop }}/src-tauri/gen"
+
+# Refresh the vendored jedi/parso to the pinned versions (needs network; commit the result)
+vendor-python:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    python3 -m pip download --no-deps --only-binary=:all: --dest "$tmp" \
+        "jedi=={{ jedi_version }}" "parso=={{ parso_version }}"
+    rm -rf "{{ vendor }}"
+    mkdir -p "{{ vendor }}/LICENSES"
+    for whl in "$tmp"/*.whl; do unzip -q "$whl" -d "{{ vendor }}"; done
+    find "{{ vendor }}" -name '__pycache__' -type d -prune -exec rm -rf {} +
+    for info in "{{ vendor }}"/*.dist-info; do
+        name="$(basename "$info" | cut -d- -f1)"
+        for f in LICENSE.txt AUTHORS.txt; do [ -f "$info/$f" ] && cp "$info/$f" "{{ vendor }}/LICENSES/$name-$f"; done
+        rm -rf "$info"
+    done
+    { echo "jedi=={{ jedi_version }}"; echo "parso=={{ parso_version }}"; } > "{{ vendor }}/VERSIONS"
+    du -sh "{{ vendor }}"
 
 # ---------------------------------------------------------- Desktop app ---
 
-# Install the desktop app's npm dependencies
+# Install the desktop app's npm dependencies (the Tauri CLI)
 [group('desktop')]
 desktop-setup:
-    rustup target add aarch64-apple-darwin
     cd "{{ desktop }}" && npm install
 
 # Generate src-tauri/icons from app-icon.svg (needed once before the first build)
@@ -64,25 +86,26 @@ desktop-setup:
 desktop-icons:
     cd "{{ desktop }}" && npm run icons
 
-# Freeze the Python backend with PyInstaller (e.g. `just desktop-sidecar --python 3.13`)
-[group('desktop')]
-desktop-sidecar *args:
-    "{{ desktop }}/scripts/build-sidecar.sh" {{ args }}
-
-# Run the desktop app against the frozen sidecar
+# Run the desktop app with the in-process server (RUST_LOG=debug for more output)
 [group('desktop')]
 desktop-dev:
     cd "{{ desktop }}" && npm run dev
 
-# Run the desktop app against the checkout's Python code, without re-freezing
+# Lint the desktop crate (not part of `rs-lint`: it needs Tauri's system libraries)
 [group('desktop')]
-desktop-dev-live:
-    cd "{{ desktop }}" && REFACTOR_DIFF_SIDECAR="{{ desktop }}/scripts/sidecar-dev.sh" npm run dev
+desktop-lint:
+    cargo clippy -p refactor-diff-desktop --all-targets -- -D warnings
 
-# Build the Apple Silicon app and dmg (freezes the sidecar first via beforeBuildCommand)
+# Build the macOS app and dmg for this machine's architecture
 [group('desktop')]
 desktop-build: desktop-clean-bundle
     cd "{{ desktop }}" && npm run build
+
+# Build a universal (Apple Silicon + Intel) app and dmg
+[group('desktop')]
+desktop-build-universal: desktop-clean-bundle
+    rustup target add aarch64-apple-darwin x86_64-apple-darwin
+    cd "{{ desktop }}" && npm run tauri -- build --target universal-apple-darwin
 
 # Open the built app
 [group('desktop')]
@@ -92,23 +115,18 @@ desktop-open-app:
 # Run the desktop shell's Rust unit tests
 [group('desktop')]
 desktop-test:
-    cd "{{ desktop }}/src-tauri" && TAURI_CONFIG='{{ no_sidecar }}' cargo test
-
-# Check the desktop shell's formatting and clippy lints
-[group('desktop')]
-desktop-lint:
-    cd "{{ desktop }}/src-tauri" && cargo fmt --check
-    cd "{{ desktop }}/src-tauri" && TAURI_CONFIG='{{ no_sidecar }}' cargo clippy --all-targets -- -D warnings
+    cargo test -p refactor-diff-desktop
 
 # Remove scratch disk images an interrupted dmg build left behind, and detach their volumes
 [group('desktop')]
 desktop-clean-bundle:
-    hdiutil info | awk -v t="{{ desktop }}/src-tauri/target/" \
+    hdiutil info | awk -v t="{{ justfile_directory() }}/target/" \
       '/^image-path/ { sub(/^image-path *: /, ""); keep = index($0, t) == 1 } keep && /^\/dev\/disk[0-9]+\t/ { print $1; keep = 0 }' \
       | while read -r disk; do diskutil eject "$disk" || true; done
-    find "{{ desktop }}/src-tauri/target" -path '*/bundle/macos/rw.*.dmg' -delete 2>/dev/null || true
+    find "{{ justfile_directory() }}/target" -path '*/bundle/macos/rw.*.dmg' -delete 2>/dev/null || true
 
-# Remove the desktop app's build output and frozen sidecar
+# Remove the desktop app's build output
 [group('desktop')]
 desktop-clean:
-    rm -rf "{{ desktop }}/build" "{{ desktop }}/dist" "{{ desktop }}/src-tauri/sidecar" "{{ desktop }}/src-tauri/target"
+    cargo clean -p refactor-diff-desktop
+    rm -rf "{{ desktop }}/src-tauri/gen"

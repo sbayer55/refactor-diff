@@ -11,7 +11,10 @@ use std::{
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
-use crate::sidecar::{self, run_with_timeout, SidecarManager};
+use crate::{
+    backend::{self, Backend},
+    shell_path::run_with_timeout,
+};
 
 const VERSION_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -33,18 +36,17 @@ pub struct Tool {
 
 #[tauri::command]
 pub async fn preflight(app: AppHandle, refresh: bool) -> Vec<Tool> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let path_var = if refresh {
-            sidecar::recapture_shell_path(&app)
-        } else {
-            app.state::<SidecarManager>()
-                .wait_shell_path(Duration::from_secs(6))
-                .unwrap_or_default()
-        };
-        check_all(&path_var)
-    })
-    .await
-    .unwrap_or_default()
+    let path_var = if refresh {
+        backend::recapture_shell_path(&app).await
+    } else {
+        app.state::<Backend>()
+            .wait_path(Duration::from_secs(6))
+            .await
+            .unwrap_or_default()
+    };
+    tauri::async_runtime::spawn_blocking(move || check_all(&path_var))
+        .await
+        .unwrap_or_default()
 }
 
 fn check_all(path_var: &str) -> Vec<Tool> {
@@ -179,7 +181,7 @@ fn find_in_path(path_var: &str, name: &str, is_exec: impl Fn(&Path) -> bool) -> 
         .find(|candidate| is_exec(candidate))
 }
 
-/// nvm's newest node, which the backend also falls back to (see `tsserver.py`).
+/// nvm's newest node, which the backend also falls back to.
 fn nvm_node(home: &str) -> Option<PathBuf> {
     let dir = std::env::var("NVM_DIR")
         .map(PathBuf::from)

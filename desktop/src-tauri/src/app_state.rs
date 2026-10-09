@@ -63,7 +63,7 @@ impl Store {
         f(&mut state);
         if let Some(path) = &self.path {
             if let Err(e) = save_to(path, &state) {
-                log::warn!("couldn't save {}: {e}", path.display());
+                tracing::warn!("couldn't save {}: {e}", path.display());
             }
         }
         state.clone()

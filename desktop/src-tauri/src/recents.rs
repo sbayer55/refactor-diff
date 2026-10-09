@@ -21,7 +21,7 @@ fn load(app: &AppHandle) -> Vec<String> {
 fn save(app: &AppHandle, recents: &[String]) {
     let Some(f) = file(app) else { return };
     if let Err(e) = save_to(&f, recents) {
-        log::warn!("couldn't save {}: {e}", f.display());
+        tracing::warn!("couldn't save {}: {e}", f.display());
     }
 }
 

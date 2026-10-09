@@ -3,14 +3,14 @@
 use std::path::{Path, PathBuf};
 
 use tauri::{
+    AppHandle, Manager, Wry,
     menu::{
         AboutMetadataBuilder, CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder,
         SubmenuBuilder,
     },
-    AppHandle, Manager, Wry,
 };
 
-use crate::{app_state, commands, recents, settings_window, sidecar::SidecarManager};
+use crate::{app_state, backend::Backend, commands, recents, settings_window};
 
 pub fn install(app: &AppHandle) -> tauri::Result<()> {
     app.set_menu(build(app)?)?;
@@ -20,9 +20,9 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
             "open-repo" => commands::pick_and_open(app.clone()),
             "close-repo" => commands::close_repo(app.clone()),
             "reveal-repo" => {
-                if let Some(repo) = app.state::<SidecarManager>().repo() {
+                if let Some(repo) = app.state::<Backend>().repo() {
                     if let Err(e) = tauri_plugin_opener::reveal_item_in_dir(repo) {
-                        log::warn!("couldn't reveal the repository: {e}");
+                        tracing::warn!("couldn't reveal the repository: {e}");
                     }
                 }
             }
@@ -64,10 +64,10 @@ pub fn rebuild(app: &AppHandle) {
     match build(app) {
         Ok(menu) => {
             if let Err(e) = app.set_menu(menu) {
-                log::warn!("couldn't update the menu: {e}");
+                tracing::warn!("couldn't update the menu: {e}");
             }
         }
-        Err(e) => log::warn!("couldn't build the menu: {e}"),
+        Err(e) => tracing::warn!("couldn't build the menu: {e}"),
     }
 }
 
@@ -121,7 +121,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     open_recent = open_recent.text("clear-recents", "Clear Menu");
     let open_recent = open_recent.enabled(!recent.is_empty()).build()?;
 
-    let has_repo = app.state::<SidecarManager>().repo().is_some();
+    let has_repo = app.state::<Backend>().repo().is_some();
     let reopen_last = app_state::store(app).get().reopen_last;
     let file = SubmenuBuilder::new(app, "File")
         .item(

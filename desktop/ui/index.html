@@ -158,8 +158,8 @@
     if (ev.key === "Escape") clearError();
   });
 
-  // The sidecar died while the review UI was showing; the app brought us back here.
-  listen("sidecar-exited", (ev) => {
+  // The backend stopped while the review UI was showing; the app brought us back here.
+  listen("backend-stopped", (ev) => {
     const { title, detail } = ev.payload || {};
     showError(title || "The backend stopped unexpectedly.", detail);
   });

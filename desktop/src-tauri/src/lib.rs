@@ -1,18 +1,19 @@
 //! The desktop shell: a window that shows a bundled landing page until a repository is
-//! chosen, then hosts the review UI served by the frozen Python backend (the "sidecar").
+//! chosen, then hosts the review UI served by the backend running inside this process.
 //!
-//! The review UI itself uses no Tauri APIs: it talks to the sidecar over plain HTTP on
+//! The review UI itself uses no Tauri APIs: it talks to the backend over plain HTTP on
 //! 127.0.0.1. It talks to the shell by navigating: "Open in editor" links are `vscode://`-style
 //! URLs that this shell hands to the system, and `refactor-diff://` URLs are the app's own
 //! (see `allow_navigation`). The shell calls into the page with `window.refactorDiff`.
 
 mod app_state;
+mod backend;
 mod commands;
 mod menu;
 mod preflight;
 mod recents;
 mod settings_window;
-mod sidecar;
+mod shell_path;
 
 use std::{
     ffi::OsString,
@@ -31,10 +32,13 @@ pub const WINDOW: &str = "main";
 const RESTORE_DELAY: Duration = Duration::from_millis(300);
 
 pub fn run() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(
@@ -44,7 +48,8 @@ pub fn run() {
                 .with_denylist(&[settings_window::WINDOW])
                 .build(),
         )
-        .manage(sidecar::SidecarManager::default())
+        .manage(backend::Backend::default())
+        .manage(settings_window::SettingsServer::default())
         .invoke_handler(tauri::generate_handler![
             commands::pick_repo,
             commands::open_repo,
@@ -56,7 +61,7 @@ pub fn run() {
         ])
         .setup(|app| {
             app.manage(app_state::Store::load(app.handle()));
-            sidecar::capture_shell_path(app.handle().clone());
+            backend::capture_shell_path(app.handle().clone());
             menu::install(app.handle())?;
 
             let handle = app.handle().clone();
@@ -77,19 +82,15 @@ pub fn run() {
             }
             Ok(())
         })
-        .on_window_event(|window, event| match (window.label(), event) {
-            // A single-window tool: closing the main window quits (and stops the sidecars).
-            (WINDOW, WindowEvent::CloseRequested { .. }) => {
+        .on_window_event(|window, event| {
+            // A single-window tool: closing the main window quits (and stops the servers).
+            if let (WINDOW, WindowEvent::CloseRequested { .. }) = (window.label(), event) {
                 let app = window.app_handle();
                 if let Err(e) = app.save_window_state(window_state_flags()) {
-                    log::warn!("couldn't save the window state: {e}");
+                    tracing::warn!("couldn't save the window state: {e}");
                 }
                 app.exit(0);
             }
-            (settings_window::WINDOW, WindowEvent::Destroyed) => {
-                settings_window::destroyed(window.app_handle());
-            }
-            _ => {}
         })
         .build(tauri::generate_context!())
         .expect("error while building the application")
@@ -104,13 +105,13 @@ pub fn run() {
                             claim_launch(app);
                             commands::open_in_background(app.clone(), path);
                         }
-                        _ => log::warn!("ignoring opened URL {url}"),
+                        _ => tracing::warn!("ignoring opened URL {url}"),
                     }
                 }
             }
             RunEvent::Exit => {
-                sidecar::stop(app);
-                sidecar::stop_settings(app);
+                backend::stop_blocking(app);
+                settings_window::stop_blocking(app);
             }
             _ => {}
         });
@@ -120,9 +121,9 @@ fn window_state_flags() -> StateFlags {
     StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED
 }
 
-/// Navigation policy for the app's windows: its own pages and the sidecars stay in the
-/// webview, `refactor-diff://` is handled here, and anything else (editor links, the odd
-/// https:// link) opens outside the app while the current page stays.
+/// Navigation policy for the app's windows: its own pages and the in-process servers stay
+/// in the webview, `refactor-diff://` is handled here, and anything else (editor links, the
+/// odd https:// link) opens outside the app while the current page stays.
 pub fn allow_navigation(app: &AppHandle, url: &Url) -> bool {
     match url.scheme() {
         "tauri" => true,
@@ -137,15 +138,15 @@ pub fn allow_navigation(app: &AppHandle, url: &Url) -> bool {
             tauri::async_runtime::spawn(async move {
                 match host.as_str() {
                     "settings" => settings_window::handle(&app, &path),
-                    _ => log::warn!("unknown app URL refactor-diff://{host}/{path}"),
+                    _ => tracing::warn!("unknown app URL refactor-diff://{host}/{path}"),
                 }
             });
             false
         }
         _ => {
-            log::info!("opening externally: {url}");
+            tracing::info!("opening externally: {url}");
             if let Err(e) = tauri_plugin_opener::open_url(url.as_str(), None::<&str>) {
-                log::warn!("could not open {url}: {e}");
+                tracing::warn!("could not open {url}: {e}");
             }
             false
         }
@@ -165,21 +166,21 @@ pub fn eval_in_review(app: &AppHandle, call: &str) {
 }
 
 fn claim_launch(app: &AppHandle) {
-    app.state::<sidecar::SidecarManager>()
+    app.state::<backend::Backend>()
         .launch_claimed
         .store(true, Ordering::SeqCst);
 }
 
 /// Reopen the repository from last time, unless something at launch chose one already.
 fn restore_last_repo(app: AppHandle) {
-    tauri::async_runtime::spawn_blocking(move || {
-        std::thread::sleep(RESTORE_DELAY);
-        let manager = app.state::<sidecar::SidecarManager>();
-        let claimed = manager.launch_claimed.load(Ordering::SeqCst);
-        let busy = manager.repo().is_some() || manager.opening.lock().unwrap().is_some();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(RESTORE_DELAY).await;
+        let backend = app.state::<backend::Backend>();
+        let claimed = backend.launch_claimed.load(Ordering::SeqCst);
+        let busy = backend.repo().is_some() || backend.opening.lock().unwrap().is_some();
         let state = app_state::store(&app).get();
         if let Some(repo) = app_state::restore_target(&state, claimed, busy, Path::is_dir) {
-            log::info!("reopening {}", repo.display());
+            tracing::info!("reopening {}", repo.display());
             commands::open_in_background(app.clone(), repo);
         }
     });
