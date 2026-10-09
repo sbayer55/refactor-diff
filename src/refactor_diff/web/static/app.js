@@ -30,6 +30,7 @@ const state = {
   ai: null, // the active AI provider {provider, model, configured} (see /api/settings)
   aiContext: null, // default context pieces for custom prompts
   answers: new Map(), // hunk id -> AI answers for this browser session (see ask())
+  desktop: false, // running in the desktop app (see /api/config)
 };
 
 // Side-by-side needs room for two code columns; narrower windows always get unified diffs.
@@ -84,6 +85,48 @@ async function api(path, body) {
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
 }
+
+// ---------- preferences ----------
+// Layout, highlighting, panes and filters are kept on the server (~/.config/refactor-diff/
+// ui.json) so they don't depend on the page's origin, which changes with the port. Writes also
+// go to localStorage, which is read at startup before /api/config answers (no flash) and is the
+// only store if the server can't be reached.
+
+const prefs = { values: null, pending: {}, timer: 0 };
+
+function prefGet(key) {
+  if (prefs.values && key in prefs.values) return prefs.values[key];
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+
+function prefSet(key, value) {
+  if (prefs.values) prefs.values[key] = value;
+  try { localStorage.setItem(key, value); } catch {}
+  prefs.pending[key] = value;
+  clearTimeout(prefs.timer);
+  prefs.timer = setTimeout(flushPrefs, 250);
+}
+
+function flushPrefs() {
+  const changes = prefs.pending;
+  prefs.pending = {};
+  if (!Object.keys(changes).length) return;
+  api("/api/prefs", { changes }).catch(() => {});
+}
+
+// Seed from the server; the first time, carry over what this origin's localStorage had.
+function initPrefs(serverPrefs) {
+  prefs.values = { ...(serverPrefs || {}) };
+  if (Object.keys(prefs.values).length) return;
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key.startsWith("refactor-diff:")) prefSet(key, localStorage.getItem(key));
+    }
+  } catch {}
+}
+
+window.addEventListener("pagehide", flushPrefs);
 
 // ---------- review state ----------
 // Reviewed marks live on the server (in ~/.config/refactor-diff), keyed by what is being
@@ -151,7 +194,7 @@ function filtersKey() {
 }
 function loadFilters(cliDefaults) {
   let saved = {};
-  try { saved = JSON.parse(localStorage.getItem(filtersKey()) || "{}"); } catch {}
+  try { saved = JSON.parse(prefGet(filtersKey()) || "{}"); } catch {}
   const f = { ...saved, ...(cliDefaults || {}) };
   state.filters = {
     hidden: new Set(f.hidden || []),
@@ -168,12 +211,10 @@ function loadFilters(cliDefaults) {
 }
 function saveFilters() {
   const f = state.filters;
-  try {
-    localStorage.setItem(filtersKey(), JSON.stringify({
-      hidden: [...f.hidden], hideDocs: f.hideDocs, hideImports: f.hideImports, hideFileMoves: f.hideFileMoves,
-      hideMoves: f.hideMoves, exclude: f.exclude, search: f.search, regex: f.regex,
-    }));
-  } catch {}
+  prefSet(filtersKey(), JSON.stringify({
+    hidden: [...f.hidden], hideDocs: f.hideDocs, hideImports: f.hideImports, hideFileMoves: f.hideFileMoves,
+    hideMoves: f.hideMoves, exclude: f.exclude, search: f.search, regex: f.regex,
+  }));
 }
 function filtersActive() {
   const f = state.filters;
@@ -581,8 +622,14 @@ async function fetchSummary() {
 
 async function copySummary() {
   try {
-    const md = await fetchSummary();
-    await navigator.clipboard.writeText(md);
+    if (window.ClipboardItem) {
+      // Handing the clipboard a promise keeps this click's user activation, which WebKit
+      // (Safari, the desktop app) would otherwise lose while the summary is fetched.
+      const blob = fetchSummary().then((md) => new Blob([md], { type: "text/plain" }));
+      await navigator.clipboard.write([new ClipboardItem({ "text/plain": blob })]);
+    } else {
+      await navigator.clipboard.writeText(await fetchSummary());
+    }
     toast("Review summary copied as Markdown.");
   } catch (e) {
     toast(`Couldn't copy: ${e.message}`, { error: true });
@@ -594,17 +641,38 @@ function prNumber() {
 }
 
 // Posting is outward-facing: ask once per session, after showing what will be posted.
-function confirmPosting() {
+async function confirmPosting() {
   if (state.postingOk) return true;
-  state.postingOk = window.confirm(`Post comments to pull request #${prNumber()} as you (via gh)?`);
+  state.postingOk = await confirmDialog({
+    title: `Post to pull request #${prNumber()}?`,
+    message: "Comments are posted as you, via gh. You won't be asked again in this session.",
+    ok: "Post",
+  });
   return state.postingOk;
+}
+
+// An in-page replacement for window.confirm(), which the desktop app's webview doesn't show.
+function confirmDialog({ title, message, ok = "OK" }) {
+  const dlg = $("#confirm");
+  dlg.innerHTML = `<form method="dialog">
+    <header><h3>${esc(title)}</h3></header>
+    <p>${esc(message)}</p>
+    <footer><span class="spacer"></span>
+      <button type="submit" class="toggle" value="cancel">Cancel</button>
+      <button type="submit" class="primary" value="ok" autofocus>${esc(ok)}</button></footer>
+  </form>`;
+  dlg.returnValue = "";
+  return new Promise((resolve) => {
+    dlg.addEventListener("close", () => resolve(dlg.returnValue === "ok"), { once: true });
+    dlg.showModal();
+  });
 }
 
 async function postSummary() {
   let md;
   try { md = await fetchSummary(); } catch (e) { toast(e.message, { error: true }); return; }
   showModal(`Post summary to PR #${prNumber()}`, md, async (body) => {
-    if (!confirmPosting()) return false;
+    if (!(await confirmPosting())) return false;
     const res = await api(`/api/report/${state.report.id}/pr/comment`, { body });
     toast(`Posted: ${res.url}`);
     return true;
@@ -663,7 +731,7 @@ function openCommentBox(el) {
   box.querySelector("[data-comment-post]").addEventListener("click", async () => {
     const body = ta.value.trim();
     if (!body) { ta.focus(); return; }
-    if (!confirmPosting()) return;
+    if (!(await confirmPosting())) return;
     const btn = box.querySelector("[data-comment-post]");
     btn.disabled = true;
     try {
@@ -1470,13 +1538,13 @@ function fileSyntax(fd) {
 // ---------- side panes (explorer / inspector) ----------
 
 function loadPanes() {
-  try { Object.assign(state.panes, JSON.parse(localStorage.getItem("refactor-diff:panes") || "{}")); } catch {}
+  try { Object.assign(state.panes, JSON.parse(prefGet("refactor-diff:panes") || "{}")); } catch {}
   applyPanes();
 }
 
 function setPane(name, on) {
   state.panes[name] = on;
-  try { localStorage.setItem("refactor-diff:panes", JSON.stringify(state.panes)); } catch {}
+  prefSet("refactor-diff:panes", JSON.stringify(state.panes));
   applyPanes();
 }
 
@@ -1491,13 +1559,13 @@ function applyPanes() {
 }
 
 function loadSyntax() {
-  try { state.syntax = localStorage.getItem("refactor-diff:highlight") === "syntax"; } catch {}
+  state.syntax = prefGet("refactor-diff:highlight") === "syntax";
   document.body.classList.toggle("syntax-mode", state.syntax);
 }
 
 function setSyntax(on) {
   state.syntax = on;
-  try { localStorage.setItem("refactor-diff:highlight", on ? "syntax" : "diff"); } catch {}
+  prefSet("refactor-diff:highlight", on ? "syntax" : "diff");
   document.body.classList.toggle("syntax-mode", on);
   rerender();
 }
@@ -1528,12 +1596,12 @@ function oneSided(path) {
 }
 
 function loadLayout() {
-  try { state.split = localStorage.getItem("refactor-diff:layout") === "split"; } catch {}
+  state.split = prefGet("refactor-diff:layout") === "split";
 }
 
 function setSplit(on) {
   state.split = on;
-  try { localStorage.setItem("refactor-diff:layout", on ? "split" : "unified"); } catch {}
+  prefSet("refactor-diff:layout", on ? "split" : "unified");
   rerender();
 }
 
@@ -2754,6 +2822,11 @@ async function init() {
     defaults = cfg.defaults || {};
     state.repo = cfg.repo;
     state.editor = defaults.editor || null;
+    state.desktop = Boolean(cfg.desktop);
+    initPrefs(cfg.prefs);
+    loadLayout();
+    loadSyntax();
+    loadPanes();
   } catch {}
   setMode(defaults.mode || "refs");
   const form = $("#source-form");
@@ -2762,6 +2835,8 @@ async function init() {
   if (defaults.pr) form.pr.value = defaults.pr;
   loadFilters(defaults.filters);
   loadAiSettings();
+  // Called by the desktop app's native menu (webview eval) and its Settings window.
+  window.refactorDiff = { openPalette, showHelp: () => showHelp(true), showSettings, reloadSettings: loadAiSettings };
   await loadSources(defaults);
   if (defaults.mode) runAnalysis();
 }
@@ -2787,18 +2862,11 @@ const ASK_TASKS = [
   ]],
 ];
 const ASK_LABELS = new Map(ASK_TASKS.flatMap(([, rows]) => rows));
-const PROVIDER_NAMES = { claude: "Claude", openai: "OpenAI-compatible", ollama: "Ollama" };
-const SPARK = '<svg class="spark" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"></path></svg>';
+const { PROVIDER_NAMES, SPARK, shortModel } = Settings;
 let answerSeq = 0;
 
-function shortModel(model) {
-  return (model || "").replace(/^claude-/, "");
-}
-
 function providerLabel(ai = state.ai) {
-  if (!ai) return "";
-  const name = PROVIDER_NAMES[ai.provider] || ai.provider;
-  return ai.model ? `${name} · ${shortModel(ai.model)}` : name;
+  return Settings.providerLabel(ai);
 }
 
 function providerPill(ai = state.ai) {
@@ -3285,137 +3353,24 @@ function setCiteHighlight(cite, on) {
 }
 
 // --- settings dialog ---
+// In the desktop app this opens the native Settings window (⌘,): the shell intercepts the
+// refactor-diff:// navigation, and calls window.refactorDiff.reloadSettings() after a save.
 
 async function showSettings() {
+  if (state.desktop) { location.href = "refactor-diff://settings"; return; }
   let data;
   try { data = await api("/api/settings"); } catch (e) { toast(e.message, { error: true }); return; }
-  const ai = data.ai;
   const dlg = $("#settings");
-  const field = (label, name, value, { type = "text", width = "", placeholder = "", list = "", hint = "" } = {}) =>
-    `<label class="field ${width}">${label}${hint ? ` <span class="muted">${hint}</span>` : ""}
-      <input name="${name}" type="${type}" value="${esc(String(value ?? ""))}" placeholder="${esc(placeholder)}" ${list ? `list="${list}"` : ""} autocomplete="off" spellcheck="false"></label>`;
-  const p = ai.providers;
-  dlg.innerHTML = `
-    <header><span class="kind ai">AI</span><h3>Assistant settings</h3><span class="meta muted">Used by Ask on every hunk and line</span>
-      <button type="button" class="close" aria-label="Close" id="settings-close">×</button></header>
-    <form id="settings-form" class="settings-body" autocomplete="off">
-      <div class="settings-row">
-        <span class="muted">Provider</span>
-        <div class="segmented" role="tablist" aria-label="AI provider">
-          ${["claude", "openai", "ollama"].map((id) => `<button type="button" role="tab" data-provider="${id}" aria-selected="${ai.provider === id}">${PROVIDER_NAMES[id]}</button>`).join("")}
-        </div>
-        <span class="ai-status" id="settings-status"></span>
-        <span class="spacer"></span>
-        <button type="button" class="toggle" id="settings-test">Test connection</button>
-      </div>
-      <div class="fields" data-fields="claude" ${ai.provider === "claude" ? "" : "hidden"}>
-        ${field("API key", "claude.api_key", p.claude.api_key, { type: "password", width: "wide", placeholder: "sk-ant-…" })}
-        ${field("Model", "claude.model", p.claude.model, { list: "claude-models" })}
-        ${field("Base URL", "claude.base_url", p.claude.base_url, { width: "wide", placeholder: "https://api.anthropic.com", hint: "(optional)" })}
-        <datalist id="claude-models"><option value="claude-opus-5-5"><option value="claude-sonnet-5-5"><option value="claude-haiku-5-5"></datalist>
-      </div>
-      <div class="fields" data-fields="openai" ${ai.provider === "openai" ? "" : "hidden"}>
-        ${field("Base URL", "openai.base_url", p.openai.base_url, { width: "wide", placeholder: "http://127.0.0.1:8080/v1" })}
-        ${field("API key", "openai.api_key", p.openai.api_key, { type: "password", hint: "(if required)" })}
-        ${field("Model", "openai.model", p.openai.model, { list: "openai-models" })}
-        <datalist id="openai-models"></datalist>
-        <p class="muted">Any endpoint that speaks the OpenAI chat-completions API: a Cursor proxy, OpenRouter, LM Studio, vLLM, or Ollama's <span class="mono">/v1</span>.</p>
-      </div>
-      <div class="fields" data-fields="ollama" ${ai.provider === "ollama" ? "" : "hidden"}>
-        ${field("Host", "ollama.host", p.ollama.host, { width: "wide" })}
-        ${field("Model", "ollama.model", p.ollama.model, { list: "ollama-models", placeholder: "qwen3-coder:30b" })}
-        ${field("Context window", "ollama.num_ctx", p.ollama.num_ctx, { type: "number", width: "narrow" })}
-        <datalist id="ollama-models"></datalist>
-      </div>
-      <div class="settings-preview">
-        <div class="filter-label">How it shows up</div>
-        <div class="row"><span class="muted">Top bar</span><span class="chip ai-chip">${SPARK} AI <b data-preview></b></span><span class="muted">always visible; click to reopen this dialog</span></div>
-        <div class="row"><span class="muted">Ask menu</span><span class="pill ai-provider" data-preview></span><span class="muted">on every menu before you pick a task</span></div>
-        <div class="row"><span class="muted">Each answer</span><span class="kind ai">AI</span><b>Explain this change</b><span class="pill ai-provider" data-preview></span><span class="muted">2.1 s</span></div>
-      </div>
-      <div class="settings-row toggles">
-        <span class="muted">Custom prompts include by default</span>
-        <label class="toggle"><input type="checkbox" name="context.function" ${ai.context.function ? "checked" : ""}>Enclosing function</label>
-        <label class="toggle"><input type="checkbox" name="context.pr" ${ai.context.pr ? "checked" : ""}>PR description</label>
-        <label class="toggle"><input type="checkbox" name="context.references" ${ai.context.references ? "checked" : ""}>References</label>
-      </div>
-    </form>
-    <footer><span class="meta muted">Saved to <span class="mono">~/.config/refactor-diff/settings.json</span> · the key only ever goes to the provider</span>
-      <span class="spacer"></span>
-      <button type="button" class="toggle" id="settings-cancel">Cancel</button>
-      <button type="button" class="primary" id="settings-save">Save</button></footer>`;
-  const form = $("#settings-form");
-  let provider = ai.provider;
-  const value = (name) => form.querySelector(`[name="${name}"]`).value;
-  const current = () => ({
-    provider,
-    providers: {
-      claude: { api_key: value("claude.api_key"), model: value("claude.model"), base_url: value("claude.base_url") },
-      openai: { base_url: value("openai.base_url"), api_key: value("openai.api_key"), model: value("openai.model") },
-      ollama: { host: value("ollama.host"), model: value("ollama.model"), num_ctx: value("ollama.num_ctx") },
-    },
-    context: {
-      function: form.querySelector('[name="context.function"]').checked,
-      pr: form.querySelector('[name="context.pr"]').checked,
-      references: form.querySelector('[name="context.references"]').checked,
-    },
-  });
-  const preview = () => {
-    const cfg = current();
-    const label = providerLabel({ provider, model: cfg.providers[provider].model });
-    for (const el of dlg.querySelectorAll("[data-preview]")) el.textContent = label;
-  };
-  const selectProvider = (id) => {
-    provider = id;
-    for (const b of dlg.querySelectorAll("[data-provider]")) b.setAttribute("aria-selected", String(b.dataset.provider === id));
-    for (const f of dlg.querySelectorAll("[data-fields]")) f.hidden = f.dataset.fields !== id;
-    $("#settings-status").textContent = "";
-    preview();
-  };
-  for (const b of dlg.querySelectorAll("[data-provider]")) b.addEventListener("click", () => selectProvider(b.dataset.provider));
-  form.addEventListener("input", preview);
-  preview();
-  const status = (text, cls = "") => { const el = $("#settings-status"); el.textContent = text; el.className = `ai-status ${cls}`; };
-  $("#settings-test").addEventListener("click", async () => {
-    status("Testing…", "live");
-    const btn = $("#settings-test");
-    btn.disabled = true;
-    try {
-      const res = await api("/api/settings/test", { provider, config: current().providers[provider] });
-      if (res.ok) {
-        status(`Connected · ${(res.latency_ms / 1000).toFixed(1)} s`, "ok");
-        const list = dlg.querySelector(`#${provider}-models`);
-        if (list && res.models?.length) list.innerHTML = res.models.map((m) => `<option value="${esc(m)}">`).join("");
-      } else {
-        status(res.error, "error");
-      }
-    } catch (e) {
-      status(e.message, "error");
-    } finally {
-      btn.disabled = false;
-    }
-  });
   const close = () => dlg.close();
-  $("#settings-close").addEventListener("click", close);
-  $("#settings-cancel").addEventListener("click", close);
-  $("#settings-save").addEventListener("click", async () => {
-    const btn = $("#settings-save");
-    btn.disabled = true;
-    try {
-      const saved = await api("/api/settings", { ai: current() });
+  Settings.render(dlg, data, {
+    onClose: close,
+    onSaved: (saved) => {
       state.ai = saved.ai.active;
       state.aiContext = saved.ai.context;
       renderAiChip();
       toast(state.ai.configured ? `Ask will use ${providerLabel()}.` : "Saved. That provider still needs its details before Ask works.");
       close();
-    } catch (e) {
-      status(e.message, "error");
-    } finally {
-      btn.disabled = false;
-    }
-  });
-  form.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && e.target.tagName === "INPUT") { e.preventDefault(); $("#settings-save").click(); }
+    },
   });
   dlg.showModal();
 }

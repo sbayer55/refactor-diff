@@ -5,7 +5,7 @@
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",
-    "build": "tauri build",
+    "build": "tauri build --target aarch64-apple-darwin",
     "build:sidecar": "bash scripts/build-sidecar.sh",
     "icons": "tauri icon app-icon.svg"
   },

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Settings</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="settings-page">
+  <main id="settings" class="help modal settings" aria-label="Assistant settings"></main>
+
+  <script src="/static/settings.js"></script>
+  <script>
+    // The desktop app shows this page in its Settings window and listens for refactor-diff://
+    // navigations: "saved" refreshes the review window, "close" closes this one. In a browser
+    // (refactor-diff --settings-only) it is just a page.
+    (async () => {
+      const root = document.getElementById("settings");
+      let cfg = {};
+      try { cfg = await Settings.api("/api/config"); } catch {}
+      const tell = (what) => { if (cfg.desktop) location.href = `refactor-diff://settings/${what}`; };
+      let data;
+      try {
+        data = await Settings.api("/api/settings");
+      } catch (e) {
+        root.textContent = `Couldn't load the settings: ${e.message}`;
+        return;
+      }
+      Settings.render(root, data, {
+        closeLabel: cfg.desktop ? "Close" : "Cancel",
+        onClose: () => (cfg.desktop ? tell("close") : history.back()),
+        onSaved: (saved, status) => {
+          status(saved.ai.active.configured
+            ? `Saved · Ask will use ${Settings.providerLabel(saved.ai.active)}`
+            : "Saved · that provider still needs its details", "ok");
+          tell("saved");
+        },
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") { e.preventDefault(); tell("close"); }
+      });
+    })();
+  </script>
+</body>
+</html>

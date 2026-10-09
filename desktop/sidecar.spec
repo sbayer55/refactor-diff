@@ -64,7 +64,7 @@ exe = EXE(
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
-    target_arch=None,
+    target_arch="arm64",  # Apple Silicon only; see scripts/build-sidecar.sh
     codesign_identity=None,  # ad-hoc; Apple Silicon refuses to run unsigned native code
     entitlements_file=None,
 )
