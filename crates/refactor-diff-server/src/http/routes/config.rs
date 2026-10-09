@@ -10,11 +10,14 @@ use crate::app::{AppState, run_blocking};
 use crate::git::SourcesInfo;
 use crate::http::error::ApiError;
 
-/// The repository and the defaults the CLI flags pre-select.
+/// The repository, the defaults the CLI flags pre-select, whether the UI is inside the
+/// desktop app, and the stored UI preferences.
 pub async fn config(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(json!({
         "repo": state.repo.to_string_lossy(),
         "defaults": state.defaults,
+        "desktop": state.desktop,
+        "prefs": state.prefs.load(),
     }))
 }
 

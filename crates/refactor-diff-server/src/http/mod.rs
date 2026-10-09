@@ -16,9 +16,18 @@ use axum::routing::{get, post};
 use crate::app::AppState;
 use error::ApiError;
 
-/// The router for one server; the state is shared with every handler.
+/// The router for one server; the state is shared with every handler. A settings-only
+/// server gets just the settings page, its API and the UI preferences.
 pub fn router(state: Arc<AppState>) -> Router {
-    Router::new()
+    if state.settings_only {
+        return settings_routes(Router::new())
+            .route("/", get(routes::settings::redirect_to_settings))
+            .route("/api/config", get(routes::settings::settings_only_config))
+            .route("/static/{*path}", get(assets::static_file))
+            .fallback(not_found)
+            .with_state(state);
+    }
+    settings_routes(Router::new())
         .route("/", get(assets::index))
         .route("/api/config", get(routes::config::config))
         .route("/api/sources", get(routes::config::list_sources))
@@ -54,11 +63,6 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(routes::files::get_source),
         )
         .route("/api/library", get(routes::navigate::get_library))
-        .route(
-            "/api/settings",
-            get(routes::settings::get_settings).post(routes::settings::save_settings),
-        )
-        .route("/api/settings/test", post(routes::settings::test_settings))
         .route("/api/report/{report_id}/ai/menu", post(routes::ai::ai_menu))
         .route(
             "/api/report/{report_id}/ai/refs-count",
@@ -68,6 +72,18 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/static/{*path}", get(assets::static_file))
         .fallback(not_found)
         .with_state(state)
+}
+
+/// The settings page, the AI settings API and UI preferences; shared by both kinds of server.
+fn settings_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
+    router
+        .route("/settings", get(routes::settings::settings_page))
+        .route(
+            "/api/settings",
+            get(routes::settings::get_settings).post(routes::settings::save_settings),
+        )
+        .route("/api/settings/test", post(routes::settings::test_settings))
+        .route("/api/prefs", post(routes::settings::save_prefs))
 }
 
 async fn not_found() -> ApiError {

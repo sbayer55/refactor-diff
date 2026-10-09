@@ -1,14 +1,16 @@
-//! `/api/settings` (read, update) and `/api/settings/test` (try a provider with unsaved
-//! values from the dialog).
+//! The settings page (`/settings`), `/api/settings` (read, update), `/api/settings/test` (try
+//! a provider with unsaved values from the dialog) and `/api/prefs` (UI preferences).
 
 use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
+use axum::response::{Redirect, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::app::{AppState, run_blocking};
+use crate::http::assets;
 use crate::http::error::ApiError;
 use crate::http::extract::{ApiJson, str_or_empty};
 use crate::settings::{apply_update, public_view, resolve_test_config};
@@ -60,4 +62,37 @@ pub async fn test_settings(
     };
     let result = provider.test().await;
     Json(serde_json::to_value(result).expect("a test result serializes"))
+}
+
+/// `GET /settings`: the standalone settings page (what the desktop app's Settings window
+/// shows; also reachable from the review UI).
+pub async fn settings_page() -> Response {
+    assets::serve_asset("settings.html")
+}
+
+/// `GET /` of a settings-only server.
+pub async fn redirect_to_settings() -> Redirect {
+    Redirect::temporary("/settings")
+}
+
+/// `GET /api/config` of a settings-only server.
+pub async fn settings_only_config(State(state): State<Arc<AppState>>) -> Json<Value> {
+    Json(json!({"desktop": state.desktop, "settings_only": true}))
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct PrefsBody {
+    #[serde(default)]
+    pub changes: Value,
+}
+
+/// Apply `{"changes": {key: value | null}}` to the UI preferences.
+pub async fn save_prefs(
+    State(state): State<Arc<AppState>>,
+    ApiJson(body): ApiJson<PrefsBody>,
+) -> Result<Json<Value>, ApiError> {
+    let saved = run_blocking(move || state.prefs.update(&body.changes))
+        .await?
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    Ok(Json(json!({"prefs": saved})))
 }

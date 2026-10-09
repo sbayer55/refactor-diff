@@ -172,6 +172,7 @@ pub struct Resp {
     pub status: StatusCode,
     pub content_type: String,
     pub body: Vec<u8>,
+    pub location: Option<String>,
 }
 
 impl Resp {
@@ -225,11 +226,27 @@ impl TestServer {
         Self::build(repo, FakeGitHub::unavailable(), None, Some(providers))
     }
 
+    /// Any other configuration (`desktop`, `settings_only`, ...), with a fresh state dir and
+    /// no GitHub.
+    pub fn with_config(repo: &Path, tweak: impl FnOnce(&mut ServerConfig)) -> Self {
+        Self::build_with(repo, FakeGitHub::unavailable(), None, None, tweak)
+    }
+
     fn build(
         repo: &Path,
         github: Arc<FakeGitHub>,
         state_dir: Option<PathBuf>,
         providers: Option<Arc<dyn ProviderFactory>>,
+    ) -> Self {
+        Self::build_with(repo, github, state_dir, providers, |_| {})
+    }
+
+    fn build_with(
+        repo: &Path,
+        github: Arc<FakeGitHub>,
+        state_dir: Option<PathBuf>,
+        providers: Option<Arc<dyn ProviderFactory>>,
+        tweak: impl FnOnce(&mut ServerConfig),
     ) -> Self {
         let (state_dir, tmp) = match state_dir {
             Some(dir) => (dir, None),
@@ -238,13 +255,14 @@ impl TestServer {
                 (tmp.path().join("config"), Some(tmp))
             }
         };
-        let config = ServerConfig {
+        let mut config = ServerConfig {
             repo: repo.to_path_buf(),
             state_dir: Some(state_dir.clone()),
             github: Some(github.clone()),
             providers,
             ..Default::default()
         };
+        tweak(&mut config);
         let app = App::build(config).expect("app builds");
         let router = app.router();
         Self {
@@ -285,6 +303,10 @@ impl TestServer {
             .get(header::CONTENT_TYPE)
             .map(|v| v.to_str().unwrap().to_string())
             .unwrap_or_default();
+        let location = res
+            .headers()
+            .get(header::LOCATION)
+            .map(|v| v.to_str().unwrap().to_string());
         let body = axum::body::to_bytes(res.into_body(), usize::MAX)
             .await
             .unwrap()
@@ -292,6 +314,7 @@ impl TestServer {
         Resp {
             status,
             content_type,
+            location,
             body,
         }
     }

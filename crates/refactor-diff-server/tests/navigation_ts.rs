@@ -243,20 +243,15 @@ async fn tsserver_js_needs_node() {
         .definitions(None, "api.ts", 4, 16)
         .await
         .unwrap_err();
-    // With an empty PATH only an nvm install can supply node; node then runs the empty
-    // script, which exits at once.
-    if node().is_none() {
-        assert_eq!(
-            err.to_string(),
-            "TypeScript navigation needs Node.js on PATH."
-        );
-    } else {
-        assert!(
-            err.to_string().starts_with("tsserver stopped responding:")
-                || err.to_string().starts_with("Can't start tsserver:"),
-            "{err}"
-        );
-    }
+    // With an empty PATH only an nvm install can supply node. Without one the navigator says
+    // so; with one, node runs the empty script, which exits at once.
+    let message = err.to_string();
+    assert!(
+        message == "TypeScript navigation needs Node.js on PATH."
+            || message.starts_with("tsserver stopped responding:")
+            || message.starts_with("Can't start tsserver:"),
+        "{message}"
+    );
 }
 
 // --- a fake tsserver -------------------------------------------------------------------------

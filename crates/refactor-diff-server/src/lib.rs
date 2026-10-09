@@ -11,6 +11,7 @@ pub mod git;
 pub mod http;
 pub mod nav;
 pub mod paths;
+pub mod prefs;
 pub mod review;
 pub mod settings;
 pub mod snapshots;

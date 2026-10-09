@@ -18,19 +18,26 @@ pub fn login_shell_path() -> String {
             .args(["-ilc", "printf '\\n<<PATH>>%s<<END>>\\n' \"$PATH\""]),
         Duration::from_secs(5),
     )
-    .and_then(|out| {
-        let start = out.rfind("<<PATH>>")? + "<<PATH>>".len();
-        let end = out[start..].find("<<END>>")? + start;
-        Some(out[start..end].trim().to_string())
-    })
+    .and_then(|out| extract_marked_path(&out))
     .unwrap_or_default();
+    merge_path(&from_shell, &std::env::var("HOME").unwrap_or_default())
+}
 
-    let mut parts: Vec<String> = from_shell
-        .split(':')
-        .filter(|p| !p.is_empty())
-        .map(str::to_string)
-        .collect();
-    let home = std::env::var("HOME").unwrap_or_default();
+/// The value between the last `<<PATH>>` and the `<<END>>` after it.
+fn extract_marked_path(out: &str) -> Option<String> {
+    let start = out.rfind("<<PATH>>")? + "<<PATH>>".len();
+    let end = out[start..].find("<<END>>")? + start;
+    Some(out[start..end].trim().to_string())
+}
+
+/// The shell's PATH plus the usual tool locations it may lack, without duplicates.
+fn merge_path(from_shell: &str, home: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for p in from_shell.split(':').filter(|p| !p.is_empty()) {
+        if !parts.iter().any(|q| q == p) {
+            parts.push(p.to_string());
+        }
+    }
     let mut extras = vec![
         "/opt/homebrew/bin".to_string(),
         "/usr/local/bin".into(),
@@ -51,7 +58,11 @@ pub fn login_shell_path() -> String {
     parts.join(":")
 }
 
-fn run_with_timeout(command: &mut std::process::Command, timeout: Duration) -> Option<String> {
+/// Run `command` and return its stdout if it succeeds within `timeout`.
+pub(crate) fn run_with_timeout(
+    command: &mut std::process::Command,
+    timeout: Duration,
+) -> Option<String> {
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -71,10 +82,40 @@ fn run_with_timeout(command: &mut std::process::Command, timeout: Duration) -> O
             Ok(Some(_)) => return None,
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
             _ => {
-                tracing::warn!("login shell didn't report PATH within {timeout:?}");
+                tracing::warn!("{command:?} didn't finish within {timeout:?}");
                 let _ = child.kill();
                 return None;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn marked_path_ignores_banners() {
+        assert_eq!(
+            extract_marked_path("Welcome!\n<<PATH>>/a:/b<<END>>\n").as_deref(),
+            Some("/a:/b")
+        );
+        // An rc file that echoes the marker itself: the last one wins.
+        assert_eq!(
+            extract_marked_path("<<PATH>>junk<<END>>\n<<PATH>> /c <<END>>").as_deref(),
+            Some("/c")
+        );
+        assert_eq!(extract_marked_path("<<PATH>>/a"), None);
+        assert_eq!(extract_marked_path("nothing"), None);
+    }
+
+    #[test]
+    fn merged_path_keeps_order_and_adds_extras_once() {
+        let merged = merge_path("/x:/usr/bin::/x:/opt/homebrew/bin", "/Users/me");
+        let parts: Vec<&str> = merged.split(':').collect();
+        assert_eq!(&parts[..3], ["/x", "/usr/bin", "/opt/homebrew/bin"]);
+        assert_eq!(parts.iter().filter(|p| **p == "/usr/bin").count(), 1);
+        assert!(parts.contains(&"/Users/me/.local/bin"));
+        assert!(merge_path("", "").starts_with("/opt/homebrew/bin:"));
     }
 }

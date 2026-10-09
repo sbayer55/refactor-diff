@@ -34,21 +34,33 @@ For code navigation (optional):
 ### Desktop app (macOS)
 
 There is also a macOS app with the server built in. It uses the `git`, `gh`, `node` and
-`python3` it finds on your login shell's PATH. It opens with a folder picker and remembers
-recent repositories; you can also drop a repository on its Dock icon or run
-`open -a "Refactor Diff" ~/code/my-repo`.
+`python3` it finds on your login shell's PATH; the start page lists any that are missing,
+with the command that installs each one.
 
-Building it requires Rust, Node (for the Tauri CLI only) and the Xcode command line tools:
+- It opens with a folder picker and remembers recent repositories. You can also drop a
+  repository on its Dock icon or run `open -a "Refactor Diff" ~/code/my-repo`.
+- At launch it reopens the repository you had open last (File ▸ Reopen Last Repository at
+  Launch turns this off), and it remembers the window's size and position and the zoom
+  level (View ▸ Zoom In/Out, ⌘= / ⌘-).
+- Refactor Diff ▸ Settings… (⌘,) opens the AI assistant settings in their own window. In the
+  review UI, the AI chip and the Ask menu's Settings link open the same window.
+- View ▸ Command Palette (⌘⇧P) and Help ▸ Keyboard Shortcuts reach the review UI's palette
+  and shortcut list from the menu bar.
+
+Building it requires Rust, Node (for the Tauri CLI only), the Xcode command line tools and
+[just](https://just.systems):
 
 ```bash
 just desktop-setup            # npm install for the Tauri CLI
 just desktop-icons            # once: generates src-tauri/icons from app-icon.svg
 just desktop-dev              # run it
+just desktop-test             # the shell's Rust unit tests (desktop-lint: fmt and clippy)
 just desktop-build            # bundles target/release/bundle/{macos,dmg}
 just desktop-build-universal  # Apple Silicon + Intel in one app
+just desktop-open-app         # open the built app
 ```
 
-The build is ad-hoc signed, not notarized: on another Mac, right-click the app and choose
+The app is ad-hoc signed, not notarized: on another Mac, right-click the app and choose
 Open the first time.
 
 ## Usage
@@ -378,9 +390,29 @@ Layout (a Cargo workspace):
 | `crates/refactor-diff` | the command line |
 | `desktop/` | the macOS app: a [Tauri](https://tauri.app) shell (`src-tauri/`) that runs the server in-process and shows its UI in a webview; `ui/index.html` is the landing page with the repository picker |
 
+The review UI uses no Tauri APIs:
+
+- The page reaches the shell by navigating. `refactor-diff://settings` opens the Settings
+  window, and editor links like `vscode://…` are handed to macOS.
+- The shell calls into the page through `window.refactorDiff` (e.g. `openPalette()`).
+- The Settings window has its own small in-process server (what `refactor-diff
+  --settings-only` serves), so it works before a repository is open.
+- UI preferences are kept on the server in `~/.config/refactor-diff/ui.json` rather than in
+  the browser's localStorage, which depends on the port.
+
 `tests/fixtures/` holds the sample projects the tests analyze, and `tests/goldens/` the
 behaviour of the original Python implementation that the Rust code is checked against
 (see its README).
+
+The review UI uses no Tauri APIs:
+
+- The page reaches the shell by navigating. `refactor-diff://settings` opens the Settings
+  window, and editor links like `vscode://…` are handed to macOS.
+- The shell calls into the page through `window.refactorDiff` (e.g. `openPalette()`).
+- The Settings window has its own small backend (`refactor-diff --settings-only`), so it
+  works before a repository is open.
+- UI preferences are kept on the server in `~/.config/refactor-diff/ui.json` rather than in
+  the browser's localStorage, which depends on the port.
 
 ### Adding a language
 

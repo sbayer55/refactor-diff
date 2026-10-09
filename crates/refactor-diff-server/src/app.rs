@@ -16,6 +16,7 @@ use crate::exec::Tools;
 use crate::git::{GhCli, Git, GitHub, SourceError};
 use crate::http::error::ApiError;
 use crate::nav::Navigator;
+use crate::prefs::PrefsStore;
 use crate::review::ReviewStore;
 use crate::settings::SettingsStore;
 use crate::snapshots::Snapshots;
@@ -50,6 +51,12 @@ pub struct AppState {
     pub tsserver: Option<PathBuf>,
     /// Go-to-definition / find-references over the two revisions.
     pub navigator: Navigator,
+    /// Review UI preferences (`ui.json`).
+    pub prefs: PrefsStore,
+    /// The UI runs inside the desktop app.
+    pub desktop: bool,
+    /// Only the settings page and its API are served (no repository).
+    pub settings_only: bool,
     /// Cancelled to stop serving.
     pub shutdown: CancellationToken,
     /// Builds the active AI provider from the settings.
@@ -115,11 +122,16 @@ pub struct App {
 }
 
 impl App {
-    /// Validate the repository and create the stores and the snapshot directory.
+    /// Validate the repository and create the stores and the snapshot directory. With
+    /// `settings_only`, the repository is not needed and nothing repository-bound is served.
     pub fn build(config: ServerConfig) -> Result<App, BuildError> {
         let tools = Arc::new(Tools::new(config.path));
-        let repo = Git::repo_root(&config.repo, &tools)
-            .map_err(|e| BuildError::NotARepository(config.repo.clone(), e))?;
+        let repo = if config.settings_only {
+            PathBuf::new()
+        } else {
+            Git::repo_root(&config.repo, &tools)
+                .map_err(|e| BuildError::NotARepository(config.repo.clone(), e))?
+        };
         let git = Git::new(repo.clone(), tools.clone());
         let github: Arc<dyn GitHub> = config
             .github
@@ -140,6 +152,9 @@ impl App {
         let state = AppState {
             reviews: ReviewStore::new(&repo, config.state_dir.as_deref()),
             settings: SettingsStore::new(config.state_dir.as_deref()),
+            prefs: PrefsStore::new(config.state_dir.as_deref()),
+            desktop: config.desktop,
+            settings_only: config.settings_only,
             defaults: serde_json::to_value(&config.defaults).expect("defaults serialize"),
             repo,
             tools,
