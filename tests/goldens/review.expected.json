@@ -1,0 +1,69 @@
+{
+  "delta": {
+    "changed_reviewed": [
+      {
+        "fingerprint": "fp1",
+        "path": "a.py"
+      }
+    ],
+    "new": [
+      "fp3"
+    ],
+    "prev_head": "aaaa"
+  },
+  "file_name": "b0962e9729bb.json",
+  "identity": "refs:main:feature",
+  "mark": {
+    "groups": [
+      "g1",
+      "g2"
+    ],
+    "head_sha": "aaaa",
+    "hunks": [
+      "fp1"
+    ],
+    "seen": {
+      "fp1": "a.py",
+      "fp2": "b.py"
+    },
+    "updated": "2026-10-08T12:00:00+00:00"
+  },
+  "record_analysis_1": {
+    "changed_reviewed": [],
+    "new": [],
+    "prev_head": null
+  },
+  "record_analysis_2": {
+    "changed_reviewed": [
+      {
+        "fingerprint": "fp1",
+        "path": "a.py"
+      }
+    ],
+    "new": [
+      "fp3"
+    ],
+    "prev_head": "aaaa"
+  },
+  "repo": "/srv/example-repo",
+  "review": {
+    "delta": {
+      "changed_reviewed": [
+        {
+          "fingerprint": "fp1",
+          "path": "a.py"
+        }
+      ],
+      "new": [
+        "fp3"
+      ],
+      "prev_head": "aaaa"
+    },
+    "groups": [
+      "g1",
+      "g2"
+    ],
+    "hunks": [],
+    "identity": "refs:main:feature"
+  }
+}

@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use tauri::{
-    menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     AppHandle, Wry,
+    menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
 };
 
 use crate::{commands, recents};
@@ -38,10 +38,10 @@ pub fn rebuild(app: &AppHandle) {
     match build(app) {
         Ok(menu) => {
             if let Err(e) = app.set_menu(menu) {
-                log::warn!("couldn't update the menu: {e}");
+                tracing::warn!("couldn't update the menu: {e}");
             }
         }
-        Err(e) => log::warn!("couldn't build the menu: {e}"),
+        Err(e) => tracing::warn!("couldn't build the menu: {e}"),
     }
 }
 

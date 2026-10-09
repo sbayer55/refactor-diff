@@ -1,14 +1,15 @@
 //! The desktop shell: a window that shows a bundled landing page until a repository is
-//! chosen, then hosts the review UI served by the frozen Python backend (the "sidecar").
+//! chosen, then hosts the review UI served by the backend running inside this process.
 //!
-//! The review UI itself is unchanged and uses no Tauri APIs: it talks to the sidecar over
+//! The review UI itself is unchanged and uses no Tauri APIs: it talks to the backend over
 //! plain HTTP on 127.0.0.1, and its "Open in editor" links are ordinary navigations to
 //! `vscode://`-style URLs that this shell intercepts and hands to the system.
 
+mod backend;
 mod commands;
 mod menu;
 mod recents;
-mod sidecar;
+mod shell_path;
 
 use std::path::PathBuf;
 
@@ -17,13 +18,16 @@ use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, Wind
 pub const WINDOW: &str = "main";
 
 pub fn run() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .manage(sidecar::SidecarManager::default())
+        .manage(backend::Backend::default())
         .invoke_handler(tauri::generate_handler![
             commands::pick_repo,
             commands::open_repo,
@@ -32,7 +36,7 @@ pub fn run() {
             commands::get_status,
         ])
         .setup(|app| {
-            sidecar::capture_shell_path(app.handle().clone());
+            backend::capture_shell_path(app.handle().clone());
             menu::install(app.handle())?;
 
             WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("index.html".into()))
@@ -45,9 +49,9 @@ pub fn run() {
                     if !internal {
                         // Editor links (vscode://, cursor://, …) and the odd https:// link:
                         // open them outside the app and keep the current page.
-                        log::info!("opening externally: {url}");
+                        tracing::info!("opening externally: {url}");
                         if let Err(e) = tauri_plugin_opener::open_url(url.as_str(), None::<&str>) {
-                            log::warn!("could not open {url}: {e}");
+                            tracing::warn!("could not open {url}: {e}");
                         }
                     }
                     internal
@@ -60,7 +64,7 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // A single-window tool: closing the window quits (and stops the sidecar).
+            // A single-window tool: closing the window quits (and stops the backend).
             if let WindowEvent::CloseRequested { .. } = event {
                 window.app_handle().exit(0);
             }
@@ -76,11 +80,11 @@ pub fn run() {
                         Ok(path) if path.is_dir() => {
                             commands::open_in_background(app.clone(), path);
                         }
-                        _ => log::warn!("ignoring opened URL {url}"),
+                        _ => tracing::warn!("ignoring opened URL {url}"),
                     }
                 }
             }
-            RunEvent::Exit => sidecar::stop(app),
+            RunEvent::Exit => backend::stop_blocking(app),
             _ => {}
         });
 }

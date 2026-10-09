@@ -4,8 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.stevenbayer.refactor-diff",
   "build": {
-    "frontendDist": "../ui",
-    "beforeBuildCommand": "npm run build:sidecar"
+    "frontendDist": "../ui"
   },
   "app": {
     "withGlobalTauri": true,
@@ -18,7 +17,6 @@
     "active": true,
     "targets": ["app", "dmg"],
     "icon": ["icons/icon.icns", "icons/icon.png"],
-    "resources": ["sidecar/refactor-diff-sidecar"],
     "category": "DeveloperTool",
     "shortDescription": "Review refactor-heavy diffs",
     "macOS": {
