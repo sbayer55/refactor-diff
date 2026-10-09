@@ -1,12 +1,11 @@
 {
   "name": "refactor-diff-desktop",
   "private": true,
-  "description": "macOS desktop app for refactor-diff: a Tauri shell around the frozen Python backend.",
+  "description": "macOS desktop app for refactor-diff: a Tauri shell with the server built in.",
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",
-    "build": "tauri build --target aarch64-apple-darwin",
-    "build:sidecar": "bash scripts/build-sidecar.sh",
+    "build": "tauri build",
     "icons": "tauri icon app-icon.svg"
   },
   "devDependencies": {

@@ -9,8 +9,9 @@ use tauri_plugin_dialog::DialogExt;
 use url::Url;
 
 use crate::{
-    app_state, menu, recents, settings_window, sidecar,
-    sidecar::{LastError, SidecarManager},
+    app_state, backend,
+    backend::{Backend, LastError},
+    menu, recents, settings_window,
 };
 
 #[derive(Serialize)]
@@ -31,7 +32,7 @@ pub fn show_landing(app: &AppHandle, fragment: &str) {
     if let Some(win) = crate::main_window(app) {
         let _ = win.set_title("Refactor Diff");
         if let Err(e) = win.navigate(landing_url(fragment)) {
-            log::warn!("couldn't show the landing page: {e}");
+            tracing::warn!("couldn't show the landing page: {e}");
         }
     }
 }
@@ -72,16 +73,16 @@ pub fn open_settings(app: AppHandle) {
 
 #[tauri::command]
 pub fn get_status(app: AppHandle) -> Status {
-    let manager = app.state::<SidecarManager>();
-    let repo = manager.repo().map(|p| p.to_string_lossy().into_owned());
-    let opening = manager
+    let backend = app.state::<Backend>();
+    let repo = backend.repo().map(|p| p.to_string_lossy().into_owned());
+    let opening = backend
         .opening
         .lock()
         .unwrap()
         .as_ref()
         .map(|p| p.to_string_lossy().into_owned());
     // Reported once; the page shows it until the next attempt.
-    let last_error = manager.last_error.lock().unwrap().take();
+    let last_error = backend.last_error.lock().unwrap().take();
     Status {
         running: repo.is_some(),
         repo,
@@ -94,7 +95,7 @@ pub fn get_status(app: AppHandle) -> Status {
 pub fn open_in_background(app: AppHandle, repo: PathBuf) {
     tauri::async_runtime::spawn(async move {
         if let Err(e) = open(app, repo).await {
-            log::warn!("open failed: {e}");
+            tracing::warn!("open failed: {e}");
         }
     });
 }
@@ -116,8 +117,8 @@ pub fn pick_and_open(app: AppHandle) {
 pub fn close_repo(app: AppHandle) {
     app_state::store(&app).update(|s| s.last_repo = None);
     show_landing(&app, "");
-    tauri::async_runtime::spawn_blocking(move || {
-        sidecar::stop(&app);
+    tauri::async_runtime::spawn(async move {
+        backend::stop(&app).await;
         menu::rebuild(&app);
     });
 }
@@ -136,29 +137,24 @@ pub async fn open(app: AppHandle, repo: PathBuf) -> Result<(), String> {
         return Err(format!("{} is not a folder.", repo.display()));
     }
     {
-        let manager = app.state::<SidecarManager>();
-        let mut opening = manager.opening.lock().unwrap();
+        let backend = app.state::<Backend>();
+        let mut opening = backend.opening.lock().unwrap();
         if let Some(busy) = opening.as_ref() {
             // A repeat of the request in progress (a double click) changes nothing.
-            let mut pending = manager.pending.lock().unwrap();
+            let mut pending = backend.pending.lock().unwrap();
             *pending = (busy != &repo).then_some(repo);
             return Ok(());
         }
         *opening = Some(repo.clone());
-        *manager.last_error.lock().unwrap() = None;
+        *backend.last_error.lock().unwrap() = None;
     }
     show_landing(&app, "#loading");
 
     let result = loop {
-        let worker = app.clone();
-        let target = repo.clone();
-        let result = tauri::async_runtime::spawn_blocking(move || sidecar::start(&worker, &target))
-            .await
-            .map_err(|e| e.to_string())
-            .and_then(|r| r);
-        let manager = app.state::<SidecarManager>();
-        let mut opening = manager.opening.lock().unwrap();
-        let next = manager.pending.lock().unwrap().take();
+        let result = backend::start(&app, &repo).await;
+        let backend = app.state::<Backend>();
+        let mut opening = backend.opening.lock().unwrap();
+        let next = backend.pending.lock().unwrap().take();
         match next {
             Some(next) => {
                 *opening = Some(next.clone());
@@ -194,7 +190,7 @@ pub async fn open(app: AppHandle, repo: PathBuf) -> Result<(), String> {
                 title: format!("Couldn't open {}", repo.display()),
                 detail: detail.clone(),
             };
-            *app.state::<SidecarManager>().last_error.lock().unwrap() = Some(error.clone());
+            *app.state::<Backend>().last_error.lock().unwrap() = Some(error.clone());
             let _ = app.emit("repo-open-failed", &error);
             show_landing(&app, "");
             Err(detail)

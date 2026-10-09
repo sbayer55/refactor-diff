@@ -14,24 +14,28 @@ Support for more languages is planned (see [Roadmap](#roadmap)).
 
 ## Install
 
-Requires Python 3.10+ and git. Uses the [GitHub CLI](https://cli.github.com/) (`gh`) for pull requests.
+refactor-diff is a single binary. It needs `git`; the [GitHub CLI](https://cli.github.com/)
+(`gh`) is used for pull requests.
+
+With a [Rust toolchain](https://rustup.rs) installed:
 
 ```bash
-uv tool install .
+cargo install --path crates/refactor-diff --locked
 ```
 
-For development:
+For code navigation (optional):
 
-```bash
-uv sync
-```
+- **Python**: any Python 3.10+ interpreter — the repository's `.venv`, `venv` or `env`, the
+  one given with `--python`, or `python3` on your PATH. [Jedi](https://github.com/davidhalter/jedi)
+  itself is bundled in the binary; there is nothing to install.
+- **TypeScript / JavaScript**: Node.js and TypeScript — the repository's own
+  `node_modules/typescript`, a `tsserver` on your PATH, or the one given with `--tsserver`.
 
 ### Desktop app (macOS)
 
-There is also a self-contained macOS app for Apple Silicon Macs that bundles the backend, so
-it needs no Python on the machine it runs on. It still uses the `git`, `gh`, `node` and
-`python3` it finds on your PATH; the start page lists any that are missing, with the command
-that installs each one.
+There is also a macOS app with the server built in. It uses the `git`, `gh`, `node` and
+`python3` it finds on your login shell's PATH; the start page lists any that are missing,
+with the command that installs each one.
 
 - It opens with a folder picker and remembers recent repositories. You can also drop a
   repository on its Dock icon or run `open -a "Refactor Diff" ~/code/my-repo`.
@@ -43,22 +47,21 @@ that installs each one.
 - View ▸ Command Palette (⌘⇧P) and Help ▸ Keyboard Shortcuts reach the review UI's palette
   and shortcut list from the menu bar.
 
-Building it requires an Apple Silicon Mac, [Rust](https://rustup.rs), Node 20+, the Xcode
-command line tools, `uv` and [just](https://just.systems):
+Building it requires Rust, Node (for the Tauri CLI only), the Xcode command line tools and
+[just](https://just.systems):
 
 ```bash
-just desktop-setup       # adds the aarch64-apple-darwin Rust target, npm install
-just desktop-icons       # once: generates src-tauri/icons from app-icon.svg
-just desktop-sidecar     # freezes the Python backend with PyInstaller
-just desktop-dev         # run it (desktop-dev-live runs the checkout's Python instead)
-just desktop-build       # bundles src-tauri/target/aarch64-apple-darwin/release/bundle/{macos,dmg}
-just desktop-open-app    # open the built app
-just desktop-test        # the shell's Rust unit tests (desktop-lint: fmt and clippy)
+just desktop-setup            # npm install for the Tauri CLI
+just desktop-icons            # once: generates src-tauri/icons from app-icon.svg
+just desktop-dev              # run it
+just desktop-test             # the shell's Rust unit tests (desktop-lint: fmt and clippy)
+just desktop-build            # bundles target/release/bundle/{macos,dmg}
+just desktop-build-universal  # Apple Silicon + Intel in one app
+just desktop-open-app         # open the built app
 ```
 
-The sidecar build refuses to run under Rosetta or with an Intel Python, and checks that
-every native file in the frozen backend runs on arm64. The app is ad-hoc signed, not
-notarized: on another Mac, right-click the app and choose Open the first time.
+The app is ad-hoc signed, not notarized: on another Mac, right-click the app and choose
+Open the first time.
 
 ## Usage
 
@@ -285,8 +288,9 @@ the pointer.
   (a `tsserver` executable, `tsserver.js`, or a `typescript` package directory). Each
   package's installed `node_modules` is used to resolve imports, at both revisions.
 
-Navigation uses [Jedi](https://github.com/davidhalter/jedi) for Python and TypeScript's
-`tsserver` for TypeScript and JavaScript. For a branch or PR, the source files of each revision
+Navigation uses [Jedi](https://github.com/davidhalter/jedi) for Python (bundled in the binary
+and run inside your project's interpreter) and TypeScript's `tsserver` for TypeScript and
+JavaScript. For a branch or PR, the source files of each revision
 (plus `package.json` and `tsconfig*.json`) are written to a temporary snapshot on first use (well under a second
 for a ~1,300-file repo) and deleted when the server stops. If the virtualenv has the project
 installed in editable mode, its paths are pointed at the snapshot, so imports resolve to the
@@ -300,8 +304,9 @@ code at that revision rather than your current checkout.
    a match, so an import block isn't torn apart to pair a blank line). When a replaced block
    has the same number of lines on each side, the lines are paired one by one. Otherwise the
    block stays whole, for example when a call is re-wrapped across lines.
-3. **Classify each unit.** Old and new tokens (from `tokenize`, with `ast` for type
-   annotations) are aligned, and every differing span becomes a signature:
+3. **Classify each unit.** Old and new tokens (from a [tree-sitter](https://tree-sitter.github.io)
+   parse, which also supplies the type annotations) are aligned, and every differing span
+   becomes a signature:
 
    | Kind | Example |
    |---|---|
@@ -367,43 +372,37 @@ code at that revision rather than your current checkout.
 ## Development
 
 ```bash
-uv run pytest
-uv run ruff check . && uv run ruff format --check .
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo fmt --all --check
 ```
 
 With [just](https://github.com/casey/just) installed, `just` lists the project's recipes:
 `just check` runs the linters and tests, `just fmt` formats, `just run main..HEAD` starts
 the CLI from the checkout, and the `desktop-*` recipes wrap the desktop app's build steps.
 
-Layout (`src/refactor_diff/`):
+Layout (a Cargo workspace):
 
-| Module | Purpose |
+| Crate | Purpose |
 |---|---|
-| `sources.py` | git, GitHub PR and working-tree loading; commit lists; posting PR comments via `gh` |
-| `hunks.py` | line diff, hunk grouping, candidate units |
-| `languages/` | language analyzers (`base.py` interface, `python.py`, `typescript.py`) |
-| `patterns.py` | token alignment, signature classification |
-| `grouping.py` | grouping, mechanical threshold, warnings (inconsistent renames, near misses) |
-| `moves.py` | moved-code detection and the import churn a move explains |
-| `verify.py` | AST-equivalence verification of collapsed changes |
-| `categories.py` | file kinds (source, tests, docs, config, other) for filtering |
-| `engine.py` | `analyze()`, which turns a source into a `Report` |
-| `state.py` | reviewed marks and the previous analysis, in `~/.config/refactor-diff` |
-| `settings.py` | user settings (AI provider, key, model) next to the review marks |
-| `ai/` | the Ask menu: prompt context from a report (`context.py`), the predefined tasks (`tasks.py`), the Claude / OpenAI-compatible / Ollama providers (`providers.py`) |
-| `export.py` | the Markdown review summary |
-| `fileview.py` | whole-file diff of one changed file, for context and the old/new viewer |
-| `snapshots.py` | analyzable sources of a revision written to a temp dir, for navigation |
-| `navigation.py` | go-to-definition / find-references, dispatched by language; Jedi backend |
-| `tsserver.py` | TypeScript/JavaScript navigation backend (tsserver) |
-| `model.py` | serializable report model with stable IDs |
-| `web/` | Starlette server and the vanilla-JS single-page UI |
+| `crates/refactor-diff-core` | the analysis engine, pure and git-free: `model` (the report with stable ids), `seqmatch` (CPython's `SequenceMatcher`, which every id and grouping depends on), `hunks`, `lang/` (the tree-sitter analyzers for Python, TypeScript and JavaScript), `classify/` (token alignment, signatures), `grouping`, `warnings`, `moves`, `verify`, `categories`, `engine`, `export`, `fileview` |
+| `crates/refactor-diff-server` | the HTTP API (axum) with the embedded web UI (`assets/`), `git/` (git, GitHub PRs via `gh`, the working tree, commit lists), `snapshots`, `nav/` (go-to-definition / find-references: `tsserver` and the bundled Jedi helper under `python/`), `ai/` (the Ask menu: prompt context, tasks, the Claude / OpenAI-compatible / Ollama providers), `settings`, `review` (reviewed marks in `~/.config/refactor-diff`) |
+| `crates/refactor-diff` | the command line |
+| `desktop/` | the macOS app: a [Tauri](https://tauri.app) shell (`src-tauri/`) that runs the server in-process and shows its UI in a webview; `ui/index.html` is the landing page with the repository picker |
 
-The macOS app lives in `desktop/`: a [Tauri](https://tauri.app) shell (`src-tauri/`, Rust)
-that runs the backend frozen by PyInstaller (`sidecar.spec`) as a child process and shows
-its UI in a webview; `ui/index.html` is the landing page with the repository picker. To
-iterate on Python code without re-freezing, point the app at the checkout:
-`REFACTOR_DIFF_SIDECAR=$PWD/scripts/sidecar-dev.sh npm run dev`.
+The review UI uses no Tauri APIs:
+
+- The page reaches the shell by navigating. `refactor-diff://settings` opens the Settings
+  window, and editor links like `vscode://…` are handed to macOS.
+- The shell calls into the page through `window.refactorDiff` (e.g. `openPalette()`).
+- The Settings window has its own small in-process server (what `refactor-diff
+  --settings-only` serves), so it works before a repository is open.
+- UI preferences are kept on the server in `~/.config/refactor-diff/ui.json` rather than in
+  the browser's localStorage, which depends on the port.
+
+`tests/fixtures/` holds the sample projects the tests analyze, and `tests/goldens/` the
+behaviour of the original Python implementation that the Rust code is checked against
+(see its README).
 
 The review UI uses no Tauri APIs:
 
@@ -417,17 +416,18 @@ The review UI uses no Tauri APIs:
 
 ### Adding a language
 
-Implement the `LanguageAnalyzer` protocol in `languages/base.py`. It turns source text into
-tokens and type-annotation spans, names the language's keywords, and lists the `globs` used
-to search the repository for missed renames. Optionally it also exposes statement spans, call
-sites, defs and imports, and can parse and normalize a block for verification; an analyzer
-that leaves those empty simply opts out of moves, `args`, `import` and verification. Then
-register the analyzer in `languages/__init__.py`. The rest of the analysis pipeline does not
-depend on the language.
+Implement the `LanguageAnalyzer` trait in `crates/refactor-diff-core/src/lang/mod.rs`. It
+turns source text into tokens and type-annotation spans, names the language's keywords, and
+lists the `globs` used to search the repository for missed renames. Optionally it also exposes
+statement spans, call sites, defs and imports, and an `AstVerifier` that can parse and
+normalize a block for verification; an analyzer that leaves those empty simply opts out of
+moves, `args`, `import` and verification. Then register the analyzer in the same module's
+`ANALYZERS` list and its suffixes in `SNAPSHOT_SUFFIXES`. The rest of the analysis pipeline
+does not depend on the language.
 
-For the UI, add a highlighter to `LANGUAGES` in `web/static/syntax.js`, and for code
-navigation a backend like `tsserver.py` that `Navigator` in `navigation.py` dispatches to
-(and the file suffixes to `SNAPSHOT_SUFFIXES` in `snapshots.py`).
+For the UI, add a highlighter to `LANGUAGES` in `crates/refactor-diff-server/assets/syntax.js`,
+and for code navigation a backend like `nav/tsserver.rs` that `Navigator` in `nav/mod.rs`
+dispatches to.
 
 ## Roadmap
 

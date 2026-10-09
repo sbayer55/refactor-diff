@@ -1,0 +1,52 @@
+[package]
+name = "refactor-diff-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The refactor-diff HTTP server: git sources, analysis, navigation and AI."
+build = "build.rs"
+include = ["src/**", "assets/**", "python/**", "build.rs"]
+
+[lib]
+name = "refactor_diff_server"
+
+[dependencies]
+async-stream.workspace = true
+axum.workspace = true
+directories.workspace = true
+eventsource-stream.workspace = true
+flate2.workspace = true
+futures.workspace = true
+indexmap.workspace = true
+lru.workspace = true
+mime_guess.workspace = true
+refactor-diff-core.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+rust-embed.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tar.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+which.workspace = true
+
+[build-dependencies]
+flate2.workspace = true
+sha2.workspace = true
+tar.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tempfile.workspace = true
+tower = { version = "0.5", features = ["util"] }
+wiremock.workspace = true
+
+[lints]
+workspace = true
