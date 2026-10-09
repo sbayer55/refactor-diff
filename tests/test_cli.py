@@ -63,3 +63,9 @@ def test_watch_parent_fires_on_closed_stream():
     fired = []
     watch_parent(stream, lambda: fired.append(True))
     assert fired == [True]
+
+
+def test_settings_only_and_desktop_flags():
+    args = parse_args(["--settings-only", "--desktop"])
+    assert args.settings_only is True and args.desktop is True
+    assert parse_args([]).settings_only is False
