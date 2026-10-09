@@ -26,7 +26,6 @@ desktop/node_modules/
 desktop/src-tauri/target/
 desktop/src-tauri/sidecar/
 desktop/src-tauri/gen/
-desktop/.venv-x86_64/
 
 # Local
 .claude/

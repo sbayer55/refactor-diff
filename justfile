@@ -3,6 +3,9 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 desktop := justfile_directory() / "desktop"
+bundle := desktop / "src-tauri/target/aarch64-apple-darwin/release/bundle"
+# tauri-build checks bundled resources exist; unit tests don't need the frozen sidecar.
+no_sidecar := '{"bundle":{"resources":[]}}'
 
 # List recipes
 default:
@@ -53,6 +56,7 @@ clean:
 # Install the desktop app's npm dependencies
 [group('desktop')]
 desktop-setup:
+    rustup target add aarch64-apple-darwin
     cd "{{ desktop }}" && npm install
 
 # Generate src-tauri/icons from app-icon.svg (needed once before the first build)
@@ -75,10 +79,34 @@ desktop-dev:
 desktop-dev-live:
     cd "{{ desktop }}" && REFACTOR_DIFF_SIDECAR="{{ desktop }}/scripts/sidecar-dev.sh" npm run dev
 
-# Build the macOS app and dmg (freezes the sidecar first via beforeBuildCommand)
+# Build the Apple Silicon app and dmg (freezes the sidecar first via beforeBuildCommand)
 [group('desktop')]
-desktop-build:
+desktop-build: desktop-clean-bundle
     cd "{{ desktop }}" && npm run build
+
+# Open the built app
+[group('desktop')]
+desktop-open-app:
+    open "{{ bundle }}/macos/Refactor Diff.app"
+
+# Run the desktop shell's Rust unit tests
+[group('desktop')]
+desktop-test:
+    cd "{{ desktop }}/src-tauri" && TAURI_CONFIG='{{ no_sidecar }}' cargo test
+
+# Check the desktop shell's formatting and clippy lints
+[group('desktop')]
+desktop-lint:
+    cd "{{ desktop }}/src-tauri" && cargo fmt --check
+    cd "{{ desktop }}/src-tauri" && TAURI_CONFIG='{{ no_sidecar }}' cargo clippy --all-targets -- -D warnings
+
+# Remove scratch disk images an interrupted dmg build left behind, and detach their volumes
+[group('desktop')]
+desktop-clean-bundle:
+    hdiutil info | awk -v t="{{ desktop }}/src-tauri/target/" \
+      '/^image-path/ { sub(/^image-path *: /, ""); keep = index($0, t) == 1 } keep && /^\/dev\/disk[0-9]+\t/ { print $1; keep = 0 }' \
+      | while read -r disk; do diskutil eject "$disk" || true; done
+    find "{{ desktop }}/src-tauri/target" -path '*/bundle/macos/rw.*.dmg' -delete 2>/dev/null || true
 
 # Remove the desktop app's build output and frozen sidecar
 [group('desktop')]

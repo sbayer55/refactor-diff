@@ -14,11 +14,17 @@ from pathlib import Path
 from starlette.applications import Starlette
 from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from starlette.responses import (
+    FileResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from refactor_diff import settings, sources
+from refactor_diff import prefs, settings, sources
 from refactor_diff.ai import providers, tasks
 from refactor_diff.ai.context import ContextBuilder, ContextError, render
 from refactor_diff.engine import analyze
@@ -43,6 +49,7 @@ def create_app(
     tsserver: str | None = None,
     state_dir: Path | None = None,
     provider_factory=providers.build,
+    desktop: bool = False,
 ) -> Starlette:
     reports: dict[str, Report] = {}
     snapshots = Snapshots(repo)
@@ -62,7 +69,14 @@ def create_app(
         return FileResponse(STATIC / "index.html")
 
     async def config(request: Request):
-        return JSONResponse({"repo": str(repo), "defaults": defaults or {}})
+        return JSONResponse(
+            {
+                "repo": str(repo),
+                "defaults": defaults or {},
+                "desktop": desktop,
+                "prefs": prefs.load(settings_root),
+            }
+        )
 
     async def list_sources(request: Request):
         try:
@@ -262,31 +276,7 @@ def create_app(
             return JSONResponse({"error": str(e)}, status_code=400)
         return JSONResponse({"url": url, "path": path, "line": line, "side": side})
 
-    # --- settings and the Ask menu ---------------------------------------------------------
-
-    async def get_settings(request: Request):
-        return JSONResponse(settings.public_view(settings.load(settings_root)))
-
-    async def save_settings(request: Request):
-        body = await request.json()
-        try:
-            merged = settings.apply_update(settings.load(settings_root), body)
-        except ValueError as e:
-            return JSONResponse({"error": str(e)}, status_code=400)
-        saved = await run_in_threadpool(settings.save, merged, settings_root)
-        return JSONResponse(settings.public_view(saved))
-
-    async def test_settings(request: Request):
-        """Try the provider with ``{"provider", "config"}`` from the dialog (unsaved values)."""
-        body = await request.json()
-        try:
-            resolved = settings.resolve_test_config(
-                settings.load(settings_root), body.get("provider", ""), body.get("config")
-            )
-            provider = provider_factory(resolved)
-        except (ValueError, providers.ProviderError) as e:
-            return JSONResponse({"ok": False, "error": str(e), "latency_ms": None, "models": []})
-        return JSONResponse(await run_in_threadpool(provider.test))
+    # --- the Ask menu ------------------------------------------------------------------------
 
     def _focus(builder: ContextBuilder, body: dict):
         line = body.get("line")
@@ -450,15 +440,86 @@ def create_app(
             Route("/api/report/{report_id}/navigate", navigate, methods=["POST"]),
             Route("/api/report/{report_id}/source", get_source),
             Route("/api/library", get_library),
-            Route("/api/settings", get_settings),
-            Route("/api/settings", save_settings, methods=["POST"]),
-            Route("/api/settings/test", test_settings, methods=["POST"]),
+            *_settings_routes(settings_root, provider_factory),
             Route("/api/report/{report_id}/ai/menu", ai_menu, methods=["POST"]),
             Route("/api/report/{report_id}/ai/refs-count", ai_refs_count, methods=["POST"]),
             Route("/api/report/{report_id}/ai/ask", ai_ask, methods=["POST"]),
             Mount("/static", StaticFiles(directory=STATIC), name="static"),
         ],
     )
+
+
+def create_settings_app(
+    state_dir: Path | None = None,
+    provider_factory=providers.build,
+    desktop: bool = False,
+) -> Starlette:
+    """Just the settings page and its API, with no repository: what the desktop app's
+    Settings window talks to (``refactor-diff --settings-only``)."""
+
+    async def config(request: Request):
+        return JSONResponse({"desktop": desktop, "settings_only": True})
+
+    async def index(request: Request):
+        return RedirectResponse("/settings")
+
+    return Starlette(
+        routes=[
+            Route("/", index),
+            Route("/api/config", config),
+            *_settings_routes(state_dir, provider_factory),
+            Mount("/static", StaticFiles(directory=STATIC), name="static"),
+        ],
+    )
+
+
+def _settings_routes(settings_root: Path | None, provider_factory) -> list[Route]:
+    """The settings page, the AI settings API and UI preferences; shared by both apps."""
+
+    async def settings_page(request: Request):
+        return FileResponse(STATIC / "settings.html")
+
+    async def get_settings(request: Request):
+        return JSONResponse(settings.public_view(settings.load(settings_root)))
+
+    async def save_settings(request: Request):
+        body = await request.json()
+        try:
+            merged = settings.apply_update(settings.load(settings_root), body)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        saved = await run_in_threadpool(settings.save, merged, settings_root)
+        return JSONResponse(settings.public_view(saved))
+
+    async def test_settings(request: Request):
+        """Try the provider with ``{"provider", "config"}`` from the form (unsaved values)."""
+        body = await request.json()
+        try:
+            resolved = settings.resolve_test_config(
+                settings.load(settings_root), body.get("provider", ""), body.get("config")
+            )
+            provider = provider_factory(resolved)
+        except (ValueError, providers.ProviderError) as e:
+            return JSONResponse({"ok": False, "error": str(e), "latency_ms": None, "models": []})
+        return JSONResponse(await run_in_threadpool(provider.test))
+
+    async def save_prefs(request: Request):
+        """Apply ``{"changes": {key: value | null}}`` to the UI preferences."""
+        body = await request.json()
+        try:
+            changes = body.get("changes") if isinstance(body, dict) else None
+            saved = await run_in_threadpool(prefs.update, changes, settings_root)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        return JSONResponse({"prefs": saved})
+
+    return [
+        Route("/settings", settings_page),
+        Route("/api/settings", get_settings),
+        Route("/api/settings", save_settings, methods=["POST"]),
+        Route("/api/settings/test", test_settings, methods=["POST"]),
+        Route("/api/prefs", save_prefs, methods=["POST"]),
+    ]
 
 
 def _sse(event: str, data: dict) -> str:

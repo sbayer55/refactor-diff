@@ -89,3 +89,40 @@ def test_file_diff_unknown_path_is_404(rename_repo, serve):
     report = client.post("/api/analyze", json={"base": "main", "head": "feature"}).json()
     res = client.get(f"/api/report/{report['id']}/file", params={"path": "nope.py"})
     assert res.status_code == 404
+
+
+def test_prefs_round_trip_through_config(rename_repo, serve, isolated_config):
+    client = serve(rename_repo)
+    cfg = client.get("/api/config").json()
+    assert cfg["prefs"] == {} and cfg["desktop"] is False
+    res = client.post("/api/prefs", json={"changes": {"refactor-diff:layout": "split"}})
+    assert res.json() == {"prefs": {"refactor-diff:layout": "split"}}
+    assert (isolated_config / "refactor-diff" / "ui.json").exists()
+    assert client.get("/api/config").json()["prefs"] == {"refactor-diff:layout": "split"}
+    assert client.post("/api/prefs", json={"changes": {"x": "y"}}).status_code == 400
+
+
+def test_desktop_flag_reaches_config(rename_repo, serve):
+    assert serve(rename_repo, desktop=True).get("/api/config").json()["desktop"] is True
+
+
+def test_settings_page_is_served(rename_repo, serve):
+    res = serve(rename_repo).get("/settings")
+    assert res.status_code == 200 and "settings.js" in res.text
+
+
+def test_settings_only_app(isolated_config):
+    from starlette.testclient import TestClient
+
+    from refactor_diff.web.server import create_settings_app
+
+    with TestClient(create_settings_app(desktop=True)) as client:
+        assert client.get("/api/config").json() == {"desktop": True, "settings_only": True}
+        assert client.get("/", follow_redirects=False).headers["location"] == "/settings"
+        assert "settings.js" in client.get("/settings").text
+        assert client.get("/static/settings.js").status_code == 200
+        view = client.get("/api/settings").json()
+        assert view["ai"]["provider"] == "claude"
+        saved = client.post("/api/settings", json={"ai": {"provider": "ollama"}}).json()
+        assert saved["ai"]["provider"] == "ollama"
+        assert client.get("/api/report/x").status_code == 404

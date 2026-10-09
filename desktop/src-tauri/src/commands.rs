@@ -9,7 +9,7 @@ use tauri_plugin_dialog::DialogExt;
 use url::Url;
 
 use crate::{
-    menu, recents, sidecar,
+    app_state, menu, recents, settings_window, sidecar,
     sidecar::{LastError, SidecarManager},
 };
 
@@ -66,6 +66,11 @@ pub fn remove_recent(app: AppHandle, path: String) {
 }
 
 #[tauri::command]
+pub fn open_settings(app: AppHandle) {
+    settings_window::open(&app);
+}
+
+#[tauri::command]
 pub fn get_status(app: AppHandle) -> Status {
     let manager = app.state::<SidecarManager>();
     let repo = manager.repo().map(|p| p.to_string_lossy().into_owned());
@@ -107,11 +112,24 @@ pub fn pick_and_open(app: AppHandle) {
         });
 }
 
+/// Close the open repository: stop its backend and go back to the landing page.
+pub fn close_repo(app: AppHandle) {
+    app_state::store(&app).update(|s| s.last_repo = None);
+    show_landing(&app, "");
+    tauri::async_runtime::spawn_blocking(move || {
+        sidecar::stop(&app);
+        menu::rebuild(&app);
+    });
+}
+
 /// Switch the window to the review UI for `repo`: show the landing page's loading state,
 /// (re)start the backend, then navigate to it. On failure the landing page stays up and
 /// shows what went wrong (via the command's error, `get_status`, or the event).
+///
+/// A request that arrives while another repository is starting replaces it: the newest one
+/// is opened once the current start finishes (e.g. a Dock drop during the launch restore).
 pub async fn open(app: AppHandle, repo: PathBuf) -> Result<(), String> {
-    let repo = repo
+    let mut repo = repo
         .canonicalize()
         .map_err(|e| format!("{}: {e}", repo.display()))?;
     if !repo.is_dir() {
@@ -121,24 +139,45 @@ pub async fn open(app: AppHandle, repo: PathBuf) -> Result<(), String> {
         let manager = app.state::<SidecarManager>();
         let mut opening = manager.opening.lock().unwrap();
         if let Some(busy) = opening.as_ref() {
-            return Err(format!("Still opening {}.", busy.display()));
+            // A repeat of the request in progress (a double click) changes nothing.
+            let mut pending = manager.pending.lock().unwrap();
+            *pending = (busy != &repo).then_some(repo);
+            return Ok(());
         }
         *opening = Some(repo.clone());
         *manager.last_error.lock().unwrap() = None;
     }
     show_landing(&app, "#loading");
 
-    let worker = app.clone();
-    let target = repo.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || sidecar::start(&worker, &target))
-        .await
-        .map_err(|e| e.to_string())
-        .and_then(|r| r);
+    let result = loop {
+        let worker = app.clone();
+        let target = repo.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || sidecar::start(&worker, &target))
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r);
+        let manager = app.state::<SidecarManager>();
+        let mut opening = manager.opening.lock().unwrap();
+        let next = manager.pending.lock().unwrap().take();
+        match next {
+            Some(next) => {
+                *opening = Some(next.clone());
+                repo = next;
+            }
+            None => {
+                opening.take();
+                break result;
+            }
+        }
+        drop(opening);
+        show_landing(&app, "#loading");
+    };
 
-    app.state::<SidecarManager>().opening.lock().unwrap().take();
     match result {
         Ok(url) => {
             recents::push(&app, &repo);
+            let path = repo.to_string_lossy().into_owned();
+            app_state::store(&app).update(|s| s.last_repo = Some(path));
             menu::rebuild(&app);
             if let Some(win) = crate::main_window(&app) {
                 let name = repo

@@ -47,7 +47,22 @@
   .error pre { margin: 8px 0 0; white-space: pre-wrap; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; max-height: 160px; overflow: auto; }
   .status { display: none; color: var(--muted); margin-top: 20px; }
   .status.show { display: block; }
-  footer { margin-top: 28px; color: var(--muted); font-size: 12px; }
+  footer { margin-top: 28px; color: var(--muted); font-size: 12px; display: flex; gap: 12px; align-items: baseline; }
+  footer .spacer { flex: 1; }
+  a.link, button.link { white-space: nowrap; font: inherit; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: none; }
+  a.link:hover, button.link:hover { text-decoration: underline; }
+  ul.tools { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--card); }
+  ul.tools li { padding: 10px 12px; border-top: 1px solid var(--border); }
+  ul.tools li:first-child { border-top: 0; }
+  ul.tools .what { display: flex; gap: 8px; align-items: baseline; }
+  ul.tools .name { font-weight: 600; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  ul.tools .problem { color: var(--danger); }
+  ul.tools .purpose { color: var(--muted); font-size: 12px; margin-left: auto; }
+  ul.tools .fix { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  ul.tools code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; -webkit-user-select: all; user-select: all; }
+  .tools-ok { color: var(--muted); font-size: 12px; }
+  .tools-head { display: flex; align-items: baseline; }
+  .tools-head .spacer { flex: 1; }
 </style>
 </head>
 <body>
@@ -66,7 +81,16 @@
     <p class="empty" id="no-recents">Repositories you open will be listed here. You can also drop a folder on the Dock icon.</p>
   </section>
 
-  <footer>Needs <code>git</code>; <code>gh</code> for pull requests. Review marks are kept in <code>~/.config/refactor-diff</code>.</footer>
+  <section id="requirements" hidden>
+    <div class="tools-head"><h2>Requirements</h2><span class="spacer"></span><button class="link" id="recheck">Check Again</button></div>
+    <ul class="tools" id="tools"></ul>
+  </section>
+
+  <footer>
+    <span id="tools-ok" class="tools-ok"></span>
+    <span class="spacer"></span>
+    <button class="link" id="settings">Settings…<kbd>⌘,</kbd></button>
+  </footer>
 </main>
 
 <script>
@@ -85,8 +109,10 @@
   }
   function clearError() { $("error").classList.remove("show"); }
 
+  let gitMissing = false;
+
   function setBusy(busy, message) {
-    $("open").disabled = busy;
+    $("open").disabled = busy || gitMissing;
     $("status").textContent = message || "";
     $("status").classList.toggle("show", busy);
   }
@@ -134,12 +160,40 @@
 
   // The sidecar died while the review UI was showing; the app brought us back here.
   listen("sidecar-exited", (ev) => {
-    const { code, signal, stderr } = ev.payload || {};
-    const how = code != null ? `exit code ${code}` : signal != null ? `signal ${signal}` : "unknown reason";
-    showError(`The backend stopped (${how}).`, stderr);
+    const { title, detail } = ev.payload || {};
+    showError(title || "The backend stopped unexpectedly.", detail);
   });
 
+  // Command-line tools the backend needs: one quiet line when all is well, otherwise each
+  // problem with the command that fixes it.
+  async function renderTools(refresh = false) {
+    $("recheck").disabled = true;
+    let tools = [];
+    try { tools = await invoke("preflight", { refresh }); } catch (e) { console.warn(e); }
+    $("recheck").disabled = false;
+    const bad = tools.filter((t) => t.problem);
+    $("requirements").hidden = !bad.length;
+    $("tools-ok").textContent = bad.length ? "" : tools.map((t) => t.version || t.name).join(" · ");
+    $("tools").innerHTML = bad.map((t) =>
+      `<li><div class="what"><span class="name">${esc(t.name)}</span><span class="problem">${esc(t.problem)}</span>` +
+      `<span class="purpose">${t.required ? "required" : `for ${esc(t.purpose)}`}</span></div>` +
+      `<div class="fix"><code>${esc(t.fix)}</code><button class="link" data-copy="${esc(t.fix)}">Copy</button></div></li>`).join("");
+    gitMissing = bad.some((t) => t.required);
+    $("open").disabled = gitMissing || $("status").classList.contains("show");
+    $("open").title = gitMissing ? "git is required; see Requirements below" : "";
+  }
+
+  $("recheck").addEventListener("click", () => renderTools(true));
+  $("tools").addEventListener("click", async (ev) => {
+    const btn = ev.target.closest("[data-copy]");
+    if (!btn) return;
+    try { await navigator.clipboard.writeText(btn.dataset.copy); btn.textContent = "Copied"; }
+    catch { btn.textContent = "Select and copy"; }
+  });
+  $("settings").addEventListener("click", () => invoke("open_settings"));
+
   (async () => {
+    renderTools();
     await renderRecents();
     const status = await invoke("get_status");
     if (status.lastError) showError(status.lastError.title, status.lastError.detail);

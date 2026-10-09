@@ -17,7 +17,7 @@ import uvicorn
 
 from refactor_diff import sources
 from refactor_diff.categories import CATEGORIES
-from refactor_diff.web.server import create_app
+from refactor_diff.web.server import create_app, create_settings_app
 
 HOST = "127.0.0.1"
 
@@ -83,6 +83,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="shut down when stdin closes (for a parent that pipes it, e.g. the desktop app)",
     )
+    p.add_argument(
+        "--settings-only",
+        action="store_true",
+        help="serve only the settings page (/settings), with no repository",
+    )
+    p.add_argument("--desktop", action="store_true", help=argparse.SUPPRESS)
     return p.parse_args(argv)
 
 
@@ -168,14 +174,22 @@ def _terminate() -> None:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
-    try:
-        repo = sources.repo_root(args.repo)
-    except sources.SourceError:
-        sys.exit(f"refactor-diff: {args.repo} is not inside a git repository")
+    if args.settings_only:
+        app = create_settings_app(desktop=args.desktop)
+        what = "settings"
+    else:
+        try:
+            repo = sources.repo_root(args.repo)
+        except sources.SourceError:
+            sys.exit(f"refactor-diff: {args.repo} is not inside a git repository")
+        app = create_app(
+            repo, defaults_from(args), args.python, args.tsserver, desktop=args.desktop
+        )
+        what = str(repo)
 
     port = args.port or free_port()
     url = f"http://{HOST}:{port}/"
-    print(f"refactor-diff: serving {repo} at {url} (Ctrl+C to stop)", flush=True)
+    print(f"refactor-diff: serving {what} at {url} (Ctrl+C to stop)", flush=True)
     if not args.no_browser:
         threading.Timer(0.8, webbrowser.open, [url]).start()
     if args.exit_with_parent:
@@ -183,7 +197,7 @@ def main(argv: list[str] | None = None) -> None:
             target=watch_parent, args=(sys.stdin.buffer, _terminate), daemon=True
         ).start()
     uvicorn.run(
-        create_app(repo, defaults_from(args), args.python, args.tsserver),
+        app,
         host=HOST,
         port=port,
         log_level="warning",

@@ -28,26 +28,37 @@ uv sync
 
 ### Desktop app (macOS)
 
-There is also a self-contained macOS app that bundles the backend, so it needs no Python
-on the machine it runs on (it still uses the `git`, `gh` and `node` it finds on your PATH).
-It opens with a folder picker and remembers recent repositories; you can also drop a
-repository on its Dock icon or run `open -a "Refactor Diff" ~/code/my-repo`.
+There is also a self-contained macOS app for Apple Silicon Macs that bundles the backend, so
+it needs no Python on the machine it runs on. It still uses the `git`, `gh`, `node` and
+`python3` it finds on your PATH; the start page lists any that are missing, with the command
+that installs each one.
 
-Building it requires [Rust](https://rustup.rs), Node 20+, the Xcode command line tools and
-`uv`:
+- It opens with a folder picker and remembers recent repositories. You can also drop a
+  repository on its Dock icon or run `open -a "Refactor Diff" ~/code/my-repo`.
+- At launch it reopens the repository you had open last (File ▸ Reopen Last Repository at
+  Launch turns this off), and it remembers the window's size and position and the zoom
+  level (View ▸ Zoom In/Out, ⌘= / ⌘-).
+- Refactor Diff ▸ Settings… (⌘,) opens the AI assistant settings in their own window. In the
+  review UI, the AI chip and the Ask menu's Settings link open the same window.
+- View ▸ Command Palette (⌘⇧P) and Help ▸ Keyboard Shortcuts reach the review UI's palette
+  and shortcut list from the menu bar.
+
+Building it requires an Apple Silicon Mac, [Rust](https://rustup.rs), Node 20+, the Xcode
+command line tools, `uv` and [just](https://just.systems):
 
 ```bash
-cd desktop
-npm install
-npm run icons            # once: generates src-tauri/icons from app-icon.svg
-npm run build:sidecar    # freezes the Python backend with PyInstaller
-npm run dev              # run it
-npm run build            # bundles src-tauri/target/release/bundle/{macos,dmg}
+just desktop-setup       # adds the aarch64-apple-darwin Rust target, npm install
+just desktop-icons       # once: generates src-tauri/icons from app-icon.svg
+just desktop-sidecar     # freezes the Python backend with PyInstaller
+just desktop-dev         # run it (desktop-dev-live runs the checkout's Python instead)
+just desktop-build       # bundles src-tauri/target/aarch64-apple-darwin/release/bundle/{macos,dmg}
+just desktop-open-app    # open the built app
+just desktop-test        # the shell's Rust unit tests (desktop-lint: fmt and clippy)
 ```
 
-The build is ad-hoc signed, not notarized: on another Mac, right-click the app and choose
-Open the first time. The app builds for the architecture it is built on; there is no
-universal build because the backend's native extensions are per-architecture.
+The sidecar build refuses to run under Rosetta or with an Intel Python, and checks that
+every native file in the frozen backend runs on arm64. The app is ad-hoc signed, not
+notarized: on another Mac, right-click the app and choose Open the first time.
 
 ## Usage
 
@@ -393,6 +404,16 @@ that runs the backend frozen by PyInstaller (`sidecar.spec`) as a child process 
 its UI in a webview; `ui/index.html` is the landing page with the repository picker. To
 iterate on Python code without re-freezing, point the app at the checkout:
 `REFACTOR_DIFF_SIDECAR=$PWD/scripts/sidecar-dev.sh npm run dev`.
+
+The review UI uses no Tauri APIs:
+
+- The page reaches the shell by navigating. `refactor-diff://settings` opens the Settings
+  window, and editor links like `vscode://…` are handed to macOS.
+- The shell calls into the page through `window.refactorDiff` (e.g. `openPalette()`).
+- The Settings window has its own small backend (`refactor-diff --settings-only`), so it
+  works before a repository is open.
+- UI preferences are kept on the server in `~/.config/refactor-diff/ui.json` rather than in
+  the browser's localStorage, which depends on the port.
 
 ### Adding a language
 
