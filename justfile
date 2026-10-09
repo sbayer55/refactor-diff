@@ -4,6 +4,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 desktop := justfile_directory() / "desktop"
 vendor  := justfile_directory() / "crates/refactor-diff-server/python/vendor"
+bundle  := justfile_directory() / "target/release/bundle"
 
 # Pinned pure-Python dependencies bundled into the binary for Python code navigation.
 jedi_version  := "0.20.0"
@@ -97,14 +98,32 @@ desktop-lint:
 
 # Build the macOS app and dmg for this machine's architecture
 [group('desktop')]
-desktop-build:
+desktop-build: desktop-clean-bundle
     cd "{{ desktop }}" && npm run build
 
 # Build a universal (Apple Silicon + Intel) app and dmg
 [group('desktop')]
-desktop-build-universal:
+desktop-build-universal: desktop-clean-bundle
     rustup target add aarch64-apple-darwin x86_64-apple-darwin
     cd "{{ desktop }}" && npm run tauri -- build --target universal-apple-darwin
+
+# Open the built app
+[group('desktop')]
+desktop-open-app:
+    open "{{ bundle }}/macos/Refactor Diff.app"
+
+# Run the desktop shell's Rust unit tests
+[group('desktop')]
+desktop-test:
+    cargo test -p refactor-diff-desktop
+
+# Remove scratch disk images an interrupted dmg build left behind, and detach their volumes
+[group('desktop')]
+desktop-clean-bundle:
+    hdiutil info | awk -v t="{{ justfile_directory() }}/target/" \
+      '/^image-path/ { sub(/^image-path *: /, ""); keep = index($0, t) == 1 } keep && /^\/dev\/disk[0-9]+\t/ { print $1; keep = 0 }' \
+      | while read -r disk; do diskutil eject "$disk" || true; done
+    find "{{ justfile_directory() }}/target" -path '*/bundle/macos/rw.*.dmg' -delete 2>/dev/null || true
 
 # Remove the desktop app's build output
 [group('desktop')]

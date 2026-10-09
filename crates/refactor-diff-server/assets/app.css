@@ -756,3 +756,12 @@ button.pill.ai-provider.unset { background: var(--warn-bg); color: var(--warn-fg
 .settings-preview .row:first-of-type { border-top: 0; padding-top: 6px; }
 .settings-preview .row > .muted:first-child { width: 110px; }
 .settings footer .meta { color: var(--muted); }
+.confirm { width: min(420px, 92vw); }
+.confirm form { margin: 0; }
+.confirm p { margin: 12px 14px; font-size: 13px; }
+/* The desktop app's Settings window: the same form, filling the page instead of a dialog. */
+body.settings-page { margin: 0; min-height: 100vh; background: var(--panel); }
+body.settings-page .settings { width: auto; min-width: 0; max-width: none; border: 0; border-radius: 0; box-shadow: none; }
+body.settings-page .settings header .close { display: none; }
+body.settings-page .settings header { justify-content: flex-start; gap: 10px; }
+body.settings-page .settings header .meta { margin-left: auto; }

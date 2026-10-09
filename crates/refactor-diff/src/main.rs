@@ -73,6 +73,14 @@ struct Cli {
     /// shut down when stdin closes (for a parent that pipes it, e.g. the desktop app)
     #[arg(long)]
     exit_with_parent: bool,
+
+    /// serve only the settings page (/settings), with no repository
+    #[arg(long)]
+    settings_only: bool,
+
+    /// the UI runs inside the desktop app
+    #[arg(long, hide = true)]
+    desktop: bool,
 }
 
 #[derive(Debug)]
@@ -130,9 +138,16 @@ async fn run(cli: Cli) -> Result<(), Failure> {
         defaults,
         python: cli.python,
         tsserver: cli.tsserver,
+        desktop: cli.desktop,
+        settings_only: cli.settings_only,
         ..Default::default()
     };
     let app = App::build(config).map_err(Failure::Build)?;
+    let what = if cli.settings_only {
+        "settings".to_string()
+    } else {
+        app.repo().display().to_string()
+    };
 
     let listener = bind_local(cli.port).map_err(|e| Failure::Bind(cli.port, e))?;
     let port = listener
@@ -145,8 +160,7 @@ async fn run(cli: Cli) -> Result<(), Failure> {
         let mut stdout = std::io::stdout().lock();
         let _ = writeln!(
             stdout,
-            "refactor-diff: serving {} at {url} (Ctrl+C to stop)",
-            app.repo().display()
+            "refactor-diff: serving {what} at {url} (Ctrl+C to stop)"
         );
         let _ = stdout.flush();
     }

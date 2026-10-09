@@ -21,6 +21,11 @@ pub async fn static_file(Path(path): Path<String>) -> Response {
     serve(&path)
 }
 
+/// One embedded file by name, for routes that serve a page at another path.
+pub fn serve_asset(path: &str) -> Response {
+    serve(path)
+}
+
 fn serve(path: &str) -> Response {
     match Assets::get(path) {
         Some(file) => (
@@ -70,7 +75,14 @@ mod tests {
 
     #[test]
     fn the_spa_is_embedded() {
-        for name in ["index.html", "app.js", "app.css", "syntax.js"] {
+        for name in [
+            "index.html",
+            "app.js",
+            "app.css",
+            "syntax.js",
+            "settings.html",
+            "settings.js",
+        ] {
             assert!(Assets::get(name).is_some(), "{name} missing from assets/");
         }
     }

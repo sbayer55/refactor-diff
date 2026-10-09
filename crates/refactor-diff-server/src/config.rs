@@ -33,6 +33,12 @@ pub struct ServerConfig {
     /// The AI providers behind the Ask menu; the real ones (Claude, Ollama, OpenAI-compatible)
     /// when `None`.
     pub providers: Option<Arc<dyn ProviderFactory>>,
+    /// Served as `/api/config`'s `desktop`: the UI is inside the desktop app (whose shell
+    /// handles things like the Settings window).
+    pub desktop: bool,
+    /// Serve only the settings page and its API, with no repository: what the desktop app's
+    /// Settings window talks to (`refactor-diff --settings-only`). `repo` is ignored.
+    pub settings_only: bool,
 }
 
 impl std::fmt::Debug for ServerConfig {
@@ -47,6 +53,8 @@ impl std::fmt::Debug for ServerConfig {
             .field("path", &self.path)
             .field("github", &self.github.as_ref().map(|_| "<custom>"))
             .field("providers", &self.providers.as_ref().map(|_| "<custom>"))
+            .field("desktop", &self.desktop)
+            .field("settings_only", &self.settings_only)
             .finish()
     }
 }
