@@ -62,6 +62,14 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/api/report/{report_id}/source",
             get(routes::files::get_source),
         )
+        .route(
+            "/api/report/{report_id}/issues",
+            get(routes::files::get_issues),
+        )
+        .route(
+            "/api/report/{report_id}/folds",
+            get(routes::files::get_folds),
+        )
         .route("/api/library", get(routes::navigate::get_library))
         .route("/api/report/{report_id}/ai/menu", post(routes::ai::ai_menu))
         .route(
