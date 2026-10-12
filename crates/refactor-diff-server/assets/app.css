@@ -425,6 +425,16 @@ button.link:hover { color: var(--accent); }
   padding: 0 6px; margin: 0 4px 2px 0; border-radius: 3px; background: var(--panel-3); color: var(--muted);
 }
 a.tag:hover { color: var(--text); }
+/* A pattern's tag: [☐ checkbox | link]. The box marks every match of the pattern reviewed. */
+.tag.pattern { display: inline-flex; align-items: baseline; gap: 4px; padding-left: 2px; }
+.tag.pattern a { color: inherit; }
+.tag.pattern a:hover { color: var(--text); }
+.tag-review {
+  border: 0; background: none; padding: 0 2px; margin: 0; font: 12px/1 var(--sans); color: var(--faint); cursor: pointer;
+}
+.tag-review:hover, .tag-review:focus-visible { color: var(--accent); }
+.tag.pattern.reviewed { background: var(--ok-bg); color: var(--ok-fg); }
+.tag.pattern.reviewed .tag-review { color: var(--ok-fg); }
 .tag.unique { background: var(--warn-bg); color: var(--warn-fg); }
 .tag.verified { background: var(--ok-bg); color: var(--ok-fg); }
 .tag.near { background: var(--warn-bg); color: var(--warn-fg); border: 1px dashed var(--warn-fg); }
