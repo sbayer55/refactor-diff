@@ -41,6 +41,8 @@ which.workspace = true
 flate2.workspace = true
 sha2.workspace = true
 tar.workspace = true
+ureq.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true
