@@ -203,6 +203,12 @@ occurrences shows **+N** in the explorer's Patterns tab.
   whole-file viewer at that line. Switch between the base version, the head version and the
   complete diff of the file; the line stays in view. Use **↑ Prev change / ↓ Next change** or
   the `p` / `n` keys to move between changes.
+- **Code folding**: in the file viewer and in expanded context, the chevron next to a line
+  number folds that block (a function, class, body, multi-line literal, or a run of imports
+  or comments). A folded block says how many lines it hides and how many of them changed.
+  `z` folds every block without changes and pressing it again unfolds everything. **Fold all
+  blocks** is in the command palette. Python, TypeScript and JavaScript fold by syntax; other
+  files fold by indentation.
 - **Unified / Split**: switch every diff on the page (review hunks, pattern occurrences,
   context and the full-file diff) between unified and side-by-side layout. The toggle is in
   the toolbar above the diffs and in the file viewer. Your choice is remembered. Added and
@@ -260,7 +266,7 @@ occurrences on a pattern page), `l` / `h` to go to the next / previous file, `x`
 next unreviewed hunk), `e` to show its context and then reveal more, `o` to open it in your
 editor, `]` / `[` to step through the mechanical patterns, `g r` / `g w` / `g f` to jump to
 Needs review / Warnings / Files, and `/` to search. In the file viewer `n` / `p` move between
-changes.
+changes, and `z` folds the unchanged blocks (again to unfold).
 
 ![The command palette](docs/screenshots/command-palette.png)
 
@@ -408,7 +414,7 @@ Layout (a Cargo workspace):
 
 | Crate | Purpose |
 |---|---|
-| `crates/refactor-diff-core` | the analysis engine, pure and git-free: `model` (the report with stable ids), `seqmatch` (CPython's `SequenceMatcher`, which every id and grouping depends on), `hunks`, `lang/` (the tree-sitter analyzers for Python, TypeScript and JavaScript), `classify/` (token alignment, signatures), `grouping`, `warnings`, `moves`, `verify`, `categories`, `engine`, `export`, `fileview` |
+| `crates/refactor-diff-core` | the analysis engine, pure and git-free: `model` (the report with stable ids), `seqmatch` (CPython's `SequenceMatcher`, which every id and grouping depends on), `hunks`, `lang/` (the tree-sitter analyzers for Python, TypeScript and JavaScript), `classify/` (token alignment, signatures), `grouping`, `warnings`, `moves`, `verify`, `categories`, `engine`, `export`, `fileview`, `issues` and `folds` (per-file code issues and fold ranges for the viewer) |
 | `crates/refactor-diff-server` | the HTTP API (axum) with the embedded web UI (`assets/`), `git/` (git, GitHub PRs via `gh`, the working tree, commit lists), `snapshots`, `nav/` (go-to-definition / find-references: `tsserver` and the bundled Jedi helper under `python/`), `ai/` (the Ask menu: prompt context, tasks, the Claude / OpenAI-compatible / Ollama providers), `settings`, `review` (reviewed marks in `~/.config/refactor-diff`) |
 | `crates/refactor-diff` | the command line |
 | `desktop/` | the macOS app: a [Tauri](https://tauri.app) shell (`src-tauri/`) that runs the server in-process and shows its UI in a webview; `ui/index.html` is the landing page with the repository picker |
