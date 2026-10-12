@@ -385,17 +385,25 @@ function renderFilters() {
   bar.innerHTML = `
     <h1 id="view-title"></h1>
     <span class="spacer"></span>
-    <div class="search" title="Narrow everything to changes whose lines, path or pattern match">
+    <div class="search tb-item" title="Narrow everything to changes whose lines, path or pattern match">
       <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="7" cy="7" r="5"/><path d="M11 11l4 4"/></svg>
       <input id="search-input" type="text" spellcheck="false" value="${esc(f.search)}" class="${searchRegex() === false ? "invalid" : ""}"
         placeholder="search changed lines, paths, patterns" aria-label="Search">
       <button type="button" class="filter-chip mode regex" id="regex-toggle" aria-pressed="${f.regex}" title="Regular expression">.*</button>
       <kbd>/</kbd>
     </div>
-    ${highlightToggle()}
-    ${layoutToggle()}
-    ${filtersActive() ? `<span class="hidden-note">${plural(v.hiddenUnits, "change")} hidden</span>
-      <button type="button" class="link" id="reset-filters">Reset</button>` : ""}`;
+    <span class="tb-item">${highlightToggle()}</span>
+    <span class="tb-item">${layoutToggle()}</span>
+    ${filtersActive() ? `<span class="tb-item"><span class="hidden-note">${plural(v.hiddenUnits, "change")} hidden</span>
+      <button type="button" class="link" id="reset-filters">Reset</button></span>` : ""}
+    <div class="tb-more" hidden>
+      <button type="button" class="tb-more-btn" aria-haspopup="true" aria-expanded="false" title="More" aria-label="More toolbar options">
+        <svg width="4" height="14" viewBox="0 0 4 14" fill="currentColor" aria-hidden="true"><circle cx="2" cy="2" r="1.5"/><circle cx="2" cy="7" r="1.5"/><circle cx="2" cy="12" r="1.5"/></svg>
+      </button>
+      <div class="tb-menu" role="menu" hidden></div>
+    </div>`;
+  [...bar.querySelectorAll(".tb-item")].forEach((it, i) => { it.dataset.order = i; });
+  bar.querySelector(".tb-more-btn").addEventListener("click", () => setToolbarMenu(bar.querySelector(".tb-menu").hidden));
 
   for (const b of foot.querySelectorAll("[data-cat]")) {
     b.addEventListener("click", () => toggleCategory(b.dataset.cat));
@@ -426,6 +434,47 @@ function renderFilters() {
   });
   $("#regex-toggle").addEventListener("click", () => toggleFilter("regex"));
   $("#reset-filters")?.addEventListener("click", resetFilters);
+  fitToolbar();
+}
+
+// The toolbar is one line at a fixed height. Items that don't fit move, rightmost first, into
+// the ⋮ menu at its end; the view title gets up to 45% of the bar before they do.
+function fitToolbar() {
+  const bar = $("#toolbar");
+  const more = bar.querySelector(".tb-more");
+  if (bar.hidden || !more) return;
+  const menu = more.querySelector(".tb-menu");
+  const items = [...bar.querySelectorAll(".tb-item")].sort((a, b) => a.dataset.order - b.dataset.order);
+  const focused = document.activeElement;
+  for (const it of items) bar.insertBefore(it, more);
+  more.hidden = true;
+  bar.classList.add("fitting");
+  const limit = bar.getBoundingClientRect().right - parseFloat(getComputedStyle(bar).paddingRight);
+  const overflows = () => [...bar.children].some((c) => !c.hidden && c.getBoundingClientRect().right > limit + 0.5);
+  if (overflows()) {
+    more.hidden = false;
+    for (let i = items.length - 1; i >= 0 && overflows(); i--) menu.prepend(items[i]);
+  }
+  bar.classList.remove("fitting");
+  if (more.hidden) setToolbarMenu(false);
+  if (focused && focused !== document.activeElement && bar.contains(focused)) {
+    if (focused.closest(".tb-menu")) setToolbarMenu(true);
+    focused.focus();
+  }
+}
+
+function setToolbarMenu(open) {
+  const more = $("#toolbar .tb-more");
+  if (!more) return;
+  more.querySelector(".tb-menu").hidden = !open;
+  more.querySelector(".tb-more-btn").setAttribute("aria-expanded", String(open));
+}
+
+function focusSearch() {
+  const input = $("#search-input");
+  if (!input) return;
+  if (input.closest(".tb-menu")) setToolbarMenu(true);
+  input.focus();
 }
 
 // ---------- source form ----------
@@ -906,11 +955,36 @@ function goTo(hash, selector) {
   location.hash = hash;
 }
 
+// What scrolls the diff: #content (below the toolbar) in the three-pane layout, the page when
+// the panes stack in narrow windows.
+function mainScroller() {
+  const content = $("#content");
+  return getComputedStyle(content).overflowY === "visible" ? null : content;
+}
+
+// The part of the viewport where the diff shows, below the toolbar.
+function mainView() {
+  const s = mainScroller();
+  if (s) {
+    const r = s.getBoundingClientRect();
+    return { top: r.top, bottom: r.bottom };
+  }
+  const tool = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--toolbar-h")) || 0;
+  return { top: tool, bottom: window.innerHeight - ($("#status").offsetHeight || 0) };
+}
+
+function scrollMainTo(top) {
+  (mainScroller() || window).scrollTo({ top });
+}
+
+function scrollMainBy(top) {
+  (mainScroller() || window).scrollBy({ top });
+}
+
 function scrollToSelector(selector) {
   const el = $(`#content ${selector}`);
   if (!el) return;
-  const top = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--stick-h")) || 0;
-  window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - top - 8 });
+  scrollMainBy(el.getBoundingClientRect().top - mainView().top - 8);
   const hunk = el.classList.contains("hunk") ? el : el.querySelector(".hunk");
   const i = hunk ? focusables().indexOf(hunk) : -1;
   if (i >= 0) { state.focus = i; applyFocus(false); }
@@ -1165,7 +1239,7 @@ function route(opts) {
     state.pendingScroll = null;
     scrollToSelector(selector);
   } else if (!opts?.keepScroll) {
-    window.scrollTo({ top: 0 });
+    scrollMainTo(0);
   }
 }
 
@@ -1195,6 +1269,7 @@ function setViewTitle(view, id, rest) {
     html = `Needs review ${meta(`${plural(s.hunks, "hunk")} · ${plural(s.residual_units, "change")} · ${s.hunks_done} reviewed`)}`;
   }
   el.innerHTML = html;
+  fitToolbar();
 }
 
 function groupTransform(g) {
@@ -2091,7 +2166,7 @@ async function renderFileView(path, mode, line) {
     target.classList.add("target");
     target.scrollIntoView({ block: "center" });
   } else {
-    window.scrollTo({ top: 0 });
+    scrollMainTo(0);
   }
 }
 
@@ -2121,7 +2196,7 @@ function jumpChange(dir) {
     : tops.findLastIndex((t) => t < mid - 2);
   const el = starts[i === -1 ? (dir > 0 ? starts.length - 1 : 0) : i];
   el.scrollIntoView({ block: "start" });
-  window.scrollBy({ top: -mid });
+  scrollMainBy(-mid);
 }
 
 // ---------- keyboard ----------
@@ -2172,11 +2247,8 @@ function applyFocus(scroll = true) {
   el.classList.add("kbd-focus");
   if (scroll) {
     const r = el.getBoundingClientRect();
-    const top = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--stick-h")) || 0;
-    const bottom = window.innerHeight - ($("#status").offsetHeight || 0);
-    if (r.top < top + 8 || r.bottom > bottom - 8) {
-      window.scrollBy({ top: r.top - top - 60 });
-    }
+    const { top, bottom } = mainView();
+    if (r.top < top + 8 || r.bottom > bottom - 8) scrollMainBy(r.top - top - 60);
   }
   renderInspector();
   markExplorerFile();
@@ -2321,7 +2393,7 @@ function paletteCommands() {
     { id: "filter.regex", group: "Filter", title: `Search as ${f.regex ? "plain text" : "regular expression"}`,
       when: hasReport, run: () => toggleFilter("regex") },
     { id: "filter.reset", group: "Filter", title: "Reset filters", when: () => hasReport() && filtersActive(), run: resetFilters },
-    { id: "filter.search", group: "Filter", title: "Focus search", keys: "/", when: hasReport, run: () => $("#search-input")?.focus() },
+    { id: "filter.search", group: "Filter", title: "Focus search", keys: "/", when: hasReport, run: focusSearch },
 
     { id: "review.next", group: "Review", title: "Next hunk", keys: "j", when: reviewing, run: () => moveFocus(1) },
     { id: "review.prev", group: "Review", title: "Previous hunk", keys: "k", when: reviewing, run: () => moveFocus(-1) },
@@ -2512,7 +2584,7 @@ function onKey(e) {
     case "?": showHelp(); break;
     case "\\": setPane("explorer", !state.panes.explorer); break;
     case "|": setPane("inspector", !state.panes.inspector); break;
-    case "/": $("#search-input")?.focus(); e.preventDefault(); break;
+    case "/": focusSearch(); e.preventDefault(); break;
     case "g": pendingG = setTimeout(() => { pendingG = 0; }, 900); break;
     case "]": patternStep(1); break;
     case "[": patternStep(-1); break;
@@ -2782,7 +2854,7 @@ function showTarget(content, side, line) {
     target.classList.add("target");
     target.scrollIntoView({ block: "center" });
   } else {
-    window.scrollTo({ top: 0 });
+    scrollMainTo(0);
   }
 }
 
@@ -2839,19 +2911,33 @@ async function renderLibraryView(path, line) {
 // sticky panes below them need their actual heights rather than a fixed guess.
 function trackTopbarHeight() {
   const bar = $("#topbar"), toolbar = $("#toolbar"), status = $("#status");
+  // Exact (fractional) heights: rounded ones leave the page a fraction of a pixel taller than
+  // the window, and scrollIntoView then scrolls the page as well as the stream.
+  const height = (el) => (el.hidden ? 0 : el.getBoundingClientRect().height);
   const update = () => {
     const sticky = getComputedStyle(bar).position === "sticky";
-    const top = sticky ? bar.offsetHeight : 0;
-    const tool = toolbar.hidden ? 0 : toolbar.offsetHeight;
     const root = document.documentElement.style;
-    root.setProperty("--topbar-h", `${top}px`);
-    root.setProperty("--toolbar-h", `${tool}px`);
-    root.setProperty("--stick-h", `${top + tool}px`);
-    root.setProperty("--status-h", `${status.hidden ? 0 : status.offsetHeight}px`);
+    root.setProperty("--topbar-h", `${sticky ? height(bar) : 0}px`);
+    root.setProperty("--toolbar-h", `${height(toolbar)}px`);
+    root.setProperty("--status-h", `${height(status)}px`);
   };
   const ro = new ResizeObserver(update);
   ro.observe(bar);
   ro.observe(toolbar);
+  let fitWidth = 0;
+  new ResizeObserver(() => {
+    if (toolbar.clientWidth !== fitWidth) { fitWidth = toolbar.clientWidth; fitToolbar(); }
+  }).observe(toolbar);
+  document.addEventListener("mousedown", (e) => {
+    if (!e.target.closest("#toolbar .tb-more")) setToolbarMenu(false);
+  });
+  document.addEventListener("keydown", (e) => {
+    const more = $("#toolbar .tb-more");
+    if (e.key === "Escape" && more && !more.querySelector(".tb-menu").hidden) {
+      setToolbarMenu(false);
+      more.querySelector(".tb-more-btn").focus();
+    }
+  }, true);
   ro.observe(status);
   window.addEventListener("resize", update);
   update();
