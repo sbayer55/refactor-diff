@@ -155,6 +155,7 @@ async function postReview(changes) {
 
 function toggleReviewed(id, on) {
   if (on) state.reviewed.add(id); else state.reviewed.delete(id);
+  refreshPatternTags(id);
   renderExplorer();
   renderInspector();
   postReview({ groups: { [on ? "add" : "remove"]: [id] } });
@@ -1332,9 +1333,7 @@ function unitTags(unit) {
   const tags = unit.signatures.map((key) => {
     const g = state.groupsByKey.get(key);
     if (!g || !state.view.groupsById.has(g.id)) return "";
-    if (g.mechanical) {
-      return `<a class="tag" href="#group/${g.id}">${esc(g.kind)}: <span class="code">${esc(shortLabel(g.label))}</span></a>`;
-    }
+    if (g.mechanical) return patternTag(g);
     return `<span class="tag unique">unique ${esc(g.kind)}: <span class="code">${esc(shortLabel(g.label))}</span></span>`;
   });
   for (const n of unit.near || []) {
@@ -1343,6 +1342,25 @@ function unitTags(unit) {
   }
   if (unit.verified) tags.push(`<span class="tag verified" title="${esc(VERIFIED_TITLE)}">✓ verified</span>`);
   return tags.join("");
+}
+
+// A mechanical pattern's tag: a checkbox that marks every match of the pattern reviewed, and
+// a link to the pattern's page.
+function patternTag(g) {
+  const done = state.reviewed.has(g.id);
+  return `<span class="tag pattern${done ? " reviewed" : ""}" data-group-tag="${g.id}"><button type="button"
+    class="tag-review" data-review-group="${g.id}" aria-pressed="${done}"
+    title="${done ? "Unmark" : "Mark"} every match of this pattern reviewed" aria-label="${done ? "Unmark" : "Mark"} pattern reviewed">${
+    done ? "☑" : "☐"}</button><a href="#group/${g.id}">${esc(g.kind)}: <span class="code">${esc(shortLabel(g.label))}</span></a></span>`;
+}
+
+// Re-draw the tags of pattern `id` on the page after its reviewed mark changed.
+function refreshPatternTags(id) {
+  const g = state.view.groupsById.get(id);
+  if (!g) return;
+  for (const el of document.querySelectorAll(`#content [data-group-tag="${CSS.escape(id)}"]`)) {
+    el.outerHTML = patternTag(g);
+  }
 }
 
 // The other half of a move, for showing a moved block as a diff against where it came from.
@@ -1994,7 +2012,16 @@ async function onContentClick(e) {
   const btn = e.target.closest("button");
   if (!btn) return;
   try {
-    if (btn.dataset.expand) {
+    if (btn.dataset.reviewGroup) {
+      const id = btn.dataset.reviewGroup;
+      const on = !state.reviewed.has(id);
+      toggleReviewed(id, on);
+      const g = state.view.groupsById.get(id);
+      if (g) toast(`${on ? "Marked" : "Unmarked"} ${g.kind} ${shortLabel(g.label)} reviewed (${plural(g.unit_ids.length, "match", "matches")}).`);
+      // The pattern page's own checkbox follows.
+      const box = $("#group-reviewed");
+      if (box && location.hash === `#group/${id}`) box.checked = on;
+    } else if (btn.dataset.expand) {
       const box = btn.closest(".ctx");
       const fd = await loadFileDiff(box.dataset.path);
       const lo = Number(box.dataset.lo), hi = Number(box.dataset.hi);
