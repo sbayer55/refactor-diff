@@ -13,9 +13,9 @@
 use std::collections::HashSet;
 
 use serde::Serialize;
-use tree_sitter::{Language, Node};
+use tree_sitter::Node;
 
-use crate::lang::{analyzer_for, parse, pos_of};
+use crate::lang::{Lang, parse, pos_of};
 use crate::text::{Pos, split_lines};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -85,38 +85,7 @@ pub fn find_issues(path: &str, text: &str) -> Vec<CodeIssue> {
     out
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Lang {
-    Python,
-    TypeScript,
-    Tsx,
-    JavaScript,
-}
-
 impl Lang {
-    fn for_path(path: &str) -> Option<Self> {
-        Some(match analyzer_for(path)?.name() {
-            "python" => Lang::Python,
-            "typescript" => Lang::TypeScript,
-            "tsx" => Lang::Tsx,
-            "javascript" => Lang::JavaScript,
-            _ => return None,
-        })
-    }
-
-    fn grammar(self) -> Language {
-        match self {
-            Lang::Python => tree_sitter_python::LANGUAGE.into(),
-            Lang::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-            Lang::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
-            Lang::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
-        }
-    }
-
-    fn is_python(self) -> bool {
-        self == Lang::Python
-    }
-
     /// Nodes that hold a sequence of statements.
     fn statement_lists(self) -> &'static [&'static str] {
         if self.is_python() {
