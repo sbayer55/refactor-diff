@@ -49,8 +49,9 @@
   --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --topbar-h: 38px;
-  --toolbar-h: 36px;
-  --stick-h: 74px;
+  --toolbar-h: 40px;
+  /* The explorer's tab row and the stream toolbar share this height so they line up. */
+  --pane-head-h: 40px;
   --status-h: 24px;
   color-scheme: dark;
 }
@@ -171,7 +172,8 @@ button.primary:disabled { opacity: 0.6; cursor: progress; }
 }
 .pane-toggle:hover { color: var(--text); border-color: var(--border); }
 .pane-toggle[aria-pressed="true"] { color: var(--text); background: var(--panel-2); border-color: var(--border); }
-body.hide-explorer .explorer, body.hide-inspector .inspector { display: none; }
+body.hide-explorer .explorer, body.hide-inspector .inspector,
+body.hide-explorer [data-resize="explorer"], body.hide-inspector [data-resize="inspector"] { display: none; }
 
 /* ---- three panes ---- */
 .body { display: flex; align-items: flex-start; min-height: calc(100vh - var(--topbar-h) - var(--status-h)); }
@@ -180,16 +182,40 @@ body.hide-explorer .explorer, body.hide-inspector .inspector { display: none; }
   height: calc(100vh - var(--topbar-h) - var(--status-h)); overflow: hidden;
   background: var(--panel);
 }
-.explorer { width: 272px; border-right: 1px solid var(--border); }
-.inspector { width: 316px; border-left: 1px solid var(--border); overflow-y: auto; }
-.stream { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.content { padding: 12px 14px 60px; min-width: 0; }
+.explorer { width: var(--explorer-w, 272px); border-right: 1px solid var(--border); }
+.inspector { width: var(--inspector-w, 316px); border-left: 1px solid var(--border); overflow-y: auto; }
+/* A zero-width strip on the pane's border; its ::before is the 7px grab area. */
+.pane-resizer {
+  position: sticky; top: var(--topbar-h); z-index: 5; flex: none; width: 0;
+  height: calc(100vh - var(--topbar-h) - var(--status-h)); outline: none;
+}
+.pane-resizer::before { content: ""; position: absolute; inset: 0 -3px; cursor: col-resize; }
+.pane-resizer[data-resize="explorer"] { margin-left: -1px; }
+/* Keep clear of the stream's scrollbar, which sits just left of this edge. */
+.pane-resizer[data-resize="inspector"]::before { inset: 0 -6px 0 0; }
+.pane-resizer::after {
+  content: ""; position: absolute; inset: 0 -1px; background: var(--accent); opacity: 0; transition: opacity 0.12s;
+}
+.pane-resizer:hover::after, .pane-resizer:focus-visible::after, .pane-resizer.dragging::after { opacity: 1; transition-delay: 0.1s; }
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing * { cursor: col-resize !important; }
+/* The toolbar stays put and only #content scrolls, so the diff's scrollbar starts below the
+   toolbar and sits between the diff and the inspector. */
+.stream {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  height: calc(100vh - var(--topbar-h) - var(--status-h)); overflow: hidden;
+}
+.content { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 14px 60px; min-width: 0; }
 
 @media (max-width: 1000px) {
-  .inspector { display: none; }
+  .inspector, [data-resize="inspector"] { display: none; }
 }
 @media (max-width: 860px) {
   .body { display: block; }
+  .stream { height: auto; overflow: visible; }
+  .content { overflow: visible; }
+  :root { --viewer-stick: var(--toolbar-h); }
+  .pane-resizer { display: none; }
   .explorer { position: static; width: auto; height: auto; max-height: 50vh; border-right: 0; border-bottom: 1px solid var(--border); }
   .cmd { position: static; }
   .source-form { margin-left: 0; }
@@ -197,13 +223,14 @@ body.hide-explorer .explorer, body.hide-inspector .inspector { display: none; }
 }
 
 /* ---- explorer ---- */
-.tabs { display: flex; border-bottom: 1px solid var(--border); flex: none; }
+.tabs { display: flex; height: var(--pane-head-h); border-bottom: 1px solid var(--border); flex: none; }
 .tabs button, .tabs .tab {
-  font: 500 11px var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
-  background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 12px 6px; cursor: pointer; text-decoration: none;
+  display: flex; flex-wrap: wrap; align-items: center; align-content: center; justify-content: center; column-gap: 4px;
+  font: 500 11px/13px var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+  background: none; border: 0; border-bottom: 2px solid transparent; padding: 2px 12px 0; cursor: pointer; text-decoration: none;
 }
 .tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
-.tabs .n { color: var(--faint); margin-left: 4px; }
+.tabs .n { color: var(--faint); }
 .tree { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 0; font-family: var(--mono); font-size: 12px; }
 .tree .dir { color: var(--muted); padding: 6px 10px 2px; font-size: 11px; overflow-wrap: anywhere; }
 .tree .hd { display: flex; justify-content: space-between; color: var(--muted); padding: 6px 10px 3px; font-size: 11px; }
@@ -275,13 +302,36 @@ body.hide-explorer .explorer, body.hide-inspector .inspector { display: none; }
 .exclude input.invalid { border-color: var(--del-fg); }
 
 /* ---- stream toolbar ---- */
+/* One line at a fixed height; what doesn't fit moves into the ⋮ menu (fitToolbar). */
 .toolbar {
-  position: sticky; top: var(--topbar-h); z-index: 5;
-  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-height: 36px; padding: 4px 14px;
+  position: sticky; top: 0; z-index: 5; flex: none;
+  display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; height: var(--pane-head-h); padding: 0 8px 0 14px;
   background: var(--panel); border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 12px;
 }
 .toolbar[hidden] { display: none; }
-.toolbar h1 { margin: 0; font: 600 12.5px var(--sans); display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.toolbar > * { flex-shrink: 0; }
+.toolbar h1 {
+  margin: 0; font: 600 12.5px var(--sans); display: flex; align-items: center; gap: 8px;
+  flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap;
+}
+.toolbar h1 > * { flex-shrink: 0; }
+.toolbar h1 .transform, .toolbar h1 .meta { min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; }
+.toolbar.fitting h1 { flex-shrink: 0; max-width: 45%; }
+.tb-item { display: inline-flex; align-items: center; gap: 8px; }
+.tb-more { position: relative; }
+.tb-more[hidden] { display: none; }
+.tb-more-btn {
+  display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 26px; padding: 0;
+  border: 1px solid transparent; border-radius: var(--radius); background: none; color: var(--muted); cursor: pointer;
+}
+.tb-more-btn:hover, .tb-more-btn[aria-expanded="true"] { color: var(--text); border-color: var(--border); background: var(--panel-2); }
+.tb-menu {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 20; display: flex; flex-direction: column; align-items: flex-start;
+  gap: 10px; min-width: 280px; padding: 10px; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 6px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.tb-menu[hidden] { display: none; }
+.tb-menu .search { width: 100%; }
 .toolbar h1 .transform { font-size: 13px; }
 .toolbar h1 .meta, .page-head .meta { color: var(--muted); font: 11.5px var(--mono); }
 .toolbar .sep { width: 1px; height: 16px; background: var(--border); }
@@ -421,7 +471,8 @@ body.syntax-mode .diff td.side.del, body.syntax-mode .diff td.side.add { backgro
 /* file viewer */
 .viewer-head h2 { font-size: 13px; overflow-wrap: anywhere; }
 .viewer-bar {
-  position: sticky; top: var(--stick-h); z-index: 4; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  /* Sticky offsets count from inside #content's 12px top padding; -12px pins it to the edge. */
+  position: sticky; top: var(--viewer-stick, -12px); z-index: 4; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
   padding: 6px 0; margin-bottom: 8px; background: var(--bg);
 }
 .viewer-bar .spacer { flex: 1; }
@@ -684,8 +735,13 @@ button.pill.ai-provider.unset { background: var(--warn-bg); color: var(--warn-fg
 .ask-ctx .primary { padding: 4px 12px; font-size: 12px; }
 .ask-custom p.muted { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
 
-/* Answer bands under a hunk, in the comment-box style. */
-.ai-band { padding: 8px 12px 10px; background: var(--panel-2); border-top: 1px solid var(--border); }
+/* Answer bands, in the comment-box style: under the hunk bar, or in a row below the asked-about line. */
+.ai-band { padding: 8px 12px 10px; background: var(--panel-2); border-bottom: 1px solid var(--border); }
+.diff tr.ai-row > td {
+  padding: 0; font-family: var(--sans); line-height: normal; white-space: normal; word-break: normal;
+}
+/* width: 0 + min-width: 100% fills the row without letting long answer lines widen the table. */
+.diff tr.ai-row .ai-band { width: 0; min-width: 100%; box-sizing: border-box; border-top: 1px solid var(--border); }
 .ai-answer + .ai-answer { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
 .ai-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
 .ai-head .ai-title { color: var(--text); font-weight: 600; }

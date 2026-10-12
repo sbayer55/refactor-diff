@@ -385,17 +385,25 @@ function renderFilters() {
   bar.innerHTML = `
     <h1 id="view-title"></h1>
     <span class="spacer"></span>
-    <div class="search" title="Narrow everything to changes whose lines, path or pattern match">
+    <div class="search tb-item" title="Narrow everything to changes whose lines, path or pattern match">
       <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="7" cy="7" r="5"/><path d="M11 11l4 4"/></svg>
       <input id="search-input" type="text" spellcheck="false" value="${esc(f.search)}" class="${searchRegex() === false ? "invalid" : ""}"
         placeholder="search changed lines, paths, patterns" aria-label="Search">
       <button type="button" class="filter-chip mode regex" id="regex-toggle" aria-pressed="${f.regex}" title="Regular expression">.*</button>
       <kbd>/</kbd>
     </div>
-    ${highlightToggle()}
-    ${layoutToggle()}
-    ${filtersActive() ? `<span class="hidden-note">${plural(v.hiddenUnits, "change")} hidden</span>
-      <button type="button" class="link" id="reset-filters">Reset</button>` : ""}`;
+    <span class="tb-item">${highlightToggle()}</span>
+    <span class="tb-item">${layoutToggle()}</span>
+    ${filtersActive() ? `<span class="tb-item"><span class="hidden-note">${plural(v.hiddenUnits, "change")} hidden</span>
+      <button type="button" class="link" id="reset-filters">Reset</button></span>` : ""}
+    <div class="tb-more" hidden>
+      <button type="button" class="tb-more-btn" aria-haspopup="true" aria-expanded="false" title="More" aria-label="More toolbar options">
+        <svg width="4" height="14" viewBox="0 0 4 14" fill="currentColor" aria-hidden="true"><circle cx="2" cy="2" r="1.5"/><circle cx="2" cy="7" r="1.5"/><circle cx="2" cy="12" r="1.5"/></svg>
+      </button>
+      <div class="tb-menu" role="menu" hidden></div>
+    </div>`;
+  [...bar.querySelectorAll(".tb-item")].forEach((it, i) => { it.dataset.order = i; });
+  bar.querySelector(".tb-more-btn").addEventListener("click", () => setToolbarMenu(bar.querySelector(".tb-menu").hidden));
 
   for (const b of foot.querySelectorAll("[data-cat]")) {
     b.addEventListener("click", () => toggleCategory(b.dataset.cat));
@@ -426,6 +434,47 @@ function renderFilters() {
   });
   $("#regex-toggle").addEventListener("click", () => toggleFilter("regex"));
   $("#reset-filters")?.addEventListener("click", resetFilters);
+  fitToolbar();
+}
+
+// The toolbar is one line at a fixed height. Items that don't fit move, rightmost first, into
+// the ⋮ menu at its end; the view title gets up to 45% of the bar before they do.
+function fitToolbar() {
+  const bar = $("#toolbar");
+  const more = bar.querySelector(".tb-more");
+  if (bar.hidden || !more) return;
+  const menu = more.querySelector(".tb-menu");
+  const items = [...bar.querySelectorAll(".tb-item")].sort((a, b) => a.dataset.order - b.dataset.order);
+  const focused = document.activeElement;
+  for (const it of items) bar.insertBefore(it, more);
+  more.hidden = true;
+  bar.classList.add("fitting");
+  const limit = bar.getBoundingClientRect().right - parseFloat(getComputedStyle(bar).paddingRight);
+  const overflows = () => [...bar.children].some((c) => !c.hidden && c.getBoundingClientRect().right > limit + 0.5);
+  if (overflows()) {
+    more.hidden = false;
+    for (let i = items.length - 1; i >= 0 && overflows(); i--) menu.prepend(items[i]);
+  }
+  bar.classList.remove("fitting");
+  if (more.hidden) setToolbarMenu(false);
+  if (focused && focused !== document.activeElement && bar.contains(focused)) {
+    if (focused.closest(".tb-menu")) setToolbarMenu(true);
+    focused.focus();
+  }
+}
+
+function setToolbarMenu(open) {
+  const more = $("#toolbar .tb-more");
+  if (!more) return;
+  more.querySelector(".tb-menu").hidden = !open;
+  more.querySelector(".tb-more-btn").setAttribute("aria-expanded", String(open));
+}
+
+function focusSearch() {
+  const input = $("#search-input");
+  if (!input) return;
+  if (input.closest(".tb-menu")) setToolbarMenu(true);
+  input.focus();
 }
 
 // ---------- source form ----------
@@ -906,11 +955,36 @@ function goTo(hash, selector) {
   location.hash = hash;
 }
 
+// What scrolls the diff: #content (below the toolbar) in the three-pane layout, the page when
+// the panes stack in narrow windows.
+function mainScroller() {
+  const content = $("#content");
+  return getComputedStyle(content).overflowY === "visible" ? null : content;
+}
+
+// The part of the viewport where the diff shows, below the toolbar.
+function mainView() {
+  const s = mainScroller();
+  if (s) {
+    const r = s.getBoundingClientRect();
+    return { top: r.top, bottom: r.bottom };
+  }
+  const tool = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--toolbar-h")) || 0;
+  return { top: tool, bottom: window.innerHeight - ($("#status").offsetHeight || 0) };
+}
+
+function scrollMainTo(top) {
+  (mainScroller() || window).scrollTo({ top });
+}
+
+function scrollMainBy(top) {
+  (mainScroller() || window).scrollBy({ top });
+}
+
 function scrollToSelector(selector) {
   const el = $(`#content ${selector}`);
   if (!el) return;
-  const top = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--stick-h")) || 0;
-  window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - top - 8 });
+  scrollMainBy(el.getBoundingClientRect().top - mainView().top - 8);
   const hunk = el.classList.contains("hunk") ? el : el.querySelector(".hunk");
   const i = hunk ? focusables().indexOf(hunk) : -1;
   if (i >= 0) { state.focus = i; applyFocus(false); }
@@ -1165,7 +1239,7 @@ function route(opts) {
     state.pendingScroll = null;
     scrollToSelector(selector);
   } else if (!opts?.keepScroll) {
-    window.scrollTo({ top: 0 });
+    scrollMainTo(0);
   }
 }
 
@@ -1195,6 +1269,7 @@ function setViewTitle(view, id, rest) {
     html = `Needs review ${meta(`${plural(s.hunks, "hunk")} · ${plural(s.residual_units, "change")} · ${s.hunks_done} reviewed`)}`;
   }
   el.innerHTML = html;
+  fitToolbar();
 }
 
 function groupTransform(g) {
@@ -1298,6 +1373,7 @@ function renderReview() {
     html += "</section>";
   }
   content.innerHTML = html;
+  for (const hunkId of state.answers.keys()) renderAnswers(hunkId);
 }
 
 function hunkHtml(h) {
@@ -1314,7 +1390,7 @@ function hunkHtml(h) {
       ${state.report.source.pr ? `<button type="button" class="link" data-hunk-comment title="Comment on this hunk in the PR (c)">Comment</button>` : ""}
       <button type="button" class="link" data-hunk-open>${done ? "Show" : "Hide"}</button>
       <button type="button" class="link" data-hunk-context>Show context</button></div>
-    <table class="diff">${hunkRows(h)}</table>${answersHtml(h.id)}</div>`;
+    <table class="diff">${hunkRows(h)}</table></div>`;
 }
 
 // What changed since the previous analysis of the same comparison (new commits pushed).
@@ -1548,6 +1624,98 @@ function setPane(name, on) {
   applyPanes();
 }
 
+// Pane widths, set by dragging the strip between a pane and the diff (or with the arrow keys
+// when it has focus); double-click resets. Kept as CSS variables on <body>.
+const PANE_WIDTH = {
+  explorer: { def: 272, min: 180, max: 560 },
+  inspector: { def: 316, min: 240, max: 640 },
+};
+const MIN_STREAM = 420;
+// The widths asked for; what's shown can be less when the window is too narrow for them.
+const paneWant = { explorer: PANE_WIDTH.explorer.def, inspector: PANE_WIDTH.inspector.def };
+
+function loadPaneWidths() {
+  let saved = {};
+  try { saved = JSON.parse(prefGet("refactor-diff:pane-widths") || "{}"); } catch {}
+  for (const name of Object.keys(PANE_WIDTH)) {
+    paneWant[name] = Number(saved[name]) || PANE_WIDTH[name].def;
+  }
+  applyPaneWidths();
+}
+
+function applyPaneWidths() {
+  for (const name of Object.keys(PANE_WIDTH)) applyPaneWidth(name, paneWant[name]);
+}
+
+function paneWidth(name) {
+  return parseFloat(document.body.style.getPropertyValue(`--${name}-w`)) || PANE_WIDTH[name].def;
+}
+
+// Clamp to the pane's limits and leave the diff at least MIN_STREAM pixels.
+function applyPaneWidth(name, px) {
+  const { min, max } = PANE_WIDTH[name];
+  const other = name === "explorer" ? "inspector" : "explorer";
+  const otherW = $(`#${other}`)?.offsetWidth || 0;
+  const room = window.innerWidth - otherW - MIN_STREAM;
+  const w = Math.round(Math.max(min, Math.min(max, room, px)));
+  document.body.style.setProperty(`--${name}-w`, `${w}px`);
+  const handle = document.querySelector(`[data-resize="${name}"]`);
+  if (handle) {
+    handle.setAttribute("aria-valuenow", String(w));
+    handle.setAttribute("aria-valuemin", String(min));
+    handle.setAttribute("aria-valuemax", String(max));
+  }
+  return w;
+}
+
+// Record what's shown for `name` as the width asked for, and save it.
+function savePaneWidth(name) {
+  paneWant[name] = paneWidth(name);
+  const widths = {};
+  for (const n of Object.keys(PANE_WIDTH)) if (paneWant[n] !== PANE_WIDTH[n].def) widths[n] = paneWant[n];
+  prefSet("refactor-diff:pane-widths", JSON.stringify(widths));
+}
+
+function initPaneResizers() {
+  for (const handle of document.querySelectorAll("[data-resize]")) {
+    const name = handle.dataset.resize;
+    handle.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      handle.setPointerCapture(e.pointerId);
+      const startX = e.clientX, startW = paneWidth(name);
+      // Dragging right widens the explorer and narrows the inspector.
+      const sign = name === "explorer" ? 1 : -1;
+      handle.classList.add("dragging");
+      document.body.classList.add("resizing");
+      const move = (ev) => applyPaneWidth(name, startW + sign * (ev.clientX - startX));
+      const up = () => {
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", up);
+        handle.removeEventListener("pointercancel", up);
+        handle.classList.remove("dragging");
+        document.body.classList.remove("resizing");
+        savePaneWidth(name);
+      };
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", up);
+      handle.addEventListener("pointercancel", up);
+    });
+    handle.addEventListener("dblclick", () => { applyPaneWidth(name, PANE_WIDTH[name].def); savePaneWidth(name); });
+    handle.addEventListener("keydown", (e) => {
+      const grow = name === "explorer" ? "ArrowRight" : "ArrowLeft";
+      const shrink = name === "explorer" ? "ArrowLeft" : "ArrowRight";
+      if (e.key !== grow && e.key !== shrink) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const step = e.shiftKey ? 64 : 16;
+      applyPaneWidth(name, paneWidth(name) + (e.key === grow ? step : -step));
+      savePaneWidth(name);
+    });
+  }
+  window.addEventListener("resize", applyPaneWidths);
+}
+
 function applyPanes() {
   for (const name of ["explorer", "inspector"]) {
     const on = state.panes[name];
@@ -1556,6 +1724,7 @@ function applyPanes() {
     btn.setAttribute("aria-pressed", String(on));
     btn.title = `${on ? "Hide" : "Show"} the ${name} (${name === "explorer" ? "\\" : "|"})`;
   }
+  applyPaneWidths();
 }
 
 function loadSyntax() {
@@ -1698,6 +1867,7 @@ function renderCtx(box, fd) {
   const rest = fd.lines.length - hi;
   if (rest > 0) rows += `<tr class="expand"><td colspan="4">${more("down", Math.min(CTX_STEP, rest))}${rest > CTX_STEP ? " · " + all("down", rest) : ""}</td></tr>`;
   box.querySelector("table").innerHTML = rows;
+  if (box.dataset.hunk) renderAnswers(box.dataset.hunk);
 }
 
 async function openCtx(box, path, lo, hi) {
@@ -1996,7 +2166,7 @@ async function renderFileView(path, mode, line) {
     target.classList.add("target");
     target.scrollIntoView({ block: "center" });
   } else {
-    window.scrollTo({ top: 0 });
+    scrollMainTo(0);
   }
 }
 
@@ -2026,7 +2196,7 @@ function jumpChange(dir) {
     : tops.findLastIndex((t) => t < mid - 2);
   const el = starts[i === -1 ? (dir > 0 ? starts.length - 1 : 0) : i];
   el.scrollIntoView({ block: "start" });
-  window.scrollBy({ top: -mid });
+  scrollMainBy(-mid);
 }
 
 // ---------- keyboard ----------
@@ -2077,11 +2247,8 @@ function applyFocus(scroll = true) {
   el.classList.add("kbd-focus");
   if (scroll) {
     const r = el.getBoundingClientRect();
-    const top = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--stick-h")) || 0;
-    const bottom = window.innerHeight - ($("#status").offsetHeight || 0);
-    if (r.top < top + 8 || r.bottom > bottom - 8) {
-      window.scrollBy({ top: r.top - top - 60 });
-    }
+    const { top, bottom } = mainView();
+    if (r.top < top + 8 || r.bottom > bottom - 8) scrollMainBy(r.top - top - 60);
   }
   renderInspector();
   markExplorerFile();
@@ -2226,7 +2393,7 @@ function paletteCommands() {
     { id: "filter.regex", group: "Filter", title: `Search as ${f.regex ? "plain text" : "regular expression"}`,
       when: hasReport, run: () => toggleFilter("regex") },
     { id: "filter.reset", group: "Filter", title: "Reset filters", when: () => hasReport() && filtersActive(), run: resetFilters },
-    { id: "filter.search", group: "Filter", title: "Focus search", keys: "/", when: hasReport, run: () => $("#search-input")?.focus() },
+    { id: "filter.search", group: "Filter", title: "Focus search", keys: "/", when: hasReport, run: focusSearch },
 
     { id: "review.next", group: "Review", title: "Next hunk", keys: "j", when: reviewing, run: () => moveFocus(1) },
     { id: "review.prev", group: "Review", title: "Previous hunk", keys: "k", when: reviewing, run: () => moveFocus(-1) },
@@ -2417,7 +2584,7 @@ function onKey(e) {
     case "?": showHelp(); break;
     case "\\": setPane("explorer", !state.panes.explorer); break;
     case "|": setPane("inspector", !state.panes.inspector); break;
-    case "/": $("#search-input")?.focus(); e.preventDefault(); break;
+    case "/": focusSearch(); e.preventDefault(); break;
     case "g": pendingG = setTimeout(() => { pendingG = 0; }, 900); break;
     case "]": patternStep(1); break;
     case "[": patternStep(-1); break;
@@ -2687,7 +2854,7 @@ function showTarget(content, side, line) {
     target.classList.add("target");
     target.scrollIntoView({ block: "center" });
   } else {
-    window.scrollTo({ top: 0 });
+    scrollMainTo(0);
   }
 }
 
@@ -2744,19 +2911,33 @@ async function renderLibraryView(path, line) {
 // sticky panes below them need their actual heights rather than a fixed guess.
 function trackTopbarHeight() {
   const bar = $("#topbar"), toolbar = $("#toolbar"), status = $("#status");
+  // Exact (fractional) heights: rounded ones leave the page a fraction of a pixel taller than
+  // the window, and scrollIntoView then scrolls the page as well as the stream.
+  const height = (el) => (el.hidden ? 0 : el.getBoundingClientRect().height);
   const update = () => {
     const sticky = getComputedStyle(bar).position === "sticky";
-    const top = sticky ? bar.offsetHeight : 0;
-    const tool = toolbar.hidden ? 0 : toolbar.offsetHeight;
     const root = document.documentElement.style;
-    root.setProperty("--topbar-h", `${top}px`);
-    root.setProperty("--toolbar-h", `${tool}px`);
-    root.setProperty("--stick-h", `${top + tool}px`);
-    root.setProperty("--status-h", `${status.hidden ? 0 : status.offsetHeight}px`);
+    root.setProperty("--topbar-h", `${sticky ? height(bar) : 0}px`);
+    root.setProperty("--toolbar-h", `${height(toolbar)}px`);
+    root.setProperty("--status-h", `${height(status)}px`);
   };
   const ro = new ResizeObserver(update);
   ro.observe(bar);
   ro.observe(toolbar);
+  let fitWidth = 0;
+  new ResizeObserver(() => {
+    if (toolbar.clientWidth !== fitWidth) { fitWidth = toolbar.clientWidth; fitToolbar(); }
+  }).observe(toolbar);
+  document.addEventListener("mousedown", (e) => {
+    if (!e.target.closest("#toolbar .tb-more")) setToolbarMenu(false);
+  });
+  document.addEventListener("keydown", (e) => {
+    const more = $("#toolbar .tb-more");
+    if (e.key === "Escape" && more && !more.querySelector(".tb-menu").hidden) {
+      setToolbarMenu(false);
+      more.querySelector(".tb-more-btn").focus();
+    }
+  }, true);
   ro.observe(status);
   window.addEventListener("resize", update);
   update();
@@ -2810,6 +2991,8 @@ async function init() {
   loadLayout();
   loadSyntax();
   loadPanes();
+  loadPaneWidths();
+  initPaneResizers();
   trackTopbarHeight();
   narrowQuery.addEventListener("change", () => { if (state.report) rerender(); });
   window.addEventListener("hashchange", route);
@@ -2827,6 +3010,7 @@ async function init() {
     loadLayout();
     loadSyntax();
     loadPanes();
+    loadPaneWidths();
   } catch {}
   setMode(defaults.mode || "refs");
   const form = $("#source-form");
@@ -2843,7 +3027,8 @@ async function init() {
 
 // ---------- Ask: AI help on a hunk or a line ----------
 // An Ask link on every hunk bar and a badge on hovered diff lines open a menu of predefined
-// tasks (plus a custom prompt). The answer streams into a band under the hunk; it lives in
+// tasks (plus a custom prompt). The answer streams in right where Ask was clicked: under the
+// hunk bar, or as a row below the asked-about line. It lives in
 // state.answers for this browser session only. Settings (provider, key, model) are on the
 // server in ~/.config/refactor-diff/settings.json; the top-bar chip shows what will be used.
 
@@ -2898,10 +3083,7 @@ function answersOf(hunkId) {
   return state.answers.get(hunkId) || [];
 }
 
-// The answer band under a hunk, from state (so re-renders keep it).
-function answersHtml(hunkId) {
-  const list = answersOf(hunkId);
-  if (!list.length) return "";
+function bandHtml(list) {
   return `<div class="ai-band">${list.map(answerHtml).join("")}</div>`;
 }
 
@@ -3020,13 +3202,33 @@ function hunkElement(hunkId) {
   return document.querySelector(`#content .hunk[data-hunk="${CSS.escape(hunkId)}"]`);
 }
 
-// Re-render the band of one hunk (and the answers count on its bar) from state.
+// The diff row showing `side` line `line` of `path` in a hunk (or its context window).
+function answerRow(el, { path, side, line }) {
+  const s = side === "old" ? "o" : "n";
+  const cell = [...el.querySelectorAll(`.diff td[data-s="${s}"][data-l="${line}"]`)].find((td) => td.dataset.p === path);
+  return cell?.closest("tr") || null;
+}
+
+// Re-render the answers of one hunk (and the answers count on its bar) from state. Answers to
+// a line go in a full-width row right below that line; answers to the hunk (or to a line no
+// longer on screen) go in a band right below the hunk bar.
 function renderAnswers(hunkId) {
   const el = hunkElement(hunkId);
   if (!el) return;
-  el.querySelector(".ai-band")?.remove();
-  const html = answersHtml(hunkId);
-  if (html) el.insertAdjacentHTML("beforeend", html);
+  el.querySelectorAll(".ai-band, tr.ai-row").forEach((x) => x.remove());
+  const top = [];
+  const byRow = new Map();
+  for (const a of answersOf(hunkId)) {
+    const row = a.focus.onLine ? answerRow(el, a.focus) : null;
+    if (!row) { top.push(a); continue; }
+    if (!byRow.has(row)) byRow.set(row, []);
+    byRow.get(row).push(a);
+  }
+  for (const [row, list] of byRow) {
+    const cols = [...row.cells].reduce((n, td) => n + td.colSpan, 0);
+    row.insertAdjacentHTML("afterend", `<tr class="ai-row"><td colspan="${cols}">${bandHtml(list)}</td></tr>`);
+  }
+  if (top.length) el.querySelector(".hunk-bar").insertAdjacentHTML("afterend", bandHtml(top));
   const badge = el.querySelector("[data-answers-badge]");
   const n = answersOf(hunkId).length;
   if (badge) {
@@ -3053,7 +3255,7 @@ function openAskMenu(hunkEl, anchor, { side = null, line = null } = {}) {
   const h = state.report.hunks[hunkEl.dataset.hunk];
   let focus;
   if (line) {
-    focus = { path: h.path, side: side === "o" ? "old" : "new", line };
+    focus = { path: h.path, side: side === "o" ? "old" : "new", line, onLine: true };
   } else {
     const at = hunkAnchor(h);
     focus = { path: h.path, side: at.new_no ? "new" : "old", line: at.new_no || at.old_no || h.new_start };
@@ -3302,7 +3504,7 @@ async function onAskClick(btn) {
   if ("hunkAsk" in btn.dataset) {
     openAskMenu(btn.closest(".hunk"), btn);
   } else if ("askLine" in btn.dataset) {
-    openAskMenu(btn.closest(".hunk"), btn, { side: btn.dataset.s, line: Number(btn.dataset.l) });
+    openAskMenu(btn.closest(".hunk"), btn, { side: btn.dataset.sd, line: Number(btn.dataset.ln) });
   } else if (a && "aiStop" in btn.dataset) {
     a.controller?.abort();
   } else if (a && "aiDismiss" in btn.dataset) {
