@@ -33,6 +33,9 @@
   --kind-formatting: #8a94a0;
   --kind-docs: #e3a07a;
   --kind-move: #ffb86b;
+  --issue-error: #ff6b6b;
+  --issue-warning: #f0b429;
+  --issue-info: #6cb6ff;
   --kind-args: #6cc9ea;
   --kind-import: #c8d66a;
   --sx-kw: #ff7b72;
@@ -90,6 +93,9 @@
     --kind-formatting: #666d76;
     --kind-docs: #a0522d;
     --kind-move: #b35c00;
+    --issue-error: #d1242f;
+    --issue-warning: #bf8700;
+    --issue-info: #0969da;
     --kind-args: #006d8f;
     --kind-import: #5c6b00;
     --sx-kw: #cf222e;
@@ -564,6 +570,13 @@ table.files td .meta { color: var(--muted); font-size: 11px; }
 /* ---- code navigation ---- */
 body.nav-armed [data-l] { cursor: pointer; }
 ::highlight(nav-word) { text-decoration: underline; text-decoration-thickness: 2px; color: var(--accent); }
+
+/* ---- code issues (squiggly underlines; see applyIssues) ---- */
+::highlight(issue-info) { text-decoration: underline wavy var(--issue-info); text-decoration-skip-ink: none; text-underline-offset: 3px; }
+::highlight(issue-warning) { text-decoration: underline wavy var(--issue-warning); text-decoration-skip-ink: none; text-underline-offset: 3px; }
+::highlight(issue-error) { text-decoration: underline wavy var(--issue-error); text-decoration-skip-ink: none; text-underline-offset: 3px; }
+.issues-label { text-decoration: underline wavy var(--issue-warning); text-decoration-skip-ink: none; text-underline-offset: 3px; }
+[data-issues][aria-pressed="false"] .issues-label { text-decoration-color: var(--faint); }
 
 .nav-panel {
   position: fixed; top: 0; right: 0; bottom: 0; z-index: 30; width: min(460px, 100vw);
