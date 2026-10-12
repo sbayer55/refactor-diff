@@ -33,6 +33,8 @@ const state = {
   aiContext: null, // default context pieces for custom prompts
   answers: new Map(), // hunk id -> AI answers for this browser session (see ask())
   desktop: false, // running in the desktop app (see /api/config)
+  singleFile: false, // show one file's section at a time on Needs review / pattern pages (preference)
+  currentFile: null, // path of the file shown in single-file mode (null: the page's first)
 };
 
 // Side-by-side needs room for two code columns; narrower windows always get unified diffs.
@@ -155,6 +157,7 @@ async function postReview(changes) {
 
 function toggleReviewed(id, on) {
   if (on) state.reviewed.add(id); else state.reviewed.delete(id);
+  refreshPatternTags(id);
   renderExplorer();
   renderInspector();
   postReview({ groups: { [on ? "add" : "remove"]: [id] } });
@@ -397,6 +400,7 @@ function renderFilters() {
     <span class="tb-item">${highlightToggle()}</span>
     <span class="tb-item">${issuesToggle()}</span>
     <span class="tb-item">${layoutToggle()}</span>
+    <span class="tb-item">${filesToggle()}</span>
     ${filtersActive() ? `<span class="tb-item"><span class="hidden-note">${plural(v.hiddenUnits, "change")} hidden</span>
       <button type="button" class="link" id="reset-filters">Reset</button></span>` : ""}
     <div class="tb-more" hidden>
@@ -412,6 +416,9 @@ function renderFilters() {
     b.addEventListener("click", () => toggleCategory(b.dataset.cat));
   }
   bindLayoutToggle(bar);
+  for (const b of bar.querySelectorAll("[data-files]")) {
+    b.addEventListener("click", () => setSingleFile(b.dataset.files === "one"));
+  }
   $("#docs-toggle").addEventListener("click", () => toggleFilter("hideDocs"));
   for (const c of CHANGE_FILTERS) {
     $(`#${c.id}`).addEventListener("click", () => toggleFilter(c.key));
@@ -932,7 +939,8 @@ function explorerWarnings(active) {
 // Highlight the file being viewed, or the one the focused hunk lives in.
 function markExplorerFile() {
   const [view, id] = location.hash.replace(/^#/, "").split("/");
-  const path = view === "file" ? decodeURIComponent(id || "") : focusedLocation()?.path;
+  const single = $("#content").classList.contains("single-file") ? state.currentFile : null;
+  const path = view === "file" ? decodeURIComponent(id || "") : focusedLocation()?.path || single;
   for (const a of document.querySelectorAll("#explorer-list [data-file-node]")) {
     a.classList.toggle("sel", Boolean(path) && a.dataset.fileNode === path);
   }
@@ -988,6 +996,8 @@ function scrollMainBy(top) {
 function scrollToSelector(selector) {
   const el = $(`#content ${selector}`);
   if (!el) return;
+  const sec = el.closest("section[data-file-section]");
+  if (state.singleFile && sec && !sec.classList.contains("current")) showFile(sec.dataset.fileSection);
   scrollMainBy(el.getBoundingClientRect().top - mainView().top - 8);
   const hunk = el.classList.contains("hunk") ? el : el.querySelector(".hunk");
   const i = hunk ? focusables().indexOf(hunk) : -1;
@@ -1214,6 +1224,7 @@ function route(opts) {
   const key = `${view}/${id || ""}`;
   if (key !== lastRoute) {
     state.focus = -1;
+    state.currentFile = null;
     // The explorer follows the view: patterns while reading a pattern, warnings on the
     // warnings page, files everywhere else.
     state.explorerTab = view === "group" ? "patterns" : view === "warnings" ? "warnings" : "files";
@@ -1236,6 +1247,7 @@ function route(opts) {
   else if (view === "files") renderFiles();
   else if (view === "commits") renderCommits();
   else renderReview();
+  applySingleFile();
   markSearch($("#content"));
   applyFocus(false);
   if (state.pendingScroll) {
@@ -1325,9 +1337,7 @@ function unitTags(unit) {
   const tags = unit.signatures.map((key) => {
     const g = state.groupsByKey.get(key);
     if (!g || !state.view.groupsById.has(g.id)) return "";
-    if (g.mechanical) {
-      return `<a class="tag" href="#group/${g.id}">${esc(g.kind)}: <span class="code">${esc(shortLabel(g.label))}</span></a>`;
-    }
+    if (g.mechanical) return patternTag(g);
     return `<span class="tag unique">unique ${esc(g.kind)}: <span class="code">${esc(shortLabel(g.label))}</span></span>`;
   });
   for (const n of unit.near || []) {
@@ -1336,6 +1346,25 @@ function unitTags(unit) {
   }
   if (unit.verified) tags.push(`<span class="tag verified" title="${esc(VERIFIED_TITLE)}">✓ verified</span>`);
   return tags.join("");
+}
+
+// A mechanical pattern's tag: a checkbox that marks every match of the pattern reviewed, and
+// a link to the pattern's page.
+function patternTag(g) {
+  const done = state.reviewed.has(g.id);
+  return `<span class="tag pattern${done ? " reviewed" : ""}" data-group-tag="${g.id}"><button type="button"
+    class="tag-review" data-review-group="${g.id}" aria-pressed="${done}"
+    title="${done ? "Unmark" : "Mark"} every match of this pattern reviewed" aria-label="${done ? "Unmark" : "Mark"} pattern reviewed">${
+    done ? "☑" : "☐"}</button><a href="#group/${g.id}">${esc(g.kind)}: <span class="code">${esc(shortLabel(g.label))}</span></a></span>`;
+}
+
+// Re-draw the tags of pattern `id` on the page after its reviewed mark changed.
+function refreshPatternTags(id) {
+  const g = state.view.groupsById.get(id);
+  if (!g) return;
+  for (const el of document.querySelectorAll(`#content [data-group-tag="${CSS.escape(id)}"]`)) {
+    el.outerHTML = patternTag(g);
+  }
 }
 
 // The other half of a move, for showing a moved block as a diff against where it came from.
@@ -1752,6 +1781,95 @@ function highlightToggle() {
   </div>`;
 }
 
+// ---------- one file at a time ----------
+// Needs review and pattern pages render a section per file. In single-file mode only the
+// current one is shown (h / l, or the pager above it, move between them); in either mode h / l
+// go to the previous / next file.
+
+function loadSingleFile() {
+  state.singleFile = prefGet("refactor-diff:single-file") === "one";
+}
+
+function setSingleFile(on) {
+  state.singleFile = on;
+  prefSet("refactor-diff:single-file", on ? "one" : "all");
+  const at = focusedElement()?.closest("section[data-file-section]");
+  if (at) state.currentFile = at.dataset.fileSection;
+  rerender();
+}
+
+function filesToggle() {
+  return `<div class="layout-toggle" role="group" aria-label="Files shown">
+    <button type="button" data-files="all" aria-pressed="${!state.singleFile}" title="All files on one page">All files</button>
+    <button type="button" data-files="one" aria-pressed="${state.singleFile}" title="One file at a time (h / l for previous / next)">One file</button>
+  </div>`;
+}
+
+function fileSections() {
+  return [...document.querySelectorAll("#content section.file[data-file-section]")];
+}
+
+function hasFileSections() {
+  return Boolean(state.report) && fileSections().length > 1;
+}
+
+// Show only the current file's section (single-file mode), with a pager above it.
+function applySingleFile() {
+  const content = $("#content");
+  content.querySelector(".file-pager")?.remove();
+  const sections = fileSections();
+  const on = state.singleFile && sections.length > 1;
+  content.classList.toggle("single-file", on);
+  for (const sec of sections) sec.classList.remove("current");
+  if (!on) return;
+  let i = sections.findIndex((sec) => sec.dataset.fileSection === state.currentFile);
+  if (i < 0) i = 0;
+  const cur = sections[i];
+  cur.classList.add("current");
+  state.currentFile = cur.dataset.fileSection;
+  const pager = document.createElement("div");
+  pager.className = "file-pager";
+  pager.innerHTML = `
+    <button type="button" class="toggle" data-file-step="-1" ${i ? "" : "disabled"} title="Previous file (h)">‹ Prev</button>
+    <span class="where">File <b>${i + 1}</b> of ${sections.length}</span>
+    <span class="path">${esc(cur.dataset.fileSection)}</span>
+    <button type="button" class="toggle" data-file-step="1" ${i < sections.length - 1 ? "" : "disabled"} title="Next file (l)">Next ›</button>`;
+  pager.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-file-step]");
+    if (b) fileStep(Number(b.dataset.fileStep));
+  });
+  cur.before(pager);
+}
+
+// Switch the single-file view to `path` (keeps the scroll position; callers scroll).
+function showFile(path) {
+  state.currentFile = path;
+  state.focus = -1;
+  applySingleFile();
+  markExplorerFile();
+}
+
+function fileStep(delta) {
+  const sections = fileSections();
+  if (sections.length < 2) return;
+  if (state.singleFile) {
+    const i = sections.findIndex((sec) => sec.classList.contains("current"));
+    const next = sections[Math.max(0, Math.min(sections.length - 1, i + delta))];
+    if (next.classList.contains("current")) return;
+    showFile(next.dataset.fileSection);
+    scrollMainTo(0);
+    state.focus = focusables().length ? 0 : -1;
+    applyFocus(false);
+    return;
+  }
+  // All files: the next / previous section relative to the top of the view.
+  const top = mainView().top + 10;
+  const tops = sections.map((sec) => sec.getBoundingClientRect().top);
+  const i = delta > 0 ? tops.findIndex((t) => t > top) : tops.findLastIndex((t) => t < top - 2);
+  if (i < 0) return;
+  scrollToSelector(`[data-file-section="${CSS.escape(sections[i].dataset.fileSection)}"]`);
+}
+
 // ---------- diff layout (unified / side by side) ----------
 
 function splitActive() {
@@ -2039,7 +2157,16 @@ async function onContentClick(e) {
   const btn = e.target.closest("button");
   if (!btn) return;
   try {
-    if (btn.dataset.expand) {
+    if (btn.dataset.reviewGroup) {
+      const id = btn.dataset.reviewGroup;
+      const on = !state.reviewed.has(id);
+      toggleReviewed(id, on);
+      const g = state.view.groupsById.get(id);
+      if (g) toast(`${on ? "Marked" : "Unmarked"} ${g.kind} ${shortLabel(g.label)} reviewed (${plural(g.unit_ids.length, "match", "matches")}).`);
+      // The pattern page's own checkbox follows.
+      const box = $("#group-reviewed");
+      if (box && location.hash === `#group/${id}`) box.checked = on;
+    } else if (btn.dataset.expand) {
       const box = btn.closest(".ctx");
       const fd = await loadFileDiff(box.dataset.path);
       const lo = Number(box.dataset.lo), hi = Number(box.dataset.hi);
@@ -2154,7 +2281,7 @@ function renderGroup(id) {
       importsHead = true;
       html += `<h3 class="sub-head">Imports updated for this move</h3>`;
     }
-    html += `<section class="file"><header><span class="path">${esc(path)}</span>
+    html += `<section class="file" data-file-section="${esc(path)}"><header><span class="path">${esc(path)}</span>
       <span class="meta">×${us.length}</span>${fileLinks(path)}</header>`;
     for (const u of us) {
       const where = { oldLine: u.old.length ? u.old_start : null, newLine: u.new.length ? u.new_start : null };
@@ -2357,6 +2484,7 @@ const KEY_HELP = [
     ["a", "", "ask the AI about the focused hunk"],
   ]],
   ["Navigate", [
+    ["l", "h", "next / previous file"],
     ["]", "[", "next / previous mechanical pattern"],
     ["}", "{", "next / previous commit of the range"],
     ["g r", "g w", "go to Needs review / Warnings"],
@@ -2377,7 +2505,9 @@ let pendingG = 0;
 
 // The hunks (review page) or occurrences (pattern page) that j/k move between.
 function focusables() {
-  return [...document.querySelectorAll("#content .hunk, #content .occurrence")];
+  const items = [...document.querySelectorAll("#content .hunk, #content .occurrence")];
+  return $("#content").classList.contains("single-file")
+    ? items.filter((x) => x.closest("section.file.current")) : items;
 }
 
 function applyFocus(scroll = true) {
@@ -2519,6 +2649,12 @@ function paletteCommands() {
       when: () => hasReport() && splitActive(), run: () => setSplit(false) },
     { id: "layout.split", group: "Layout", title: "Diff layout: side by side",
       when: () => hasReport() && !splitActive() && !narrowQuery.matches, run: () => setSplit(true) },
+    { id: "layout.one-file", group: "Layout", title: "Files: one at a time",
+      when: () => hasReport() && !state.singleFile, run: () => setSingleFile(true) },
+    { id: "layout.all-files", group: "Layout", title: "Files: all on one page",
+      when: () => hasReport() && state.singleFile, run: () => setSingleFile(false) },
+    { id: "review.next-file", group: "Review", title: "Next file", keys: "l", when: hasFileSections, run: () => fileStep(1) },
+    { id: "review.prev-file", group: "Review", title: "Previous file", keys: "h", when: hasFileSections, run: () => fileStep(-1) },
     { id: "layout.diff", group: "Layout", title: "Highlighting: diff",
       when: () => hasReport() && state.syntax, run: () => setSyntax(false) },
     { id: "layout.syntax", group: "Layout", title: "Highlighting: syntax",
@@ -2742,6 +2878,8 @@ function onKey(e) {
     case "{": if (state.commits.length) commitStep(-1); break;
     case "n": if (inFile) jumpChange(1); break;
     case "p": if (inFile) jumpChange(-1); break;
+    case "h": if (!inFile) fileStep(-1); else return; break;
+    case "l": if (!inFile) fileStep(1); else return; break;
     case "j": if (!inFile) moveFocus(1); else return; break;
     case "k": if (!inFile) moveFocus(-1); else return; break;
     case "x": toggleFocusedReviewed(); break;
@@ -3148,6 +3286,7 @@ async function init() {
   loadSyntax();
   loadIssuesPref();
   watchIssues();
+  loadSingleFile();
   loadPanes();
   loadPaneWidths();
   initPaneResizers();
@@ -3167,6 +3306,7 @@ async function init() {
     initPrefs(cfg.prefs);
     loadLayout();
     loadSyntax();
+    loadSingleFile();
     loadPanes();
     loadPaneWidths();
   } catch {}

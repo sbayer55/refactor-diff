@@ -207,6 +207,11 @@ occurrences shows **+N** in the explorer's Patterns tab.
   context and the full-file diff) between unified and side-by-side layout. The toggle is in
   the toolbar above the diffs and in the file viewer. Your choice is remembered. Added and
   deleted files, which have only one side, and windows narrower than 760px always use unified.
+- **All files / One file**: show Needs review and pattern pages one file at a time instead of
+  as one long page. A pager above the file says where you are; `l` / `h` (or **Next** /
+  **Prev**) move to the next / previous file, and clicking a file in the explorer opens it.
+  With all files shown, `l` / `h` scroll to the next / previous file. The choice is remembered.
+  When the toolbar is too narrow for its controls, the ones that don't fit move into its ⋮ menu.
 
 ![The file viewer showing a full diff side by side](docs/screenshots/split-view.png)
 
@@ -251,7 +256,7 @@ To pre-set filters from the command line, use `--hide` (any of `source`, `tests`
 Press `?` for the full list, or `⌘⇧P` (`Ctrl+Shift+P` elsewhere) for a command palette that
 lists every action, filter, file and pattern: type to narrow it down, `Enter` to run.
 The review loop is `j` / `k` to move between hunks (or
-occurrences on a pattern page), `x` to mark the focused one reviewed (focus moves on to the
+occurrences on a pattern page), `l` / `h` to go to the next / previous file, `x` to mark the focused one reviewed (focus moves on to the
 next unreviewed hunk), `e` to show its context and then reveal more, `o` to open it in your
 editor, `]` / `[` to step through the mechanical patterns, `g r` / `g w` / `g f` to jump to
 Needs review / Warnings / Files, and `/` to search. In the file viewer `n` / `p` move between
