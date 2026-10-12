@@ -17,6 +17,8 @@ const state = {
   fileDiffs: new Map(), // path -> Promise of the whole-file diff (see /api/report/{id}/file)
   split: false, // side-by-side diffs (preference; see splitActive())
   syntax: false, // syntax-color changed lines too (unchanged lines always are)
+  issuesOn: true, // underline code issues (preference; see applyIssues())
+  issues: new Map(), // "side:path" -> Promise of that file's code issues (see /api/report/{id}/issues)
   repo: "", // absolute repository path (for editor links)
   editor: null, // URL template from --editor
   focus: -1, // keyboard focus: index into the page's hunks / occurrences
@@ -393,6 +395,7 @@ function renderFilters() {
       <kbd>/</kbd>
     </div>
     <span class="tb-item">${highlightToggle()}</span>
+    <span class="tb-item">${issuesToggle()}</span>
     <span class="tb-item">${layoutToggle()}</span>
     ${filtersActive() ? `<span class="tb-item"><span class="hidden-note">${plural(v.hiddenUnits, "change")} hidden</span>
       <button type="button" class="link" id="reset-filters">Reset</button></span>` : ""}
@@ -542,6 +545,7 @@ function loadReport(report) {
   state.groupsByKey = new Map(report.groups.map((g) => [g.key, g]));
   state.shown = PAGE;
   state.fileDiffs = new Map();
+  state.issues = new Map();
   setReview(report.review);
   applyFilters();
   renderStatus();
@@ -1792,6 +1796,147 @@ function bindLayoutToggle(root) {
   for (const b of root.querySelectorAll("[data-highlight]")) {
     b.addEventListener("click", () => setSyntax(b.dataset.highlight === "syntax"));
   }
+  for (const b of root.querySelectorAll("[data-issues]")) {
+    b.addEventListener("click", () => setIssues(!state.issuesOn));
+  }
+}
+
+// ---------- code issues (squiggly underlines) ----------
+
+// Problems in the code itself (syntax errors, unreachable code, unused names), found by the
+// server for each file and side. This is separate from the report's refactor warnings: issues
+// never enter the Warnings tab, the status bar or the filters. They're drawn as CSS Custom
+// Highlights, so they layer over diff marks and syntax colors without touching the markup.
+
+const ISSUE_LEVELS = ["error", "warning", "info"];
+const cellIssues = new WeakMap(); // code cell -> [{s, e, severity, message}] (UTF-16 offsets)
+
+function loadIssuesPref() {
+  state.issuesOn = prefGet("refactor-diff:issues") !== "off";
+}
+
+function setIssues(on) {
+  state.issuesOn = on;
+  prefSet("refactor-diff:issues", on ? "on" : "off");
+  rerender();
+}
+
+function issuesToggle() {
+  return `<div class="layout-toggle" role="group" aria-label="Code issues">
+    <button type="button" data-issues aria-pressed="${state.issuesOn}"
+      title="Underline code issues: errors (red), warnings such as unused variables and unreachable code (amber), info such as unused imports and parameters (blue)"><span class="issues-label">Issues</span></button>
+  </div>`;
+}
+
+function loadIssues(path, side) {
+  const key = `${side}:${path}`;
+  if (!state.issues.has(key)) {
+    const url = `/api/report/${state.report.id}/issues?side=${side}&path=${encodeURIComponent(path)}`;
+    // Files the server can't read (library sources, say) just have no underlines.
+    state.issues.set(key, api(url).then((r) => issuesByLine(r.issues), () => new Map()));
+  }
+  return state.issues.get(key);
+}
+
+// line -> [{start, end, severity, message, indent}] in code points; `end: null` runs to the end
+// of the line, and `indent` skips leading whitespace on the continuation lines of a range.
+function issuesByLine(issues) {
+  const out = new Map();
+  for (const it of issues) {
+    for (let line = it.start.line; line <= it.end.line; line++) {
+      const first = line === it.start.line, last = line === it.end.line;
+      if (!out.has(line)) out.set(line, []);
+      out.get(line).push({
+        start: first ? it.start.col : 0,
+        end: last ? it.end.col : null,
+        indent: !first,
+        severity: it.severity,
+        message: it.message,
+      });
+    }
+  }
+  return out;
+}
+
+// The UTF-16 offset of code point `cp` in `text`.
+function utf16At(text, cp) {
+  let i = 0;
+  for (const ch of text) {
+    if (cp-- <= 0) break;
+    i += ch.length;
+  }
+  return i;
+}
+
+function clearIssueHighlights() {
+  for (const level of ISSUE_LEVELS) CSS.highlights.delete(`issue-${level}`);
+}
+
+let issuesGen = 0;
+function applyIssues() {
+  if (!hoverHighlight) return;
+  const gen = ++issuesGen;
+  if (!state.issuesOn || !state.report) { clearIssueHighlights(); return; }
+  const cells = [...$("#content").querySelectorAll("[data-p][data-s][data-l]")];
+  const files = new Map();
+  for (const cell of cells) {
+    const side = cell.dataset.s === "o" ? "old" : "new";
+    files.set(`${side}:${cell.dataset.p}`, [cell.dataset.p, side]);
+  }
+  Promise.all([...files].map(([key, [path, side]]) => loadIssues(path, side).then((lines) => [key, lines])))
+    .then((loaded) => {
+      if (gen !== issuesGen) return; // a newer render is already being decorated
+      const byFile = new Map(loaded);
+      const ranges = { error: [], warning: [], info: [] };
+      for (const cell of cells) {
+        if (!cell.isConnected) continue;
+        const side = cell.dataset.s === "o" ? "old" : "new";
+        const hits = byFile.get(`${side}:${cell.dataset.p}`)?.get(Number(cell.dataset.l));
+        if (!hits) { cellIssues.delete(cell); continue; }
+        const text = cell.textContent;
+        const indent = text.length - text.trimStart().length;
+        const placed = [];
+        for (const h of hits) {
+          let s = Math.min(utf16At(text, h.start), text.length);
+          const e = h.end == null ? text.length : Math.min(utf16At(text, h.end), text.length);
+          if (h.indent) s = Math.max(s, indent);
+          if (e <= s) continue;
+          placed.push({ s, e, severity: h.severity, message: h.message });
+          ranges[h.severity]?.push(cellRange(cell, s, e));
+        }
+        cellIssues.set(cell, placed);
+      }
+      ISSUE_LEVELS.forEach((level, i) => {
+        const hl = new Highlight(...ranges[level]);
+        hl.priority = ISSUE_LEVELS.length - i; // errors draw over warnings over info
+        CSS.highlights.set(`issue-${level}`, hl);
+      });
+    });
+}
+
+// Re-decorate whenever the code on screen changes (routes, expanded context, "show more").
+function watchIssues() {
+  let timer = 0;
+  new MutationObserver(() => {
+    clearTimeout(timer);
+    timer = setTimeout(applyIssues, 30);
+  }).observe($("#content"), { childList: true, subtree: true });
+}
+
+// The hovered issue's message as the cell's tooltip.
+let issueFrame = 0;
+function showIssueTitle(e) {
+  const cell = e.target.closest?.("[data-l]");
+  const placed = cell && cellIssues.get(cell);
+  if (!placed?.length) return;
+  cancelAnimationFrame(issueFrame);
+  issueFrame = requestAnimationFrame(() => {
+    const offset = caretOffset(cell, e.clientX, e.clientY);
+    const at = offset == null ? [] : placed.filter((h) => offset >= h.s && offset < h.e);
+    const title = at.map((h) => `${h.severity}: ${h.message}`).join("\n");
+    if (title) cell.title = title;
+    else cell.removeAttribute("title");
+  });
 }
 
 // ---------- whole-file diffs: context, original and new versions ----------
@@ -2147,6 +2292,7 @@ async function renderFileView(path, mode, line) {
       ${backButton()}
       <nav class="tabs" aria-label="File version">${tabs}</nav>
       ${highlightToggle()}
+      ${issuesToggle()}
       ${mode === "diff" ? layoutToggle(path) : ""}
       <span class="spacer"></span>
       ${fd.status !== "D" ? `<a class="toggle" href="${esc(editorHref(path, line ? Number(line.slice(1)) : 1) || "#")}" title="${EDITOR_TITLE}">Open in editor</a>` : ""}
@@ -2377,6 +2523,10 @@ function paletteCommands() {
       when: () => hasReport() && state.syntax, run: () => setSyntax(false) },
     { id: "layout.syntax", group: "Layout", title: "Highlighting: syntax",
       when: () => hasReport() && !state.syntax, run: () => setSyntax(true) },
+    { id: "layout.issues.hide", group: "Layout", title: "Code issues: hide underlines",
+      when: () => hasReport() && state.issuesOn, run: () => setIssues(false) },
+    { id: "layout.issues.show", group: "Layout", title: "Code issues: show underlines",
+      when: () => hasReport() && !state.issuesOn, run: () => setIssues(true) },
 
     ...CATEGORIES.map(([cat, label]) => ({
       id: `filter.cat.${cat}`, group: "Filter", title: `${f.hidden.has(cat) ? "Show" : "Hide"} ${label.toLowerCase()} files`,
@@ -2661,19 +2811,25 @@ const hoverHighlight = window.CSS?.highlights && typeof Highlight === "function"
 function setHoverWord(hit) {
   if (!hoverHighlight) return;
   if (!hit) { CSS.highlights.delete("nav-word"); return; }
+  CSS.highlights.set("nav-word", new Highlight(cellRange(hit.cell, hit.start, hit.end)));
+}
+
+// A DOM range over `start..end` (UTF-16 offsets into the cell's text) across its text nodes.
+function cellRange(cell, start, end) {
   const range = document.createRange();
   let pos = 0, started = false;
-  const walker = document.createTreeWalker(hit.cell, NodeFilter.SHOW_TEXT);
+  const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-    if (!started && hit.start < pos + n.length) { range.setStart(n, hit.start - pos); started = true; }
-    if (started && hit.end <= pos + n.length) { range.setEnd(n, hit.end - pos); break; }
+    if (!started && start < pos + n.length) { range.setStart(n, start - pos); started = true; }
+    if (started && end <= pos + n.length) { range.setEnd(n, end - pos); break; }
     pos += n.length;
   }
-  CSS.highlights.set("nav-word", new Highlight(range));
+  return range;
 }
 
 let hoverFrame = 0;
 function onCodeMouseMove(e) {
+  showIssueTitle(e);
   if (!modDown(e)) { document.body.classList.remove("nav-armed"); setHoverWord(null); return; }
   cancelAnimationFrame(hoverFrame);
   hoverFrame = requestAnimationFrame(() => {
@@ -2990,6 +3146,8 @@ async function init() {
   });
   loadLayout();
   loadSyntax();
+  loadIssuesPref();
+  watchIssues();
   loadPanes();
   loadPaneWidths();
   initPaneResizers();
