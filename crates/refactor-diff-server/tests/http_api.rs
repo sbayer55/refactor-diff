@@ -137,6 +137,8 @@ async fn unknown_report_is_404() {
         "/api/report/nope/summary.md",
         "/api/report/nope/commits",
         "/api/report/nope/source?side=old&path=api.py",
+        "/api/report/nope/issues?side=old&path=api.py",
+        "/api/report/nope/folds?side=old&path=api.py",
     ] {
         let res = server.get(path).await;
         assert_eq!(res.status, StatusCode::NOT_FOUND, "{path}");
@@ -438,6 +440,95 @@ fn padded_base() -> String {
         .join("\n")
         + "\n";
     format!("{pad}\n\ndef f():\n    return 1\n\n\ndef g():\n    return 2\n\n\n{pad}")
+}
+
+#[tokio::test]
+async fn issues_are_served_per_side() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    commit(
+        &repo,
+        &[("a.py", Some("def f():\n    return 1\n"))],
+        "before",
+    );
+    git(&repo, &["checkout", "-qb", "feature"]);
+    let after = "import os\n\ndef f():\n    tmp = 1\n    return 1\n    print()\n";
+    commit(&repo, &[("a.py", Some(after))], "after");
+
+    let server = TestServer::new(&repo);
+    let data = server.analyze(REFS()).await;
+    let id = data["id"].as_str().unwrap();
+    let old = server
+        .get(&format!("/api/report/{id}/issues?side=old&path=a.py"))
+        .await
+        .json();
+    assert_eq!(old, json!({"path": "a.py", "side": "old", "issues": []}));
+    let new = server
+        .get(&format!("/api/report/{id}/issues?side=new&path=a.py"))
+        .await
+        .json();
+    let issues = new["issues"].as_array().unwrap();
+    let codes: Vec<(&str, &str)> = issues
+        .iter()
+        .map(|i| (i["code"].as_str().unwrap(), i["severity"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        codes,
+        vec![
+            ("unused-import", "info"),
+            ("unused-variable", "warning"),
+            ("unreachable", "warning"),
+        ]
+    );
+    assert_eq!(issues[1]["start"], json!({"line": 4, "col": 4}));
+    assert_eq!(issues[1]["end"], json!({"line": 4, "col": 7}));
+    // Refactor warnings stay separate: code issues never reach the report.
+    assert_eq!(data["warnings"], json!([]));
+
+    let bad = server
+        .get(&format!("/api/report/{id}/issues?side=mid&path=a.py"))
+        .await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+    let missing = server
+        .get(&format!("/api/report/{id}/issues?side=old&path=nope.py"))
+        .await;
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn folds_are_served_per_side() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    commit(&repo, &[("a.py", Some("x = 1\n"))], "before");
+    git(&repo, &["checkout", "-qb", "feature"]);
+    let after = "def f():\n    if x:\n        return 1\n    return 2\n";
+    commit(&repo, &[("a.py", Some(after))], "after");
+
+    let server = TestServer::new(&repo);
+    let data = server.analyze(REFS()).await;
+    let id = data["id"].as_str().unwrap();
+    let old = server
+        .get(&format!("/api/report/{id}/folds?side=old&path=a.py"))
+        .await
+        .json();
+    assert_eq!(old, json!({"path": "a.py", "side": "old", "folds": []}));
+    let new = server
+        .get(&format!("/api/report/{id}/folds?side=new&path=a.py"))
+        .await
+        .json();
+    assert_eq!(
+        new["folds"],
+        json!([{"start": 1, "end": 4}, {"start": 2, "end": 3}])
+    );
+
+    let bad = server
+        .get(&format!("/api/report/{id}/folds?side=mid&path=a.py"))
+        .await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+    let missing = server
+        .get(&format!("/api/report/{id}/folds?side=old&path=nope.py"))
+        .await;
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

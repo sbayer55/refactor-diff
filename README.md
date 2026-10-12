@@ -8,6 +8,8 @@ level, collapses the repeated mechanical edits into patterns such as
 `rename get_user → fetch_user ×42 in 17 files`, and shows you only the leftover changes
 that need a real review.
 
+![Needs review: a rename, a retype and a layout change are dimmed and tagged, leaving one real logic change to read](docs/screenshots/needs-review.png)
+
 It analyzes **Python, TypeScript and JavaScript** (`.py`, `.pyi`, `.ts`, `.tsx`, `.mts`,
 `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`). Other changed files are listed but not collapsed.
 Support for more languages is planned (see [Roadmap](#roadmap)).
@@ -48,12 +50,12 @@ with the command that installs each one.
   and shortcut list from the menu bar.
 
 Building it requires Rust, Node (for the Tauri CLI only), the Xcode command line tools and
-[just](https://just.systems):
+[just](https://just.systems). The run and build recipes install the Tauri CLI first when it's
+missing, so a fresh clone needs nothing else:
 
 ```bash
-just desktop-setup            # npm install for the Tauri CLI
-just desktop-icons            # once: generates src-tauri/icons from app-icon.svg
 just desktop-dev              # run it
+just desktop-icons            # regenerate src-tauri/icons after changing app-icon.svg
 just desktop-test             # the shell's Rust unit tests (desktop-lint: fmt and clippy)
 just desktop-build            # bundles target/release/bundle/{macos,dmg}
 just desktop-build-universal  # Apple Silicon + Intel in one app
@@ -116,11 +118,15 @@ bar** along the bottom.
   file. Tick **Reviewed** as you go.
   A moved block is one pattern: its page shows the block as a diff from where it came from,
   followed by the import lines that changed because of the move.
+
+  ![A rename pattern: every occurrence grouped by file, with what was verified and where it was applied](docs/screenshots/pattern.png)
 - **✓ verified**: a change whose enclosing statement is provably the same program on both
   sides (see [Verification](#verification)). The status bar counts them.
 - **≈ almost …**: a leftover change that nearly matches a pattern — usually a typo. The
   **Only near misses** filter shows just those.
 - **Warnings**: places where the refactor may be incomplete or inconsistent (see below).
+
+  ![Warnings: references to a renamed function that no longer exists](docs/screenshots/warnings.png)
 - **Files**: every changed file, with its status, kind and whether it was analyzed.
 - **Commits**: when the range has more than one commit, the list of commits with their
   sizes. **Analyze** one to review it against its parent on its own — a refactor PR often has
@@ -153,10 +159,13 @@ The menu greys out what doesn't apply (a line outside any function, a working tr
 commits) and says why. What the model sees is what refactor-diff already knows: the hunk with
 its pattern annotations, the enclosing function at both revisions, references from code
 navigation, the commits that touched the line, the pull request description, and the list of
-mechanical patterns. The answer streams into a band under the hunk; `L21` / `O20` references in
-it highlight those rows of the diff, and `path:line` mentions link to the file viewer. You can
+mechanical patterns. The answer streams in right where you asked: below the hunk bar for a
+question about the hunk, or below the line for a question about a line. `L21` / `O20` references
+in it highlight those rows of the diff, and `path:line` mentions link to the file viewer. You can
 ask a follow-up, copy the answer, or (for a pull request) turn it into a review comment. Answers
 last for the browser session only.
+
+![An answer streamed in right below the line it is about](docs/screenshots/ask-ai.png)
 
 Nothing is sent until you pick a question. The provider in use is always visible: as a chip in
 the top bar, in the menu header, and on every answer. Click the chip to open **Settings** and
@@ -194,10 +203,23 @@ occurrences shows **+N** in the explorer's Patterns tab.
   whole-file viewer at that line. Switch between the base version, the head version and the
   complete diff of the file; the line stays in view. Use **↑ Prev change / ↓ Next change** or
   the `p` / `n` keys to move between changes.
+- **Code folding**: in the file viewer and in expanded context, the chevron next to a line
+  number folds that block (a function, class, body, multi-line literal, or a run of imports
+  or comments). A folded block says how many lines it hides and how many of them changed.
+  `z` folds every block without changes and pressing it again unfolds everything. **Fold all
+  blocks** is in the command palette. Python, TypeScript and JavaScript fold by syntax; other
+  files fold by indentation.
 - **Unified / Split**: switch every diff on the page (review hunks, pattern occurrences,
   context and the full-file diff) between unified and side-by-side layout. The toggle is in
   the toolbar above the diffs and in the file viewer. Your choice is remembered. Added and
   deleted files, which have only one side, and windows narrower than 760px always use unified.
+- **All files / One file**: show Needs review and pattern pages one file at a time instead of
+  as one long page. A pager above the file says where you are; `l` / `h` (or **Next** /
+  **Prev**) move to the next / previous file, and clicking a file in the explorer opens it.
+  With all files shown, `l` / `h` scroll to the next / previous file. The choice is remembered.
+  When the toolbar is too narrow for its controls, the ones that don't fit move into its ⋮ menu.
+
+![The file viewer showing a full diff side by side](docs/screenshots/split-view.png)
 
 ### Filtering
 
@@ -240,11 +262,13 @@ To pre-set filters from the command line, use `--hide` (any of `source`, `tests`
 Press `?` for the full list, or `⌘⇧P` (`Ctrl+Shift+P` elsewhere) for a command palette that
 lists every action, filter, file and pattern: type to narrow it down, `Enter` to run.
 The review loop is `j` / `k` to move between hunks (or
-occurrences on a pattern page), `x` to mark the focused one reviewed (focus moves on to the
+occurrences on a pattern page), `l` / `h` to go to the next / previous file, `x` to mark the focused one reviewed (focus moves on to the
 next unreviewed hunk), `e` to show its context and then reveal more, `o` to open it in your
 editor, `]` / `[` to step through the mechanical patterns, `g r` / `g w` / `g f` to jump to
 Needs review / Warnings / Files, and `/` to search. In the file viewer `n` / `p` move between
-changes.
+changes, and `z` folds the unchanged blocks (again to unfold).
+
+![The command palette](docs/screenshots/command-palette.png)
 
 ### Open in editor
 
@@ -390,7 +414,7 @@ Layout (a Cargo workspace):
 
 | Crate | Purpose |
 |---|---|
-| `crates/refactor-diff-core` | the analysis engine, pure and git-free: `model` (the report with stable ids), `seqmatch` (CPython's `SequenceMatcher`, which every id and grouping depends on), `hunks`, `lang/` (the tree-sitter analyzers for Python, TypeScript and JavaScript), `classify/` (token alignment, signatures), `grouping`, `warnings`, `moves`, `verify`, `categories`, `engine`, `export`, `fileview` |
+| `crates/refactor-diff-core` | the analysis engine, pure and git-free: `model` (the report with stable ids), `seqmatch` (CPython's `SequenceMatcher`, which every id and grouping depends on), `hunks`, `lang/` (the tree-sitter analyzers for Python, TypeScript and JavaScript), `classify/` (token alignment, signatures), `grouping`, `warnings`, `moves`, `verify`, `categories`, `engine`, `export`, `fileview`, `issues` and `folds` (per-file code issues and fold ranges for the viewer) |
 | `crates/refactor-diff-server` | the HTTP API (axum) with the embedded web UI (`assets/`), `git/` (git, GitHub PRs via `gh`, the working tree, commit lists), `snapshots`, `nav/` (go-to-definition / find-references: `tsserver` and the bundled Jedi helper under `python/`), `ai/` (the Ask menu: prompt context, tasks, the Claude / OpenAI-compatible / Ollama providers), `settings`, `review` (reviewed marks in `~/.config/refactor-diff`) |
 | `crates/refactor-diff` | the command line |
 | `desktop/` | the macOS app: a [Tauri](https://tauri.app) shell (`src-tauri/`) that runs the server in-process and shows its UI in a webview; `ui/index.html` is the landing page with the repository picker |

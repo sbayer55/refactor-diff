@@ -17,6 +17,10 @@ const state = {
   fileDiffs: new Map(), // path -> Promise of the whole-file diff (see /api/report/{id}/file)
   split: false, // side-by-side diffs (preference; see splitActive())
   syntax: false, // syntax-color changed lines too (unchanged lines always are)
+  issuesOn: true, // underline code issues (preference; see applyIssues())
+  issues: new Map(), // "side:path" -> Promise of that file's code issues (see /api/report/{id}/issues)
+  folds: new Map(), // "side:path" -> Promise of that file's foldable blocks (see /api/report/{id}/folds)
+  folded: new Set(), // collapsed folds, "side:path:start" (see applyFolds())
   repo: "", // absolute repository path (for editor links)
   editor: null, // URL template from --editor
   focus: -1, // keyboard focus: index into the page's hunks / occurrences
@@ -31,6 +35,8 @@ const state = {
   aiContext: null, // default context pieces for custom prompts
   answers: new Map(), // hunk id -> AI answers for this browser session (see ask())
   desktop: false, // running in the desktop app (see /api/config)
+  singleFile: false, // show one file's section at a time on Needs review / pattern pages (preference)
+  currentFile: null, // path of the file shown in single-file mode (null: the page's first)
 };
 
 // Side-by-side needs room for two code columns; narrower windows always get unified diffs.
@@ -153,6 +159,8 @@ async function postReview(changes) {
 
 function toggleReviewed(id, on) {
   if (on) state.reviewed.add(id); else state.reviewed.delete(id);
+  refreshPatternTags(id);
+  refreshFileDiff();
   renderExplorer();
   renderInspector();
   postReview({ groups: { [on ? "add" : "remove"]: [id] } });
@@ -385,22 +393,35 @@ function renderFilters() {
   bar.innerHTML = `
     <h1 id="view-title"></h1>
     <span class="spacer"></span>
-    <div class="search" title="Narrow everything to changes whose lines, path or pattern match">
+    <div class="search tb-item" title="Narrow everything to changes whose lines, path or pattern match">
       <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="7" cy="7" r="5"/><path d="M11 11l4 4"/></svg>
       <input id="search-input" type="text" spellcheck="false" value="${esc(f.search)}" class="${searchRegex() === false ? "invalid" : ""}"
         placeholder="search changed lines, paths, patterns" aria-label="Search">
       <button type="button" class="filter-chip mode regex" id="regex-toggle" aria-pressed="${f.regex}" title="Regular expression">.*</button>
       <kbd>/</kbd>
     </div>
-    ${highlightToggle()}
-    ${layoutToggle()}
-    ${filtersActive() ? `<span class="hidden-note">${plural(v.hiddenUnits, "change")} hidden</span>
-      <button type="button" class="link" id="reset-filters">Reset</button>` : ""}`;
+    <span class="tb-item">${highlightToggle()}</span>
+    <span class="tb-item">${issuesToggle()}</span>
+    <span class="tb-item">${layoutToggle()}</span>
+    <span class="tb-item">${filesToggle()}</span>
+    ${filtersActive() ? `<span class="tb-item"><span class="hidden-note">${plural(v.hiddenUnits, "change")} hidden</span>
+      <button type="button" class="link" id="reset-filters">Reset</button></span>` : ""}
+    <div class="tb-more" hidden>
+      <button type="button" class="tb-more-btn" aria-haspopup="true" aria-expanded="false" title="More" aria-label="More toolbar options">
+        <svg width="4" height="14" viewBox="0 0 4 14" fill="currentColor" aria-hidden="true"><circle cx="2" cy="2" r="1.5"/><circle cx="2" cy="7" r="1.5"/><circle cx="2" cy="12" r="1.5"/></svg>
+      </button>
+      <div class="tb-menu" role="menu" hidden></div>
+    </div>`;
+  [...bar.querySelectorAll(".tb-item")].forEach((it, i) => { it.dataset.order = i; });
+  bar.querySelector(".tb-more-btn").addEventListener("click", () => setToolbarMenu(bar.querySelector(".tb-menu").hidden));
 
   for (const b of foot.querySelectorAll("[data-cat]")) {
     b.addEventListener("click", () => toggleCategory(b.dataset.cat));
   }
   bindLayoutToggle(bar);
+  for (const b of bar.querySelectorAll("[data-files]")) {
+    b.addEventListener("click", () => setSingleFile(b.dataset.files === "one"));
+  }
   $("#docs-toggle").addEventListener("click", () => toggleFilter("hideDocs"));
   for (const c of CHANGE_FILTERS) {
     $(`#${c.id}`).addEventListener("click", () => toggleFilter(c.key));
@@ -426,6 +447,47 @@ function renderFilters() {
   });
   $("#regex-toggle").addEventListener("click", () => toggleFilter("regex"));
   $("#reset-filters")?.addEventListener("click", resetFilters);
+  fitToolbar();
+}
+
+// The toolbar is one line at a fixed height. Items that don't fit move, rightmost first, into
+// the ⋮ menu at its end; the view title gets up to 45% of the bar before they do.
+function fitToolbar() {
+  const bar = $("#toolbar");
+  const more = bar.querySelector(".tb-more");
+  if (bar.hidden || !more) return;
+  const menu = more.querySelector(".tb-menu");
+  const items = [...bar.querySelectorAll(".tb-item")].sort((a, b) => a.dataset.order - b.dataset.order);
+  const focused = document.activeElement;
+  for (const it of items) bar.insertBefore(it, more);
+  more.hidden = true;
+  bar.classList.add("fitting");
+  const limit = bar.getBoundingClientRect().right - parseFloat(getComputedStyle(bar).paddingRight);
+  const overflows = () => [...bar.children].some((c) => !c.hidden && c.getBoundingClientRect().right > limit + 0.5);
+  if (overflows()) {
+    more.hidden = false;
+    for (let i = items.length - 1; i >= 0 && overflows(); i--) menu.prepend(items[i]);
+  }
+  bar.classList.remove("fitting");
+  if (more.hidden) setToolbarMenu(false);
+  if (focused && focused !== document.activeElement && bar.contains(focused)) {
+    if (focused.closest(".tb-menu")) setToolbarMenu(true);
+    focused.focus();
+  }
+}
+
+function setToolbarMenu(open) {
+  const more = $("#toolbar .tb-more");
+  if (!more) return;
+  more.querySelector(".tb-menu").hidden = !open;
+  more.querySelector(".tb-more-btn").setAttribute("aria-expanded", String(open));
+}
+
+function focusSearch() {
+  const input = $("#search-input");
+  if (!input) return;
+  if (input.closest(".tb-menu")) setToolbarMenu(true);
+  input.focus();
 }
 
 // ---------- source form ----------
@@ -493,6 +555,9 @@ function loadReport(report) {
   state.groupsByKey = new Map(report.groups.map((g) => [g.key, g]));
   state.shown = PAGE;
   state.fileDiffs = new Map();
+  state.issues = new Map();
+  state.folds = new Map();
+  state.folded = new Set(); // line numbers may have moved
   setReview(report.review);
   applyFilters();
   renderStatus();
@@ -780,7 +845,6 @@ function renderExplorer() {
       e.stopPropagation();
       toggleReviewed(cb.dataset.review, cb.checked);
       if (location.hash === "#group/" + cb.dataset.review) route({ keepScroll: true });
-      else refreshFileDiff();
     });
   }
   markExplorerFile();
@@ -880,7 +944,8 @@ function explorerWarnings(active) {
 // Highlight the file being viewed, or the one the focused hunk lives in.
 function markExplorerFile() {
   const [view, id] = location.hash.replace(/^#/, "").split("/");
-  const path = view === "file" ? decodeURIComponent(id || "") : focusedLocation()?.path;
+  const single = $("#content").classList.contains("single-file") ? state.currentFile : null;
+  const path = view === "file" ? decodeURIComponent(id || "") : focusedLocation()?.path || single;
   for (const a of document.querySelectorAll("#explorer-list [data-file-node]")) {
     a.classList.toggle("sel", Boolean(path) && a.dataset.fileNode === path);
   }
@@ -907,11 +972,38 @@ function goTo(hash, selector) {
   location.hash = hash;
 }
 
+// What scrolls the diff: #content (below the toolbar) in the three-pane layout, the page when
+// the panes stack in narrow windows.
+function mainScroller() {
+  const content = $("#content");
+  return getComputedStyle(content).overflowY === "visible" ? null : content;
+}
+
+// The part of the viewport where the diff shows, below the toolbar.
+function mainView() {
+  const s = mainScroller();
+  if (s) {
+    const r = s.getBoundingClientRect();
+    return { top: r.top, bottom: r.bottom };
+  }
+  const tool = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--toolbar-h")) || 0;
+  return { top: tool, bottom: window.innerHeight - ($("#status").offsetHeight || 0) };
+}
+
+function scrollMainTo(top) {
+  (mainScroller() || window).scrollTo({ top });
+}
+
+function scrollMainBy(top) {
+  (mainScroller() || window).scrollBy({ top });
+}
+
 function scrollToSelector(selector) {
   const el = $(`#content ${selector}`);
   if (!el) return;
-  const top = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--stick-h")) || 0;
-  window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - top - 8 });
+  const sec = el.closest("section[data-file-section]");
+  if (state.singleFile && sec && !sec.classList.contains("current")) showFile(sec.dataset.fileSection);
+  scrollMainBy(el.getBoundingClientRect().top - mainView().top - 8);
   const hunk = el.classList.contains("hunk") ? el : el.querySelector(".hunk");
   const i = hunk ? focusables().indexOf(hunk) : -1;
   if (i >= 0) { state.focus = i; applyFocus(false); }
@@ -1137,6 +1229,7 @@ function route(opts) {
   const key = `${view}/${id || ""}`;
   if (key !== lastRoute) {
     state.focus = -1;
+    state.currentFile = null;
     // The explorer follows the view: patterns while reading a pattern, warnings on the
     // warnings page, files everywhere else.
     state.explorerTab = view === "group" ? "patterns" : view === "warnings" ? "warnings" : "files";
@@ -1159,6 +1252,7 @@ function route(opts) {
   else if (view === "files") renderFiles();
   else if (view === "commits") renderCommits();
   else renderReview();
+  applySingleFile();
   markSearch($("#content"));
   applyFocus(false);
   if (state.pendingScroll) {
@@ -1166,7 +1260,7 @@ function route(opts) {
     state.pendingScroll = null;
     scrollToSelector(selector);
   } else if (!opts?.keepScroll) {
-    window.scrollTo({ top: 0 });
+    scrollMainTo(0);
   }
 }
 
@@ -1196,6 +1290,7 @@ function setViewTitle(view, id, rest) {
     html = `Needs review ${meta(`${plural(s.hunks, "hunk")} · ${plural(s.residual_units, "change")} · ${s.hunks_done} reviewed`)}`;
   }
   el.innerHTML = html;
+  fitToolbar();
 }
 
 function groupTransform(g) {
@@ -1255,18 +1350,11 @@ function unitReviewed(unit) {
   return unit.explained && pats.length > 0 && pats.every((g) => state.reviewed.has(g.id));
 }
 
-// `boxes` puts a reviewed checkbox before each pattern tag (the file viewer).
-function unitTags(unit, { boxes = false } = {}) {
+function unitTags(unit) {
   const tags = unit.signatures.map((key) => {
     const g = state.groupsByKey.get(key);
     if (!g || !state.view.groupsById.has(g.id)) return "";
-    if (g.mechanical) {
-      const done = state.reviewed.has(g.id);
-      const tag = `<a class="tag${done ? " reviewed" : ""}" href="#group/${g.id}"${done ? ' title="Pattern reviewed"' : ""}>${
-        done ? "✓ " : ""}${esc(g.kind)}: <span class="code">${esc(shortLabel(g.label))}</span></a>`;
-      return boxes ? `<span class="tag-pick"><input type="checkbox" class="tag-box" data-review="${g.id}" ${
-        done ? "checked" : ""} aria-label="Mark pattern reviewed">${tag}</span>` : tag;
-    }
+    if (g.mechanical) return patternTag(g);
     return `<span class="tag unique">unique ${esc(g.kind)}: <span class="code">${esc(shortLabel(g.label))}</span></span>`;
   });
   for (const n of unit.near || []) {
@@ -1275,6 +1363,25 @@ function unitTags(unit, { boxes = false } = {}) {
   }
   if (unit.verified) tags.push(`<span class="tag verified" title="${esc(VERIFIED_TITLE)}">✓ verified</span>`);
   return tags.join("");
+}
+
+// A mechanical pattern's tag: a checkbox that marks every match of the pattern reviewed, and
+// a link to the pattern's page.
+function patternTag(g) {
+  const done = state.reviewed.has(g.id);
+  return `<span class="tag pattern${done ? " reviewed" : ""}" data-group-tag="${g.id}"><button type="button"
+    class="tag-review" data-review-group="${g.id}" aria-pressed="${done}"
+    title="${done ? "Unmark" : "Mark"} every match of this pattern reviewed" aria-label="${done ? "Unmark" : "Mark"} pattern reviewed">${
+    done ? "☑" : "☐"}</button><a href="#group/${g.id}">${esc(g.kind)}: <span class="code">${esc(shortLabel(g.label))}</span></a></span>`;
+}
+
+// Re-draw the tags of pattern `id` on the page after its reviewed mark changed.
+function refreshPatternTags(id) {
+  const g = state.view.groupsById.get(id);
+  if (!g) return;
+  for (const el of document.querySelectorAll(`#content [data-group-tag="${CSS.escape(id)}"]`)) {
+    el.outerHTML = patternTag(g);
+  }
 }
 
 // The other half of a move, for showing a moved block as a diff against where it came from.
@@ -1316,6 +1423,7 @@ function renderReview() {
     html += "</section>";
   }
   content.innerHTML = html;
+  for (const hunkId of state.answers.keys()) renderAnswers(hunkId);
 }
 
 function hunkHtml(h) {
@@ -1332,7 +1440,7 @@ function hunkHtml(h) {
       ${state.report.source.pr ? `<button type="button" class="link" data-hunk-comment title="Comment on this hunk in the PR (c)">Comment</button>` : ""}
       <button type="button" class="link" data-hunk-open>${done ? "Show" : "Hide"}</button>
       <button type="button" class="link" data-hunk-context>Show context</button></div>
-    <table class="diff">${hunkRows(h)}</table>${answersHtml(h.id)}</div>`;
+    <table class="diff">${hunkRows(h)}</table></div>`;
 }
 
 // What changed since the previous analysis of the same comparison (new commits pushed).
@@ -1396,23 +1504,23 @@ function lineState(ln, focus) {
 
 // Pattern tags go above the first line of each unit that isn't dimmed-out or focused.
 // `lead` empty cells line the tags up with the code column, which spans `span` columns.
-// With `fold` (the file viewer), tags get reviewed checkboxes, and a unit whose patterns are
-// all reviewed gets a bar that shows or hides its folded lines instead.
+// With `fold` (the file viewer), a unit whose patterns are all reviewed gets a bar that shows
+// or hides its folded lines instead.
 function tagRow(st, tagged, lead, span, fold = false) {
   if (!st.unit || st.hidden || st.focused || tagged.has(st.unit.id)) return "";
   tagged.add(st.unit.id);
-  const t = unitTags(st.unit, { boxes: fold });
+  const t = unitTags(st.unit);
   if (!t) return "";
   const cells = "<td></td>".repeat(lead);
-  if (fold && isFolded(st)) {
+  if (fold && isReviewFolded(st)) {
     const n = st.unit.old.length + st.unit.new.length;
-    return `<tr class="tags fold-bar" data-fold="${st.unit.id}">${cells}<td colspan="${span}">${t}<span class="fold-act"><span class="fold-n">${
-      plural(n, "line")} reviewed</span><button type="button" class="link" data-fold-toggle>Show</button></span></td></tr>`;
+    return `<tr class="tags review-fold" data-review-fold="${st.unit.id}">${cells}<td colspan="${span}">${t}<span class="review-fold-act"><span class="review-fold-n">${
+      plural(n, "line")} reviewed</span><button type="button" class="link" data-review-fold-toggle>Show</button></span></td></tr>`;
   }
   return `<tr class="tags">${cells}<td colspan="${span}">${t}</td></tr>`;
 }
 
-function isFolded(st) {
+function isReviewFolded(st) {
   return Boolean(st.unit) && !st.hidden && unitReviewed(st.unit);
 }
 
@@ -1429,11 +1537,11 @@ function unifiedRows(lines, { tags = false, focus = null, anchors = false, path 
     const st = lineState(ln, focus);
     if (tags) rows += tagRow(st, tagged, 3, span, fold);
     if (ln.from) { rows += fromRow(ln, 3, span); continue; }
-    const folded = fold && isFolded(st);
+    const folded = fold && isReviewFolded(st);
     const changed = ln.t !== " " && !folded;
-    const attrs = (anchors ? anchorAttrs(ln.o, ln.n) : "") + (folded ? ` data-fold-units="${st.unit.id}"` : "");
+    const attrs = (anchors ? anchorAttrs(ln.o, ln.n) : "") + (folded ? ` data-review-units="${st.unit.id}"` : "");
     const p = ln.path || path;
-    rows += `<tr class="${st.cls}${st.dim ? " explained" : ""}${st.focused ? " focus" : ""}${folded ? " folded" : ""}${
+    rows += `<tr class="${st.cls}${st.dim ? " explained" : ""}${st.focused ? " focus" : ""}${folded ? " review-folded" : ""}${
       anchors && changed && !prevChanged ? " chg-start" : ""}"${attrs}>
       <td class="no">${ln.o ?? ""}</td><td class="no">${ln.n ?? ""}</td>
       <td class="sign">${ln.t === " " ? "" : ln.t}</td>
@@ -1465,10 +1573,11 @@ function splitRows(lines, { tags = false, focus = null, anchors = false, path = 
   let prevChanged = false;
   const span = ask ? 4 : 3;
   const cell = (ln, side) => {
-    if (!ln) return `<td class="no"></td><td class="side empty"></td>`;
+    const sd = side === "old" ? "side-o" : "side-n";
+    if (!ln) return `<td class="no"></td><td class="side ${sd} empty"></td>`;
     const st = lineState(ln, focus);
     const num = side === "old" ? ln.o : ln.n;
-    return `<td class="no ${st.cls}">${num}</td><td class="side ${st.cls}${st.dim ? " explained" : ""}${
+    return `<td class="no ${st.cls}">${num}</td><td class="side ${sd} ${st.cls}${st.dim ? " explained" : ""}${
       st.focused ? " focus" : ""}"${navAttrs(ln.path || path, side === "old" ? "o" : "n", num)}>${
       codeHtml(ln, sx)}</td>`;
   };
@@ -1481,11 +1590,11 @@ function splitRows(lines, { tags = false, focus = null, anchors = false, path = 
     if (left && left.from) { rows += fromRow(left, 1, span); continue; }
     // A pair is folded only when every line in it belongs to a folded unit.
     const sides = left === right ? [left] : [left, right].filter(Boolean);
-    const folded = fold && left !== right && sides.every((ln) => isFolded(lineState(ln, focus)));
+    const folded = fold && left !== right && sides.every((ln) => isReviewFolded(lineState(ln, focus)));
     const changed = left !== right && !folded;
     const attrs = (anchors ? anchorAttrs(left?.o, right?.n) : "")
-      + (folded ? ` data-fold-units="${[...new Set(sides.map((ln) => ln.unit))].join(" ")}"` : "");
-    rows += `<tr class="split-row${folded ? " folded" : ""}${anchors && changed && !prevChanged ? " chg-start" : ""}"${attrs}>${
+      + (folded ? ` data-review-units="${[...new Set(sides.map((ln) => ln.unit))].join(" ")}"` : "");
+    rows += `<tr class="split-row${folded ? " review-folded" : ""}${anchors && changed && !prevChanged ? " chg-start" : ""}"${attrs}>${
       cell(left, "old")}${cell(right, "new")}${ask ? askCell(right ? "n" : "o", right ? right.n : left?.o, changed) : ""}</tr>`;
     prevChanged = changed;
   }
@@ -1584,6 +1693,98 @@ function setPane(name, on) {
   applyPanes();
 }
 
+// Pane widths, set by dragging the strip between a pane and the diff (or with the arrow keys
+// when it has focus); double-click resets. Kept as CSS variables on <body>.
+const PANE_WIDTH = {
+  explorer: { def: 272, min: 180, max: 560 },
+  inspector: { def: 316, min: 240, max: 640 },
+};
+const MIN_STREAM = 420;
+// The widths asked for; what's shown can be less when the window is too narrow for them.
+const paneWant = { explorer: PANE_WIDTH.explorer.def, inspector: PANE_WIDTH.inspector.def };
+
+function loadPaneWidths() {
+  let saved = {};
+  try { saved = JSON.parse(prefGet("refactor-diff:pane-widths") || "{}"); } catch {}
+  for (const name of Object.keys(PANE_WIDTH)) {
+    paneWant[name] = Number(saved[name]) || PANE_WIDTH[name].def;
+  }
+  applyPaneWidths();
+}
+
+function applyPaneWidths() {
+  for (const name of Object.keys(PANE_WIDTH)) applyPaneWidth(name, paneWant[name]);
+}
+
+function paneWidth(name) {
+  return parseFloat(document.body.style.getPropertyValue(`--${name}-w`)) || PANE_WIDTH[name].def;
+}
+
+// Clamp to the pane's limits and leave the diff at least MIN_STREAM pixels.
+function applyPaneWidth(name, px) {
+  const { min, max } = PANE_WIDTH[name];
+  const other = name === "explorer" ? "inspector" : "explorer";
+  const otherW = $(`#${other}`)?.offsetWidth || 0;
+  const room = window.innerWidth - otherW - MIN_STREAM;
+  const w = Math.round(Math.max(min, Math.min(max, room, px)));
+  document.body.style.setProperty(`--${name}-w`, `${w}px`);
+  const handle = document.querySelector(`[data-resize="${name}"]`);
+  if (handle) {
+    handle.setAttribute("aria-valuenow", String(w));
+    handle.setAttribute("aria-valuemin", String(min));
+    handle.setAttribute("aria-valuemax", String(max));
+  }
+  return w;
+}
+
+// Record what's shown for `name` as the width asked for, and save it.
+function savePaneWidth(name) {
+  paneWant[name] = paneWidth(name);
+  const widths = {};
+  for (const n of Object.keys(PANE_WIDTH)) if (paneWant[n] !== PANE_WIDTH[n].def) widths[n] = paneWant[n];
+  prefSet("refactor-diff:pane-widths", JSON.stringify(widths));
+}
+
+function initPaneResizers() {
+  for (const handle of document.querySelectorAll("[data-resize]")) {
+    const name = handle.dataset.resize;
+    handle.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      handle.setPointerCapture(e.pointerId);
+      const startX = e.clientX, startW = paneWidth(name);
+      // Dragging right widens the explorer and narrows the inspector.
+      const sign = name === "explorer" ? 1 : -1;
+      handle.classList.add("dragging");
+      document.body.classList.add("resizing");
+      const move = (ev) => applyPaneWidth(name, startW + sign * (ev.clientX - startX));
+      const up = () => {
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", up);
+        handle.removeEventListener("pointercancel", up);
+        handle.classList.remove("dragging");
+        document.body.classList.remove("resizing");
+        savePaneWidth(name);
+      };
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", up);
+      handle.addEventListener("pointercancel", up);
+    });
+    handle.addEventListener("dblclick", () => { applyPaneWidth(name, PANE_WIDTH[name].def); savePaneWidth(name); });
+    handle.addEventListener("keydown", (e) => {
+      const grow = name === "explorer" ? "ArrowRight" : "ArrowLeft";
+      const shrink = name === "explorer" ? "ArrowLeft" : "ArrowRight";
+      if (e.key !== grow && e.key !== shrink) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const step = e.shiftKey ? 64 : 16;
+      applyPaneWidth(name, paneWidth(name) + (e.key === grow ? step : -step));
+      savePaneWidth(name);
+    });
+  }
+  window.addEventListener("resize", applyPaneWidths);
+}
+
 function applyPanes() {
   for (const name of ["explorer", "inspector"]) {
     const on = state.panes[name];
@@ -1592,6 +1793,7 @@ function applyPanes() {
     btn.setAttribute("aria-pressed", String(on));
     btn.title = `${on ? "Hide" : "Show"} the ${name} (${name === "explorer" ? "\\" : "|"})`;
   }
+  applyPaneWidths();
 }
 
 function loadSyntax() {
@@ -1613,6 +1815,95 @@ function highlightToggle() {
     <button type="button" data-highlight="syntax" aria-pressed="${state.syntax}"
       title="Syntax-color all code; changes are marked in the gutter">Syntax</button>
   </div>`;
+}
+
+// ---------- one file at a time ----------
+// Needs review and pattern pages render a section per file. In single-file mode only the
+// current one is shown (h / l, or the pager above it, move between them); in either mode h / l
+// go to the previous / next file.
+
+function loadSingleFile() {
+  state.singleFile = prefGet("refactor-diff:single-file") === "one";
+}
+
+function setSingleFile(on) {
+  state.singleFile = on;
+  prefSet("refactor-diff:single-file", on ? "one" : "all");
+  const at = focusedElement()?.closest("section[data-file-section]");
+  if (at) state.currentFile = at.dataset.fileSection;
+  rerender();
+}
+
+function filesToggle() {
+  return `<div class="layout-toggle" role="group" aria-label="Files shown">
+    <button type="button" data-files="all" aria-pressed="${!state.singleFile}" title="All files on one page">All files</button>
+    <button type="button" data-files="one" aria-pressed="${state.singleFile}" title="One file at a time (h / l for previous / next)">One file</button>
+  </div>`;
+}
+
+function fileSections() {
+  return [...document.querySelectorAll("#content section.file[data-file-section]")];
+}
+
+function hasFileSections() {
+  return Boolean(state.report) && fileSections().length > 1;
+}
+
+// Show only the current file's section (single-file mode), with a pager above it.
+function applySingleFile() {
+  const content = $("#content");
+  content.querySelector(".file-pager")?.remove();
+  const sections = fileSections();
+  const on = state.singleFile && sections.length > 1;
+  content.classList.toggle("single-file", on);
+  for (const sec of sections) sec.classList.remove("current");
+  if (!on) return;
+  let i = sections.findIndex((sec) => sec.dataset.fileSection === state.currentFile);
+  if (i < 0) i = 0;
+  const cur = sections[i];
+  cur.classList.add("current");
+  state.currentFile = cur.dataset.fileSection;
+  const pager = document.createElement("div");
+  pager.className = "file-pager";
+  pager.innerHTML = `
+    <button type="button" class="toggle" data-file-step="-1" ${i ? "" : "disabled"} title="Previous file (h)">‹ Prev</button>
+    <span class="where">File <b>${i + 1}</b> of ${sections.length}</span>
+    <span class="path">${esc(cur.dataset.fileSection)}</span>
+    <button type="button" class="toggle" data-file-step="1" ${i < sections.length - 1 ? "" : "disabled"} title="Next file (l)">Next ›</button>`;
+  pager.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-file-step]");
+    if (b) fileStep(Number(b.dataset.fileStep));
+  });
+  cur.before(pager);
+}
+
+// Switch the single-file view to `path` (keeps the scroll position; callers scroll).
+function showFile(path) {
+  state.currentFile = path;
+  state.focus = -1;
+  applySingleFile();
+  markExplorerFile();
+}
+
+function fileStep(delta) {
+  const sections = fileSections();
+  if (sections.length < 2) return;
+  if (state.singleFile) {
+    const i = sections.findIndex((sec) => sec.classList.contains("current"));
+    const next = sections[Math.max(0, Math.min(sections.length - 1, i + delta))];
+    if (next.classList.contains("current")) return;
+    showFile(next.dataset.fileSection);
+    scrollMainTo(0);
+    state.focus = focusables().length ? 0 : -1;
+    applyFocus(false);
+    return;
+  }
+  // All files: the next / previous section relative to the top of the view.
+  const top = mainView().top + 10;
+  const tops = sections.map((sec) => sec.getBoundingClientRect().top);
+  const i = delta > 0 ? tops.findIndex((t) => t > top) : tops.findLastIndex((t) => t < top - 2);
+  if (i < 0) return;
+  scrollToSelector(`[data-file-section="${CSS.escape(sections[i].dataset.fileSection)}"]`);
 }
 
 // ---------- diff layout (unified / side by side) ----------
@@ -1659,6 +1950,147 @@ function bindLayoutToggle(root) {
   for (const b of root.querySelectorAll("[data-highlight]")) {
     b.addEventListener("click", () => setSyntax(b.dataset.highlight === "syntax"));
   }
+  for (const b of root.querySelectorAll("[data-issues]")) {
+    b.addEventListener("click", () => setIssues(!state.issuesOn));
+  }
+}
+
+// ---------- code issues (squiggly underlines) ----------
+
+// Problems in the code itself (syntax errors, unreachable code, unused names), found by the
+// server for each file and side. This is separate from the report's refactor warnings: issues
+// never enter the Warnings tab, the status bar or the filters. They're drawn as CSS Custom
+// Highlights, so they layer over diff marks and syntax colors without touching the markup.
+
+const ISSUE_LEVELS = ["error", "warning", "info"];
+const cellIssues = new WeakMap(); // code cell -> [{s, e, severity, message}] (UTF-16 offsets)
+
+function loadIssuesPref() {
+  state.issuesOn = prefGet("refactor-diff:issues") !== "off";
+}
+
+function setIssues(on) {
+  state.issuesOn = on;
+  prefSet("refactor-diff:issues", on ? "on" : "off");
+  rerender();
+}
+
+function issuesToggle() {
+  return `<div class="layout-toggle" role="group" aria-label="Code issues">
+    <button type="button" data-issues aria-pressed="${state.issuesOn}"
+      title="Underline code issues: errors (red), warnings such as unused variables and unreachable code (amber), info such as unused imports and parameters (blue)"><span class="issues-label">Issues</span></button>
+  </div>`;
+}
+
+function loadIssues(path, side) {
+  const key = `${side}:${path}`;
+  if (!state.issues.has(key)) {
+    const url = `/api/report/${state.report.id}/issues?side=${side}&path=${encodeURIComponent(path)}`;
+    // Files the server can't read (library sources, say) just have no underlines.
+    state.issues.set(key, api(url).then((r) => issuesByLine(r.issues), () => new Map()));
+  }
+  return state.issues.get(key);
+}
+
+// line -> [{start, end, severity, message, indent}] in code points; `end: null` runs to the end
+// of the line, and `indent` skips leading whitespace on the continuation lines of a range.
+function issuesByLine(issues) {
+  const out = new Map();
+  for (const it of issues) {
+    for (let line = it.start.line; line <= it.end.line; line++) {
+      const first = line === it.start.line, last = line === it.end.line;
+      if (!out.has(line)) out.set(line, []);
+      out.get(line).push({
+        start: first ? it.start.col : 0,
+        end: last ? it.end.col : null,
+        indent: !first,
+        severity: it.severity,
+        message: it.message,
+      });
+    }
+  }
+  return out;
+}
+
+// The UTF-16 offset of code point `cp` in `text`.
+function utf16At(text, cp) {
+  let i = 0;
+  for (const ch of text) {
+    if (cp-- <= 0) break;
+    i += ch.length;
+  }
+  return i;
+}
+
+function clearIssueHighlights() {
+  for (const level of ISSUE_LEVELS) CSS.highlights.delete(`issue-${level}`);
+}
+
+let issuesGen = 0;
+function applyIssues() {
+  if (!hoverHighlight) return;
+  const gen = ++issuesGen;
+  if (!state.issuesOn || !state.report) { clearIssueHighlights(); return; }
+  const cells = [...$("#content").querySelectorAll("[data-p][data-s][data-l]")];
+  const files = new Map();
+  for (const cell of cells) {
+    const side = cell.dataset.s === "o" ? "old" : "new";
+    files.set(`${side}:${cell.dataset.p}`, [cell.dataset.p, side]);
+  }
+  Promise.all([...files].map(([key, [path, side]]) => loadIssues(path, side).then((lines) => [key, lines])))
+    .then((loaded) => {
+      if (gen !== issuesGen) return; // a newer render is already being decorated
+      const byFile = new Map(loaded);
+      const ranges = { error: [], warning: [], info: [] };
+      for (const cell of cells) {
+        if (!cell.isConnected) continue;
+        const side = cell.dataset.s === "o" ? "old" : "new";
+        const hits = byFile.get(`${side}:${cell.dataset.p}`)?.get(Number(cell.dataset.l));
+        if (!hits) { cellIssues.delete(cell); continue; }
+        const text = cell.textContent;
+        const indent = text.length - text.trimStart().length;
+        const placed = [];
+        for (const h of hits) {
+          let s = Math.min(utf16At(text, h.start), text.length);
+          const e = h.end == null ? text.length : Math.min(utf16At(text, h.end), text.length);
+          if (h.indent) s = Math.max(s, indent);
+          if (e <= s) continue;
+          placed.push({ s, e, severity: h.severity, message: h.message });
+          ranges[h.severity]?.push(cellRange(cell, s, e));
+        }
+        cellIssues.set(cell, placed);
+      }
+      ISSUE_LEVELS.forEach((level, i) => {
+        const hl = new Highlight(...ranges[level]);
+        hl.priority = ISSUE_LEVELS.length - i; // errors draw over warnings over info
+        CSS.highlights.set(`issue-${level}`, hl);
+      });
+    });
+}
+
+// Re-decorate whenever the code on screen changes (routes, expanded context, "show more").
+function watchIssues() {
+  let timer = 0;
+  new MutationObserver(() => {
+    clearTimeout(timer);
+    timer = setTimeout(applyIssues, 30);
+  }).observe($("#content"), { childList: true, subtree: true });
+}
+
+// The hovered issue's message as the cell's tooltip.
+let issueFrame = 0;
+function showIssueTitle(e) {
+  const cell = e.target.closest?.("[data-l]");
+  const placed = cell && cellIssues.get(cell);
+  if (!placed?.length) return;
+  cancelAnimationFrame(issueFrame);
+  issueFrame = requestAnimationFrame(() => {
+    const offset = caretOffset(cell, e.clientX, e.clientY);
+    const at = offset == null ? [] : placed.filter((h) => offset >= h.s && offset < h.e);
+    const title = at.map((h) => `${h.severity}: ${h.message}`).join("\n");
+    if (title) cell.title = title;
+    else cell.removeAttribute("title");
+  });
 }
 
 // ---------- whole-file diffs: context, original and new versions ----------
@@ -1729,15 +2161,21 @@ function renderCtx(box, fd) {
   let rows = "";
   if (lo > 0) rows += `<tr class="expand"><td colspan="4">${more("up", Math.min(CTX_STEP, lo))}${lo > CTX_STEP ? " · " + all("up", lo) : ""}</td></tr>`;
   rows += diffRows(fd.lines.slice(lo, hi), {
-    tags: !focus.size, focus, path: box.dataset.path, syntax: fileSyntax(fd),
+    tags: !focus.size, focus, path: box.dataset.path, syntax: fileSyntax(fd), anchors: true,
   });
   const rest = fd.lines.length - hi;
   if (rest > 0) rows += `<tr class="expand"><td colspan="4">${more("down", Math.min(CTX_STEP, rest))}${rest > CTX_STEP ? " · " + all("down", rest) : ""}</td></tr>`;
-  box.querySelector("table").innerHTML = rows;
+  const table = box.querySelector("table");
+  table.innerHTML = rows;
+  // Resolves before the next paint: openCtx already waited for the folds.
+  foldsFor(box.dataset.path, "diff").then((folds) => {
+    if (table.isConnected && box.classList.contains("ctx")) applyFolds(table, box.dataset.path, "diff", folds);
+  });
+  if (box.dataset.hunk) renderAnswers(box.dataset.hunk);
 }
 
 async function openCtx(box, path, lo, hi) {
-  const fd = await loadFileDiff(path);
+  const [fd] = await Promise.all([loadFileDiff(path), foldsFor(path, "diff")]);
   box.classList.add("ctx");
   box.dataset.path = path;
   box.dataset.lo = Math.max(0, lo(fd));
@@ -1746,12 +2184,6 @@ async function openCtx(box, path, lo, hi) {
 }
 
 function onContentChange(e) {
-  const pattern = e.target.closest(".tag-box[data-review]");
-  if (pattern) {
-    toggleReviewed(pattern.dataset.review, pattern.checked);
-    refreshFileDiff();
-    return;
-  }
   const box = e.target.closest("[data-review-hunk]");
   if (!box) return;
   const hunk = box.closest(".hunk");
@@ -1766,9 +2198,20 @@ async function onContentClick(e) {
   const btn = e.target.closest("button");
   if (!btn) return;
   try {
-    if ("foldToggle" in btn.dataset) {
-      const bar = btn.closest(".fold-bar");
-      setFold(bar.dataset.fold, !bar.classList.contains("open"));
+    if ("reviewFoldToggle" in btn.dataset) {
+      const bar = btn.closest(".review-fold");
+      setReviewFold(bar.dataset.reviewFold, !bar.classList.contains("open"));
+    } else if (btn.dataset.fold) {
+      toggleFold(btn.dataset.fold);
+    } else if (btn.dataset.reviewGroup) {
+      const id = btn.dataset.reviewGroup;
+      const on = !state.reviewed.has(id);
+      toggleReviewed(id, on);
+      const g = state.view.groupsById.get(id);
+      if (g) toast(`${on ? "Marked" : "Unmarked"} ${g.kind} ${shortLabel(g.label)} reviewed (${plural(g.unit_ids.length, "match", "matches")}).`);
+      // The pattern page's own checkbox follows.
+      const box = $("#group-reviewed");
+      if (box && location.hash === `#group/${id}`) box.checked = on;
     } else if (btn.dataset.expand) {
       const box = btn.closest(".ctx");
       const fd = await loadFileDiff(box.dataset.path);
@@ -1784,6 +2227,7 @@ async function onContentClick(e) {
       const u = state.report.units[box.dataset.unit];
       if (box.classList.contains("ctx")) {
         box.classList.remove("ctx");
+        box.querySelector("table").classList.remove("foldable");
         box.querySelector("table").innerHTML = unitRows(u);
         btn.textContent = "Show context";
         return;
@@ -1884,7 +2328,7 @@ function renderGroup(id) {
       importsHead = true;
       html += `<h3 class="sub-head">Imports updated for this move</h3>`;
     }
-    html += `<section class="file"><header><span class="path">${esc(path)}</span>
+    html += `<section class="file" data-file-section="${esc(path)}"><header><span class="path">${esc(path)}</span>
       <span class="meta">×${us.length}</span>${fileLinks(path)}</header>`;
     for (const u of us) {
       const where = { oldLine: u.old.length ? u.old_start : null, newLine: u.new.length ? u.new_start : null };
@@ -1966,6 +2410,161 @@ function renderFiles() {
   content.innerHTML = html + "</tbody></table>";
 }
 
+// ---------- code folding ----------
+// Foldable blocks (functions, classes, bodies, literals, import runs) come from the server per
+// file and side. A table is decorated once its rows are in the DOM: each fold's header row
+// gets a chevron in its line-number cell, and the rows inside a collapsed fold get
+// `folded-away`. Collapsed folds are kept in state.folded ("side:path:start") for the session,
+// so re-renders, layout switches and context windows on the same file agree.
+
+const tableFolds = new WeakMap(); // table -> [{key, head, code, rows, lines, changed}]
+
+function loadFolds(path, side) {
+  const key = `${side}:${path}`;
+  if (!state.folds.has(key)) {
+    const url = `/api/report/${state.report.id}/folds?side=${side}&path=${encodeURIComponent(path)}`;
+    // Files the server can't read (one side of an added or deleted file) just don't fold.
+    state.folds.set(key, api(url).then((r) => r.folds, () => []));
+  }
+  return state.folds.get(key);
+}
+
+// The folds a table in `mode` needs: both sides for a diff, one for the original / new file.
+async function foldsFor(path, mode) {
+  const [old, neu] = await Promise.all([
+    mode === "new" ? [] : loadFolds(path, "old"),
+    mode === "old" ? [] : loadFolds(path, "new"),
+  ]);
+  return { old, new: neu };
+}
+
+function rowChanged(tr) {
+  return tr.classList.contains("add") || tr.classList.contains("del")
+    || Boolean(tr.querySelector("td.side.add, td.side.del"));
+}
+
+// Decorate `table` (rows carrying data-o / data-n) with `folds`. A diff folds by its new-side
+// blocks, plus original-side blocks that start on a deleted line; a fold needs both its first
+// and last line on screen (context windows can cut through a block).
+function applyFolds(table, path, mode, folds) {
+  for (const b of table.querySelectorAll(".fold-toggle")) b.remove();
+  const rows = [...table.rows];
+  const at = { o: new Map(), n: new Map() };
+  rows.forEach((tr, i) => {
+    if (tr.dataset.o) at.o.set(Number(tr.dataset.o), i);
+    if (tr.dataset.n) at.n.set(Number(tr.dataset.n), i);
+  });
+  const ranges = [];
+  const heads = new Set();
+  const add = (side, list) => {
+    const s = side === "old" ? "o" : "n";
+    for (const f of list) {
+      const from = at[s].get(f.start), to = at[s].get(f.end);
+      if (from == null || to == null || to <= from || heads.has(from)) continue;
+      const head = rows[from];
+      if (side === "old" && mode === "diff" && head.dataset.n) continue;
+      const code = head.querySelector(`td[data-s="${s}"]`) || head.querySelector("td.text");
+      if (!code) continue;
+      heads.add(from);
+      const inside = rows.slice(from + 1, to + 1);
+      const lines = inside.filter((tr) => tr.dataset.o || tr.dataset.n);
+      ranges.push({
+        key: `${side}:${path}:${f.start}`, head, code, rows: inside,
+        lines: lines.length, changed: lines.filter(rowChanged).length,
+      });
+      // The chevron sits in the line-number cell of the fold's side.
+      let gutter = code.previousElementSibling;
+      if (gutter?.classList.contains("sign")) {
+        gutter = gutter.previousElementSibling;
+        if (mode === "diff" && side === "old" && gutter?.previousElementSibling) gutter = gutter.previousElementSibling;
+      }
+      gutter?.insertAdjacentHTML("afterbegin", `<button type="button" class="fold-toggle" data-fold="${esc(ranges.at(-1).key)}"></button>`);
+      head.classList.add("fold-start");
+      head.classList.toggle("has-changes", ranges.at(-1).changed > 0);
+    }
+  };
+  if (mode !== "old") add("new", folds.new);
+  if (mode !== "new") add("old", folds.old);
+  tableFolds.set(table, ranges);
+  table.classList.toggle("foldable", ranges.length > 0);
+  paintFolds(table);
+}
+
+// Show / hide rows to match state.folded.
+function paintFolds(table) {
+  const ranges = (tableFolds.get(table) || []).filter((r) => r.head.isConnected);
+  const hidden = new Set();
+  for (const r of ranges) {
+    if (state.folded.has(r.key)) for (const tr of r.rows) hidden.add(tr);
+  }
+  for (const tr of table.rows) tr.classList.toggle("folded-away", hidden.has(tr));
+  for (const r of ranges) {
+    const folded = state.folded.has(r.key);
+    r.head.classList.toggle("folded", folded);
+    const btn = r.head.querySelector(".fold-toggle");
+    if (btn) {
+      btn.setAttribute("aria-expanded", String(!folded));
+      btn.setAttribute("aria-label", folded ? "Unfold" : "Fold");
+      btn.title = `${folded ? "Unfold" : "Fold"} (z: fold unchanged blocks / unfold all)`;
+    }
+    if (folded) {
+      r.code.dataset.foldLabel = `⋯ ${plural(r.lines, "line")}${r.changed ? ` · ${r.changed} changed` : ""}`;
+    } else {
+      delete r.code.dataset.foldLabel;
+    }
+  }
+}
+
+function foldTables() {
+  return [...$("#content").querySelectorAll("table.diff")]
+    .filter((t) => tableFolds.get(t)?.some((r) => r.head.isConnected));
+}
+
+function foldRanges() {
+  return foldTables().flatMap((t) => tableFolds.get(t).filter((r) => r.head.isConnected));
+}
+
+function hasFolds() {
+  return foldTables().length > 0;
+}
+
+function repaintFolds() {
+  for (const t of foldTables()) paintFolds(t);
+}
+
+function toggleFold(key) {
+  if (state.folded.has(key)) state.folded.delete(key);
+  else state.folded.add(key);
+  repaintFolds();
+}
+
+// which: "all", "unchanged" (blocks without changed lines) or "none" (unfold everything).
+function foldAll(which) {
+  for (const r of foldRanges()) {
+    if (which === "none") state.folded.delete(r.key);
+    else if (which === "all" || !r.changed) state.folded.add(r.key);
+  }
+  repaintFolds();
+}
+
+// z: fold the unchanged blocks, or unfold everything when something on the page is folded.
+function toggleFolds() {
+  const ranges = foldRanges();
+  if (ranges.some((r) => state.folded.has(r.key))) { foldAll("none"); return; }
+  if (!ranges.some((r) => !r.changed)) { toast("Every block here has changes; nothing to fold."); return; }
+  foldAll("unchanged");
+}
+
+// Unfold every fold that hides `tr` (e.g. the target of a link to a line).
+function unfoldAround(tr) {
+  const table = tr?.closest("table");
+  if (!table || !tr.classList.contains("folded-away")) return;
+  for (const r of tableFolds.get(table) || []) {
+    if (r.rows.includes(tr)) state.folded.delete(r.key);
+  }
+  repaintFolds();
+}
+
 // ---------- file viewer ----------
 
 // The full diff of a file, with pattern tags and units whose patterns are reviewed folded.
@@ -1981,20 +2580,22 @@ async function refreshFileDiff() {
   if (view !== "file" || (mode || "diff") !== "diff" || !table) return;
   const path = decodeURIComponent(id || "");
   if (!state.report.files.some((f) => f.path === path)) return;
-  const open = [...table.querySelectorAll(".fold-bar.open")].map((tr) => tr.dataset.fold);
-  table.innerHTML = fileDiffRows(await loadFileDiff(path), path);
-  for (const u of open) setFold(u, true);
+  const open = [...table.querySelectorAll(".review-fold.open")].map((tr) => tr.dataset.reviewFold);
+  const [fd, folds] = await Promise.all([loadFileDiff(path), foldsFor(path, "diff")]);
+  table.innerHTML = fileDiffRows(fd, path);
+  applyFolds(table, path, "diff", folds);
+  for (const u of open) setReviewFold(u, true);
 }
 
 // Show or hide a folded unit's lines.
-function setFold(unitId, on) {
+function setReviewFold(unitId, on) {
   const content = $("#content");
-  const bar = content.querySelector(`.fold-bar[data-fold="${CSS.escape(unitId)}"]`);
+  const bar = content.querySelector(`.review-fold[data-review-fold="${CSS.escape(unitId)}"]`);
   if (bar) {
     bar.classList.toggle("open", on);
-    bar.querySelector("[data-fold-toggle]").textContent = on ? "Hide" : "Show";
+    bar.querySelector("[data-review-fold-toggle]").textContent = on ? "Hide" : "Show";
   }
-  for (const tr of content.querySelectorAll(`tr[data-fold-units~="${CSS.escape(unitId)}"]`)) tr.classList.toggle("open", on);
+  for (const tr of content.querySelectorAll(`tr[data-review-units~="${CSS.escape(unitId)}"]`)) tr.classList.toggle("open", on);
 }
 
 const MODES = [["diff", "Diff"], ["old", "Original"], ["new", "New"]];
@@ -2004,9 +2605,9 @@ async function renderFileView(path, mode, line) {
   const content = $("#content");
   const hash = location.hash;
   content.innerHTML = `<div class="empty"><span class="spinner"></span> Loading ${esc(path)}…</div>`;
-  let fd;
+  let fd, folds;
   try {
-    fd = await loadFileDiff(path);
+    [fd, folds] = await Promise.all([loadFileDiff(path), foldsFor(path, mode)]);
   } catch (e) {
     showError(e.message);
     return;
@@ -2050,7 +2651,7 @@ async function renderFileView(path, mode, line) {
     <div class="viewer-bar">
       ${backButton()}
       <nav class="tabs" aria-label="File version">${tabs}</nav>
-      ${highlightToggle()}
+      ${issuesToggle()}
       ${mode === "diff" ? layoutToggle(path) : ""}
       <span class="spacer"></span>
       ${fd.status !== "D" ? `<a class="toggle" href="${esc(editorHref(path, line ? Number(line.slice(1)) : 1) || "#")}" title="${EDITOR_TITLE}">Open in editor</a>` : ""}
@@ -2065,14 +2666,11 @@ async function renderFileView(path, mode, line) {
   for (const b of content.querySelectorAll("[data-jump]")) {
     b.addEventListener("click", () => jumpChange(b.dataset.jump === "next" ? 1 : -1));
   }
-  const target = line && nearestRow(content, line[0], Number(line.slice(1)));
-  if (target) {
-    for (const id of (target.dataset.foldUnits || "").split(" ").filter(Boolean)) setFold(id, true);
-    target.classList.add("target");
-    target.scrollIntoView({ block: "center" });
-  } else {
-    window.scrollTo({ top: 0 });
-  }
+  const table = content.querySelector("section.viewer table.diff");
+  if (table) applyFolds(table, path, mode, folds);
+  const target = line ? nearestRow(content, line[0], Number(line.slice(1))) : null;
+  for (const id of (target?.dataset.reviewUnits || "").split(" ").filter(Boolean)) setReviewFold(id, true);
+  showTarget(content, line?.[0], Number(line?.slice(1)));
 }
 
 // Lives in the sticky viewer bar so it stays reachable while scrolling a long file.
@@ -2093,7 +2691,9 @@ function nearestRow(root, side, num) {
 }
 
 function jumpChange(dir) {
-  const starts = [...document.querySelectorAll("#content tr.chg-start")];
+  // A collapsed block with changes inside is a stop of its own; hidden rows have no position.
+  const starts = [...document.querySelectorAll(
+    "#content tr.chg-start:not(.folded-away), #content tr.folded.has-changes:not(.folded-away)")];
   if (!starts.length) return;
   const mid = window.innerHeight / 3;
   const tops = starts.map((el) => el.getBoundingClientRect().top);
@@ -2101,7 +2701,7 @@ function jumpChange(dir) {
     : tops.findLastIndex((t) => t < mid - 2);
   const el = starts[i === -1 ? (dir > 0 ? starts.length - 1 : 0) : i];
   el.scrollIntoView({ block: "start" });
-  window.scrollBy({ top: -mid });
+  scrollMainBy(-mid);
 }
 
 // ---------- keyboard ----------
@@ -2116,11 +2716,13 @@ const KEY_HELP = [
     ["a", "", "ask the AI about the focused hunk"],
   ]],
   ["Navigate", [
+    ["l", "h", "next / previous file"],
     ["]", "[", "next / previous mechanical pattern"],
     ["}", "{", "next / previous commit of the range"],
     ["g r", "g w", "go to Needs review / Warnings"],
     ["g f", "g c", "go to Files / Commits"],
     ["n", "p", "next / previous change in the file viewer"],
+    ["z", "", "fold unchanged blocks; again to unfold all (file viewer, expanded context)"],
     ["/", "", "search"],
   ]],
   ["Other", [
@@ -2136,7 +2738,9 @@ let pendingG = 0;
 
 // The hunks (review page) or occurrences (pattern page) that j/k move between.
 function focusables() {
-  return [...document.querySelectorAll("#content .hunk, #content .occurrence")];
+  const items = [...document.querySelectorAll("#content .hunk, #content .occurrence")];
+  return $("#content").classList.contains("single-file")
+    ? items.filter((x) => x.closest("section.file.current")) : items;
 }
 
 function applyFocus(scroll = true) {
@@ -2152,11 +2756,8 @@ function applyFocus(scroll = true) {
   el.classList.add("kbd-focus");
   if (scroll) {
     const r = el.getBoundingClientRect();
-    const top = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--stick-h")) || 0;
-    const bottom = window.innerHeight - ($("#status").offsetHeight || 0);
-    if (r.top < top + 8 || r.bottom > bottom - 8) {
-      window.scrollBy({ top: r.top - top - 60 });
-    }
+    const { top, bottom } = mainView();
+    if (r.top < top + 8 || r.bottom > bottom - 8) scrollMainBy(r.top - top - 60);
   }
   renderInspector();
   markExplorerFile();
@@ -2269,6 +2870,11 @@ function paletteCommands() {
     { id: "view.files", group: "View", title: "Go to Files", keys: "g f", when: hasReport, run: go("#files") },
     { id: "view.commits", group: "View", title: "Go to Commits", keys: "g c", when: hasReport, run: go("#commits") },
 
+    { id: "view.fold.unchanged", group: "View", title: "Fold unchanged blocks", keys: "z", when: hasFolds,
+      run: () => foldAll("unchanged") },
+    { id: "view.fold.all", group: "View", title: "Fold all blocks", when: hasFolds, run: () => foldAll("all") },
+    { id: "view.fold.none", group: "View", title: "Unfold all blocks", keys: "z", when: hasFolds, run: () => foldAll("none") },
+
     { id: "pane.explorer", group: "Panes", title: `${state.panes.explorer ? "Hide" : "Show"} the explorer`, keys: "\\",
       run: () => setPane("explorer", !state.panes.explorer) },
     { id: "pane.inspector", group: "Panes", title: `${state.panes.inspector ? "Hide" : "Show"} the inspector`, keys: "|",
@@ -2281,10 +2887,20 @@ function paletteCommands() {
       when: () => hasReport() && splitActive(), run: () => setSplit(false) },
     { id: "layout.split", group: "Layout", title: "Diff layout: side by side",
       when: () => hasReport() && !splitActive() && !narrowQuery.matches, run: () => setSplit(true) },
+    { id: "layout.one-file", group: "Layout", title: "Files: one at a time",
+      when: () => hasReport() && !state.singleFile, run: () => setSingleFile(true) },
+    { id: "layout.all-files", group: "Layout", title: "Files: all on one page",
+      when: () => hasReport() && state.singleFile, run: () => setSingleFile(false) },
+    { id: "review.next-file", group: "Review", title: "Next file", keys: "l", when: hasFileSections, run: () => fileStep(1) },
+    { id: "review.prev-file", group: "Review", title: "Previous file", keys: "h", when: hasFileSections, run: () => fileStep(-1) },
     { id: "layout.diff", group: "Layout", title: "Highlighting: diff",
       when: () => hasReport() && state.syntax, run: () => setSyntax(false) },
     { id: "layout.syntax", group: "Layout", title: "Highlighting: syntax",
       when: () => hasReport() && !state.syntax, run: () => setSyntax(true) },
+    { id: "layout.issues.hide", group: "Layout", title: "Code issues: hide underlines",
+      when: () => hasReport() && state.issuesOn, run: () => setIssues(false) },
+    { id: "layout.issues.show", group: "Layout", title: "Code issues: show underlines",
+      when: () => hasReport() && !state.issuesOn, run: () => setIssues(true) },
 
     ...CATEGORIES.map(([cat, label]) => ({
       id: `filter.cat.${cat}`, group: "Filter", title: `${f.hidden.has(cat) ? "Show" : "Hide"} ${label.toLowerCase()} files`,
@@ -2301,7 +2917,7 @@ function paletteCommands() {
     { id: "filter.regex", group: "Filter", title: `Search as ${f.regex ? "plain text" : "regular expression"}`,
       when: hasReport, run: () => toggleFilter("regex") },
     { id: "filter.reset", group: "Filter", title: "Reset filters", when: () => hasReport() && filtersActive(), run: resetFilters },
-    { id: "filter.search", group: "Filter", title: "Focus search", keys: "/", when: hasReport, run: () => $("#search-input")?.focus() },
+    { id: "filter.search", group: "Filter", title: "Focus search", keys: "/", when: hasReport, run: focusSearch },
 
     { id: "review.next", group: "Review", title: "Next hunk", keys: "j", when: reviewing, run: () => moveFocus(1) },
     { id: "review.prev", group: "Review", title: "Previous hunk", keys: "k", when: reviewing, run: () => moveFocus(-1) },
@@ -2492,7 +3108,7 @@ function onKey(e) {
     case "?": showHelp(); break;
     case "\\": setPane("explorer", !state.panes.explorer); break;
     case "|": setPane("inspector", !state.panes.inspector); break;
-    case "/": $("#search-input")?.focus(); e.preventDefault(); break;
+    case "/": focusSearch(); e.preventDefault(); break;
     case "g": pendingG = setTimeout(() => { pendingG = 0; }, 900); break;
     case "]": patternStep(1); break;
     case "[": patternStep(-1); break;
@@ -2500,8 +3116,11 @@ function onKey(e) {
     case "{": if (state.commits.length) commitStep(-1); break;
     case "n": if (inFile) jumpChange(1); break;
     case "p": if (inFile) jumpChange(-1); break;
+    case "h": if (!inFile) fileStep(-1); else return; break;
+    case "l": if (!inFile) fileStep(1); else return; break;
     case "j": if (!inFile) moveFocus(1); else return; break;
     case "k": if (!inFile) moveFocus(-1); else return; break;
+    case "z": if (hasFolds()) toggleFolds(); else return; break;
     case "x": toggleFocusedReviewed(); break;
     case "e": expandFocused(); break;
     case "o": { const at = focusedLocation(); if (at) openInEditor(at.path, at.line); break; }
@@ -2569,19 +3188,25 @@ const hoverHighlight = window.CSS?.highlights && typeof Highlight === "function"
 function setHoverWord(hit) {
   if (!hoverHighlight) return;
   if (!hit) { CSS.highlights.delete("nav-word"); return; }
+  CSS.highlights.set("nav-word", new Highlight(cellRange(hit.cell, hit.start, hit.end)));
+}
+
+// A DOM range over `start..end` (UTF-16 offsets into the cell's text) across its text nodes.
+function cellRange(cell, start, end) {
   const range = document.createRange();
   let pos = 0, started = false;
-  const walker = document.createTreeWalker(hit.cell, NodeFilter.SHOW_TEXT);
+  const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-    if (!started && hit.start < pos + n.length) { range.setStart(n, hit.start - pos); started = true; }
-    if (started && hit.end <= pos + n.length) { range.setEnd(n, hit.end - pos); break; }
+    if (!started && start < pos + n.length) { range.setStart(n, start - pos); started = true; }
+    if (started && end <= pos + n.length) { range.setEnd(n, end - pos); break; }
     pos += n.length;
   }
-  CSS.highlights.set("nav-word", new Highlight(range));
+  return range;
 }
 
 let hoverFrame = 0;
 function onCodeMouseMove(e) {
+  showIssueTitle(e);
   if (!modDown(e)) { document.body.classList.remove("nav-armed"); setHoverWord(null); return; }
   cancelAnimationFrame(hoverFrame);
   hoverFrame = requestAnimationFrame(() => {
@@ -2593,6 +3218,54 @@ function onCodeMouseMove(e) {
 
 function onCodeMouseDown(e) {
   if (modDown(e) && e.target.closest?.("[data-l]")) e.preventDefault(); // no text selection
+}
+
+// Text selection in a diff covers code only: a drag that starts on one side of a split diff
+// stays on that side, and gutters, tags and Ask badges are never part of it (see app.css).
+// `body[data-sel]` names the code column being selected: "o"/"n" (split sides) or "u".
+function codeColumn(td) {
+  if (!td) return null;
+  if (td.classList.contains("no")) td = td.nextElementSibling; // a line number picks its code
+  if (!td) return null;
+  if (td.classList.contains("side-o")) return "o";
+  if (td.classList.contains("side-n")) return "n";
+  return td.classList.contains("text") ? "u" : null;
+}
+
+const CODE_CELLS = { o: "td.side-o", n: "td.side-n", u: "td.text" };
+
+function onSelectStart(e) {
+  if (e.button !== 0 || e.detail > 1) return; // keep the column on double/triple-click
+  const col = codeColumn(e.target.closest?.(".diff td"));
+  if (col) document.body.dataset.sel = col;
+  else delete document.body.dataset.sel;
+}
+
+// Copies the selected code as lines, one per code cell, without whatever the browser would
+// pick up between cells (line numbers, the other side, tabs between table cells).
+function onCodeCopy(e) {
+  const col = document.body.dataset.sel;
+  const sel = window.getSelection();
+  if (!col || !sel.rangeCount || sel.isCollapsed) return;
+  const range = sel.getRangeAt(0);
+  const root = range.commonAncestorContainer;
+  const scope = root.nodeType === 1 ? root : root.parentElement;
+  const inCell = scope.closest(CODE_CELLS[col]);
+  const cells = inCell ? [inCell] : [...scope.querySelectorAll(`.diff ${CODE_CELLS[col]}`)];
+  const lines = [];
+  for (const cell of cells) {
+    if (!range.intersectsNode(cell) || cell.classList.contains("empty")) continue;
+    const r = document.createRange();
+    r.selectNodeContents(cell);
+    if (cell.contains(range.startContainer)) r.setStart(range.startContainer, range.startOffset);
+    if (cell.contains(range.endContainer)) r.setEnd(range.endContainer, range.endOffset);
+    lines.push(r.toString() || null); // null: nothing selected in this cell
+  }
+  while (lines.length && lines[0] === null) lines.shift();
+  while (lines.length && lines.at(-1) === null) lines.pop();
+  if (!lines.length) return;
+  e.preventDefault();
+  e.clipboardData.setData("text/plain", lines.map((l) => l ?? "").join("\n"));
 }
 
 function onCodeClick(e) {
@@ -2759,10 +3432,11 @@ function plainRows(lines, { path = null, side = null, lang = path } = {}) {
 function showTarget(content, side, line) {
   const target = line && nearestRow(content, side, line);
   if (target) {
+    unfoldAround(target);
     target.classList.add("target");
     target.scrollIntoView({ block: "center" });
   } else {
-    window.scrollTo({ top: 0 });
+    scrollMainTo(0);
   }
 }
 
@@ -2773,8 +3447,10 @@ async function renderBrowseView(path, mode, line) {
   const hash = location.hash;
   const side = mode === "old" ? "old" : "new";
   content.innerHTML = `<div class="empty"><span class="spinner"></span> Loading ${esc(path)}…</div>`;
-  let src = null, error = null;
-  try { src = await loadSource(path, side); } catch (e) { error = e.message; }
+  let src = null, error = null, folds = null;
+  try {
+    [src, folds] = await Promise.all([loadSource(path, side), foldsFor(path, side)]);
+  } catch (e) { error = e.message; }
   if (location.hash !== hash) return;
   const tok = line || "";
   const tabs = `<span class="tab disabled" title="This file has no changes in this diff">Diff</span>
@@ -2790,6 +3466,8 @@ async function renderBrowseView(path, mode, line) {
     ${error ? `<div class="empty"><p>${esc(error)}</p></div>`
       : `<section class="file viewer"><table class="diff">${plainRows(src.lines, { path, side: s })}</table></section>`}`;
   $("#back-btn").addEventListener("click", () => history.back());
+  const table = content.querySelector("section.viewer table.diff");
+  if (table) applyFolds(table, path, side, folds);
   showTarget(content, s, Number(tok.slice(1)));
 }
 
@@ -2819,19 +3497,33 @@ async function renderLibraryView(path, line) {
 // sticky panes below them need their actual heights rather than a fixed guess.
 function trackTopbarHeight() {
   const bar = $("#topbar"), toolbar = $("#toolbar"), status = $("#status");
+  // Exact (fractional) heights: rounded ones leave the page a fraction of a pixel taller than
+  // the window, and scrollIntoView then scrolls the page as well as the stream.
+  const height = (el) => (el.hidden ? 0 : el.getBoundingClientRect().height);
   const update = () => {
     const sticky = getComputedStyle(bar).position === "sticky";
-    const top = sticky ? bar.offsetHeight : 0;
-    const tool = toolbar.hidden ? 0 : toolbar.offsetHeight;
     const root = document.documentElement.style;
-    root.setProperty("--topbar-h", `${top}px`);
-    root.setProperty("--toolbar-h", `${tool}px`);
-    root.setProperty("--stick-h", `${top + tool}px`);
-    root.setProperty("--status-h", `${status.hidden ? 0 : status.offsetHeight}px`);
+    root.setProperty("--topbar-h", `${sticky ? height(bar) : 0}px`);
+    root.setProperty("--toolbar-h", `${height(toolbar)}px`);
+    root.setProperty("--status-h", `${height(status)}px`);
   };
   const ro = new ResizeObserver(update);
   ro.observe(bar);
   ro.observe(toolbar);
+  let fitWidth = 0;
+  new ResizeObserver(() => {
+    if (toolbar.clientWidth !== fitWidth) { fitWidth = toolbar.clientWidth; fitToolbar(); }
+  }).observe(toolbar);
+  document.addEventListener("mousedown", (e) => {
+    if (!e.target.closest("#toolbar .tb-more")) setToolbarMenu(false);
+  });
+  document.addEventListener("keydown", (e) => {
+    const more = $("#toolbar .tb-more");
+    if (e.key === "Escape" && more && !more.querySelector(".tb-menu").hidden) {
+      setToolbarMenu(false);
+      more.querySelector(".tb-more-btn").focus();
+    }
+  }, true);
   ro.observe(status);
   window.addEventListener("resize", update);
   update();
@@ -2878,13 +3570,20 @@ async function init() {
   window.addEventListener("hashchange", closeAskMenu);
   $("#ai-chip").addEventListener("click", (e) => { e.preventDefault(); showSettings(); });
   $("#content").addEventListener("mousedown", onCodeMouseDown);
+  document.addEventListener("mousedown", onSelectStart);
+  document.addEventListener("copy", onCodeCopy);
   $("#content").addEventListener("mousemove", onCodeMouseMove);
   document.addEventListener("keyup", (e) => {
     if (e.key === "Meta" || e.key === "Control") { document.body.classList.remove("nav-armed"); setHoverWord(null); }
   });
   loadLayout();
   loadSyntax();
+  loadIssuesPref();
+  watchIssues();
+  loadSingleFile();
   loadPanes();
+  loadPaneWidths();
+  initPaneResizers();
   trackTopbarHeight();
   narrowQuery.addEventListener("change", () => { if (state.report) rerender(); });
   window.addEventListener("hashchange", route);
@@ -2901,7 +3600,9 @@ async function init() {
     initPrefs(cfg.prefs);
     loadLayout();
     loadSyntax();
+    loadSingleFile();
     loadPanes();
+    loadPaneWidths();
   } catch {}
   setMode(defaults.mode || "refs");
   const form = $("#source-form");
@@ -2918,7 +3619,8 @@ async function init() {
 
 // ---------- Ask: AI help on a hunk or a line ----------
 // An Ask link on every hunk bar and a badge on hovered diff lines open a menu of predefined
-// tasks (plus a custom prompt). The answer streams into a band under the hunk; it lives in
+// tasks (plus a custom prompt). The answer streams in right where Ask was clicked: under the
+// hunk bar, or as a row below the asked-about line. It lives in
 // state.answers for this browser session only. Settings (provider, key, model) are on the
 // server in ~/.config/refactor-diff/settings.json; the top-bar chip shows what will be used.
 
@@ -2973,10 +3675,7 @@ function answersOf(hunkId) {
   return state.answers.get(hunkId) || [];
 }
 
-// The answer band under a hunk, from state (so re-renders keep it).
-function answersHtml(hunkId) {
-  const list = answersOf(hunkId);
-  if (!list.length) return "";
+function bandHtml(list) {
   return `<div class="ai-band">${list.map(answerHtml).join("")}</div>`;
 }
 
@@ -3095,13 +3794,33 @@ function hunkElement(hunkId) {
   return document.querySelector(`#content .hunk[data-hunk="${CSS.escape(hunkId)}"]`);
 }
 
-// Re-render the band of one hunk (and the answers count on its bar) from state.
+// The diff row showing `side` line `line` of `path` in a hunk (or its context window).
+function answerRow(el, { path, side, line }) {
+  const s = side === "old" ? "o" : "n";
+  const cell = [...el.querySelectorAll(`.diff td[data-s="${s}"][data-l="${line}"]`)].find((td) => td.dataset.p === path);
+  return cell?.closest("tr") || null;
+}
+
+// Re-render the answers of one hunk (and the answers count on its bar) from state. Answers to
+// a line go in a full-width row right below that line; answers to the hunk (or to a line no
+// longer on screen) go in a band right below the hunk bar.
 function renderAnswers(hunkId) {
   const el = hunkElement(hunkId);
   if (!el) return;
-  el.querySelector(".ai-band")?.remove();
-  const html = answersHtml(hunkId);
-  if (html) el.insertAdjacentHTML("beforeend", html);
+  el.querySelectorAll(".ai-band, tr.ai-row").forEach((x) => x.remove());
+  const top = [];
+  const byRow = new Map();
+  for (const a of answersOf(hunkId)) {
+    const row = a.focus.onLine ? answerRow(el, a.focus) : null;
+    if (!row) { top.push(a); continue; }
+    if (!byRow.has(row)) byRow.set(row, []);
+    byRow.get(row).push(a);
+  }
+  for (const [row, list] of byRow) {
+    const cols = [...row.cells].reduce((n, td) => n + td.colSpan, 0);
+    row.insertAdjacentHTML("afterend", `<tr class="ai-row"><td colspan="${cols}">${bandHtml(list)}</td></tr>`);
+  }
+  if (top.length) el.querySelector(".hunk-bar").insertAdjacentHTML("afterend", bandHtml(top));
   const badge = el.querySelector("[data-answers-badge]");
   const n = answersOf(hunkId).length;
   if (badge) {
@@ -3128,7 +3847,7 @@ function openAskMenu(hunkEl, anchor, { side = null, line = null } = {}) {
   const h = state.report.hunks[hunkEl.dataset.hunk];
   let focus;
   if (line) {
-    focus = { path: h.path, side: side === "o" ? "old" : "new", line };
+    focus = { path: h.path, side: side === "o" ? "old" : "new", line, onLine: true };
   } else {
     const at = hunkAnchor(h);
     focus = { path: h.path, side: at.new_no ? "new" : "old", line: at.new_no || at.old_no || h.new_start };
@@ -3377,7 +4096,7 @@ async function onAskClick(btn) {
   if ("hunkAsk" in btn.dataset) {
     openAskMenu(btn.closest(".hunk"), btn);
   } else if ("askLine" in btn.dataset) {
-    openAskMenu(btn.closest(".hunk"), btn, { side: btn.dataset.s, line: Number(btn.dataset.l) });
+    openAskMenu(btn.closest(".hunk"), btn, { side: btn.dataset.sd, line: Number(btn.dataset.ln) });
   } else if (a && "aiStop" in btn.dataset) {
     a.controller?.abort();
   } else if (a && "aiDismiss" in btn.dataset) {

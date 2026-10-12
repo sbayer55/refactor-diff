@@ -1,11 +1,13 @@
-//! Whole files: `/api/report/{id}/file` (a changed file's diff) and
-//! `/api/report/{id}/source` (any file at one side's revision).
+//! Whole files: `/api/report/{id}/file` (a changed file's diff),
+//! `/api/report/{id}/source` (any file at one side's revision) and
+//! `/api/report/{id}/issues` (code issues in such a file, for the viewer's underlines) and
+//! `/api/report/{id}/folds` (its foldable blocks).
 
 use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use refactor_diff_core::{FileDiff, file_diff, split_lines};
+use refactor_diff_core::{FileDiff, file_diff, find_folds, find_issues, split_lines};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -45,7 +47,58 @@ pub async fn get_source(
     Path(report_id): Path<String>,
     Query(query): Query<SourceQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let report = state.report(&report_id)?;
+    let (side, path, text) = read_side_file(state, &report_id, query).await?;
+    Ok(Json(json!({
+        "path": path,
+        "side": side.as_str(),
+        "lines": split_lines(&text),
+    })))
+}
+
+/// Code issues (unused names, unreachable code, syntax errors) in a file at one side's
+/// revision (`?side=old|new&path=`). Separate from the report's refactor warnings.
+pub async fn get_issues(
+    State(state): State<Arc<AppState>>,
+    Path(report_id): Path<String>,
+    Query(query): Query<SourceQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let (side, path, text) = read_side_file(state, &report_id, query).await?;
+    let issues = {
+        let path = path.clone();
+        run_blocking(move || find_issues(&path, &text)).await?
+    };
+    Ok(Json(json!({
+        "path": path,
+        "side": side.as_str(),
+        "issues": issues,
+    })))
+}
+
+/// Foldable blocks (functions, classes, bodies, literals, import runs) in a file at one side's
+/// revision (`?side=old|new&path=`), for the viewer's fold toggles.
+pub async fn get_folds(
+    State(state): State<Arc<AppState>>,
+    Path(report_id): Path<String>,
+    Query(query): Query<SourceQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let (side, path, text) = read_side_file(state, &report_id, query).await?;
+    let folds = {
+        let path = path.clone();
+        run_blocking(move || find_folds(&path, &text)).await?
+    };
+    Ok(Json(json!({
+        "path": path,
+        "side": side.as_str(),
+        "folds": folds,
+    })))
+}
+
+async fn read_side_file(
+    state: Arc<AppState>,
+    report_id: &str,
+    query: SourceQuery,
+) -> Result<(Side, String, String), ApiError> {
+    let report = state.report(report_id)?;
     let side = query
         .side
         .as_deref()
@@ -54,19 +107,15 @@ pub async fn get_source(
     let sha = side.sha(&report).map(str::to_string);
     let path = query.path;
     let st = state.clone();
-    let texts = {
+    let mut texts = {
         let path = path.clone();
         run_blocking(move || st.git.read_files(sha.as_deref(), &[path.as_str()])).await??
     };
-    let Some(text) = texts.get(&path) else {
+    let Some(text) = texts.remove(&path) else {
         return Err(ApiError::NotFound(format!(
             "{path} doesn't exist in the {} version.",
             side.name()
         )));
     };
-    Ok(Json(json!({
-        "path": path,
-        "side": side.as_str(),
-        "lines": split_lines(text),
-    })))
+    Ok((side, path, text))
 }

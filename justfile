@@ -77,14 +77,25 @@ pin-python:
 desktop-setup:
     cd "{{ desktop }}" && npm install
 
-# Generate src-tauri/icons from app-icon.svg (needed once before the first build)
+# Regenerate src-tauri/icons (checked in) after changing app-icon.svg
 [group('desktop')]
 desktop-icons:
     cd "{{ desktop }}" && npm run icons
 
+# Install the Tauri CLI when node_modules is missing or older than package-lock.json
+[private]
+desktop-deps:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v npm >/dev/null || { echo "npm not found: install Node.js (e.g. brew install node)" >&2; exit 1; }
+    cd "{{ desktop }}"
+    if [ ! -x node_modules/.bin/tauri ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
+        npm install
+    fi
+
 # Run the desktop app with the in-process server (RUST_LOG=debug for more output)
 [group('desktop')]
-desktop-dev:
+desktop-dev: desktop-deps
     cd "{{ desktop }}" && npm run dev
 
 # Lint the desktop crate (not part of `rs-lint`: it needs Tauri's system libraries)
@@ -94,12 +105,12 @@ desktop-lint:
 
 # Build the macOS app and dmg for this machine's architecture
 [group('desktop')]
-desktop-build: desktop-clean-bundle
+desktop-build: desktop-deps desktop-clean-bundle
     cd "{{ desktop }}" && npm run build
 
 # Build a universal (Apple Silicon + Intel) app and dmg
 [group('desktop')]
-desktop-build-universal: desktop-clean-bundle
+desktop-build-universal: desktop-deps desktop-clean-bundle
     rustup target add aarch64-apple-darwin x86_64-apple-darwin
     cd "{{ desktop }}" && npm run tauri -- build --target universal-apple-darwin
 
