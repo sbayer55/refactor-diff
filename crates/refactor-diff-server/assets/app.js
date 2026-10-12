@@ -780,6 +780,7 @@ function renderExplorer() {
       e.stopPropagation();
       toggleReviewed(cb.dataset.review, cb.checked);
       if (location.hash === "#group/" + cb.dataset.review) route({ keepScroll: true });
+      else refreshFileDiff();
     });
   }
   markExplorerFile();
@@ -1242,12 +1243,29 @@ function shortLabel(label) {
 const VERIFIED_TITLE = "Verified: the enclosing statement parses to the same program on both sides "
   + "once the diff's renames are applied (docstrings and type annotations ignored).";
 
-function unitTags(unit) {
+// The visible mechanical patterns a unit belongs to.
+function unitPatterns(unit) {
+  return unit.signatures.map((key) => state.groupsByKey.get(key))
+    .filter((g) => g && g.mechanical && state.view.groupsById.has(g.id));
+}
+
+// A unit is reviewed when it is fully explained by patterns that are all marked reviewed.
+function unitReviewed(unit) {
+  const pats = unitPatterns(unit);
+  return unit.explained && pats.length > 0 && pats.every((g) => state.reviewed.has(g.id));
+}
+
+// `boxes` puts a reviewed checkbox before each pattern tag (the file viewer).
+function unitTags(unit, { boxes = false } = {}) {
   const tags = unit.signatures.map((key) => {
     const g = state.groupsByKey.get(key);
     if (!g || !state.view.groupsById.has(g.id)) return "";
     if (g.mechanical) {
-      return `<a class="tag" href="#group/${g.id}">${esc(g.kind)}: <span class="code">${esc(shortLabel(g.label))}</span></a>`;
+      const done = state.reviewed.has(g.id);
+      const tag = `<a class="tag${done ? " reviewed" : ""}" href="#group/${g.id}"${done ? ' title="Pattern reviewed"' : ""}>${
+        done ? "✓ " : ""}${esc(g.kind)}: <span class="code">${esc(shortLabel(g.label))}</span></a>`;
+      return boxes ? `<span class="tag-pick"><input type="checkbox" class="tag-box" data-review="${g.id}" ${
+        done ? "checked" : ""} aria-label="Mark pattern reviewed">${tag}</span>` : tag;
     }
     return `<span class="tag unique">unique ${esc(g.kind)}: <span class="code">${esc(shortLabel(g.label))}</span></span>`;
   });
@@ -1378,16 +1396,29 @@ function lineState(ln, focus) {
 
 // Pattern tags go above the first line of each unit that isn't dimmed-out or focused.
 // `lead` empty cells line the tags up with the code column, which spans `span` columns.
-function tagRow(st, tagged, lead, span) {
+// With `fold` (the file viewer), tags get reviewed checkboxes, and a unit whose patterns are
+// all reviewed gets a bar that shows or hides its folded lines instead.
+function tagRow(st, tagged, lead, span, fold = false) {
   if (!st.unit || st.hidden || st.focused || tagged.has(st.unit.id)) return "";
   tagged.add(st.unit.id);
-  const t = unitTags(st.unit);
-  return t ? `<tr class="tags">${"<td></td>".repeat(lead)}<td colspan="${span}">${t}</td></tr>` : "";
+  const t = unitTags(st.unit, { boxes: fold });
+  if (!t) return "";
+  const cells = "<td></td>".repeat(lead);
+  if (fold && isFolded(st)) {
+    const n = st.unit.old.length + st.unit.new.length;
+    return `<tr class="tags fold-bar" data-fold="${st.unit.id}">${cells}<td colspan="${span}">${t}<span class="fold-act"><span class="fold-n">${
+      plural(n, "line")} reviewed</span><button type="button" class="link" data-fold-toggle>Show</button></span></td></tr>`;
+  }
+  return `<tr class="tags">${cells}<td colspan="${span}">${t}</td></tr>`;
+}
+
+function isFolded(st) {
+  return Boolean(st.unit) && !st.hidden && unitReviewed(st.unit);
 }
 
 // `anchors` adds data-o / data-n line attributes and marks where each run of changes starts
 // (used by the file viewer for jumping to a line and between changes).
-function unifiedRows(lines, { tags = false, focus = null, anchors = false, path = null, syntax = null, ask = false } = {}) {
+function unifiedRows(lines, { tags = false, focus = null, anchors = false, path = null, syntax = null, ask = false, fold = false } = {}) {
   const sx = syntax || syntaxSpans(lines, path);
   const plain = oneSided(path);
   const tagged = new Set();
@@ -1396,12 +1427,13 @@ function unifiedRows(lines, { tags = false, focus = null, anchors = false, path 
   const span = ask ? 2 : 1;
   for (const ln of lines) {
     const st = lineState(ln, focus);
-    if (tags) rows += tagRow(st, tagged, 3, span);
+    if (tags) rows += tagRow(st, tagged, 3, span, fold);
     if (ln.from) { rows += fromRow(ln, 3, span); continue; }
-    const changed = ln.t !== " ";
-    const attrs = anchors ? anchorAttrs(ln.o, ln.n) : "";
+    const folded = fold && isFolded(st);
+    const changed = ln.t !== " " && !folded;
+    const attrs = (anchors ? anchorAttrs(ln.o, ln.n) : "") + (folded ? ` data-fold-units="${st.unit.id}"` : "");
     const p = ln.path || path;
-    rows += `<tr class="${st.cls}${st.dim ? " explained" : ""}${st.focused ? " focus" : ""}${
+    rows += `<tr class="${st.cls}${st.dim ? " explained" : ""}${st.focused ? " focus" : ""}${folded ? " folded" : ""}${
       anchors && changed && !prevChanged ? " chg-start" : ""}"${attrs}>
       <td class="no">${ln.o ?? ""}</td><td class="no">${ln.n ?? ""}</td>
       <td class="sign">${ln.t === " " ? "" : ln.t}</td>
@@ -1426,7 +1458,7 @@ function fromRow(ln, lead, span) {
 
 // Side by side: removed lines on the left, added lines on the right, paired in order within
 // each block of changes; unchanged lines appear on both sides.
-function splitRows(lines, { tags = false, focus = null, anchors = false, path = null, syntax = null, ask = false } = {}) {
+function splitRows(lines, { tags = false, focus = null, anchors = false, path = null, syntax = null, ask = false, fold = false } = {}) {
   const sx = syntax || syntaxSpans(lines, path);
   const tagged = new Set();
   let rows = "";
@@ -1443,13 +1475,17 @@ function splitRows(lines, { tags = false, focus = null, anchors = false, path = 
   for (const [left, right] of pairLines(lines)) {
     if (tags) {
       for (const ln of left === right ? [left] : [left, right].filter(Boolean)) {
-        rows += tagRow(lineState(ln, focus), tagged, 1, span);
+        rows += tagRow(lineState(ln, focus), tagged, 1, span, fold);
       }
     }
     if (left && left.from) { rows += fromRow(left, 1, span); continue; }
-    const changed = left !== right;
-    const attrs = anchors ? anchorAttrs(left?.o, right?.n) : "";
-    rows += `<tr class="split-row${anchors && changed && !prevChanged ? " chg-start" : ""}"${attrs}>${
+    // A pair is folded only when every line in it belongs to a folded unit.
+    const sides = left === right ? [left] : [left, right].filter(Boolean);
+    const folded = fold && left !== right && sides.every((ln) => isFolded(lineState(ln, focus)));
+    const changed = left !== right && !folded;
+    const attrs = (anchors ? anchorAttrs(left?.o, right?.n) : "")
+      + (folded ? ` data-fold-units="${[...new Set(sides.map((ln) => ln.unit))].join(" ")}"` : "");
+    rows += `<tr class="split-row${folded ? " folded" : ""}${anchors && changed && !prevChanged ? " chg-start" : ""}"${attrs}>${
       cell(left, "old")}${cell(right, "new")}${ask ? askCell(right ? "n" : "o", right ? right.n : left?.o, changed) : ""}</tr>`;
     prevChanged = changed;
   }
@@ -1710,6 +1746,12 @@ async function openCtx(box, path, lo, hi) {
 }
 
 function onContentChange(e) {
+  const pattern = e.target.closest(".tag-box[data-review]");
+  if (pattern) {
+    toggleReviewed(pattern.dataset.review, pattern.checked);
+    refreshFileDiff();
+    return;
+  }
   const box = e.target.closest("[data-review-hunk]");
   if (!box) return;
   const hunk = box.closest(".hunk");
@@ -1724,7 +1766,10 @@ async function onContentClick(e) {
   const btn = e.target.closest("button");
   if (!btn) return;
   try {
-    if (btn.dataset.expand) {
+    if ("foldToggle" in btn.dataset) {
+      const bar = btn.closest(".fold-bar");
+      setFold(bar.dataset.fold, !bar.classList.contains("open"));
+    } else if (btn.dataset.expand) {
       const box = btn.closest(".ctx");
       const fd = await loadFileDiff(box.dataset.path);
       const lo = Number(box.dataset.lo), hi = Number(box.dataset.hi);
@@ -1923,6 +1968,35 @@ function renderFiles() {
 
 // ---------- file viewer ----------
 
+// The full diff of a file, with pattern tags and units whose patterns are reviewed folded.
+function fileDiffRows(fd, path) {
+  return diffRows(fd.lines, { anchors: true, path, tags: true, fold: true });
+}
+
+// Re-render the open file diff in place (keeps the scroll position), e.g. after a pattern's
+// reviewed mark changes.
+async function refreshFileDiff() {
+  const [view, id, mode] = location.hash.replace(/^#/, "").split("/");
+  const table = $("#content section.viewer table.diff");
+  if (view !== "file" || (mode || "diff") !== "diff" || !table) return;
+  const path = decodeURIComponent(id || "");
+  if (!state.report.files.some((f) => f.path === path)) return;
+  const open = [...table.querySelectorAll(".fold-bar.open")].map((tr) => tr.dataset.fold);
+  table.innerHTML = fileDiffRows(await loadFileDiff(path), path);
+  for (const u of open) setFold(u, true);
+}
+
+// Show or hide a folded unit's lines.
+function setFold(unitId, on) {
+  const content = $("#content");
+  const bar = content.querySelector(`.fold-bar[data-fold="${CSS.escape(unitId)}"]`);
+  if (bar) {
+    bar.classList.toggle("open", on);
+    bar.querySelector("[data-fold-toggle]").textContent = on ? "Hide" : "Show";
+  }
+  for (const tr of content.querySelectorAll(`tr[data-fold-units~="${CSS.escape(unitId)}"]`)) tr.classList.toggle("open", on);
+}
+
 const MODES = [["diff", "Diff"], ["old", "Original"], ["new", "New"]];
 
 async function renderFileView(path, mode, line) {
@@ -1951,7 +2025,7 @@ async function renderFileView(path, mode, line) {
   const counts = mode === "old" ? plural(fd.old_lines, "line") : mode === "new" ? plural(fd.new_lines, "line")
     : `<span class="adds">+${fd.lines.filter((l) => l.t === "+").length}</span> <span class="dels">−${fd.lines.filter((l) => l.t === "-").length}</span>`;
 
-  let body = mode === "diff" ? diffRows(rows, { anchors: true, path }) : "";
+  let body = mode === "diff" ? fileDiffRows(fd, path) : "";
   let prevChanged = false;
   const sx = syntaxSpans(rows, path);
   const plain = oneSided(path);
@@ -1993,6 +2067,7 @@ async function renderFileView(path, mode, line) {
   }
   const target = line && nearestRow(content, line[0], Number(line.slice(1)));
   if (target) {
+    for (const id of (target.dataset.foldUnits || "").split(" ").filter(Boolean)) setFold(id, true);
     target.classList.add("target");
     target.scrollIntoView({ block: "center" });
   } else {
