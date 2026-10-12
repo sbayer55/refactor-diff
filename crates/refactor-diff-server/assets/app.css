@@ -443,6 +443,12 @@ a.tag:hover { color: var(--text); }
 .tag.pattern.reviewed .tag-review { color: var(--ok-fg); }
 .tag.unique { background: var(--warn-bg); color: var(--warn-fg); }
 .tag.verified { background: var(--ok-bg); color: var(--ok-fg); }
+.diff tr.review-folded:not(.open) { display: none; }
+.diff tr.review-fold:not(.open) td { border-bottom: 1px dashed var(--border); }
+.review-fold-act { white-space: nowrap; }
+.review-fold .review-fold-n { font: 11px var(--sans); color: var(--muted); margin-right: 10px; }
+.review-fold .link { font-family: var(--sans); font-size: 11.5px; color: var(--muted); }
+.review-fold .link:hover { color: var(--accent); }
 .tag.near { background: var(--warn-bg); color: var(--warn-fg); border: 1px dashed var(--warn-fg); }
 .diff tr.tags td .from { font-size: 11px; color: var(--muted); font-family: var(--sans); }
 .sub-head { font: 500 11px var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin: 16px 0 6px; }
