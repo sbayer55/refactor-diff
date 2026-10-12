@@ -1,12 +1,13 @@
 //! Whole files: `/api/report/{id}/file` (a changed file's diff),
 //! `/api/report/{id}/source` (any file at one side's revision) and
-//! `/api/report/{id}/issues` (code issues in such a file, for the viewer's underlines).
+//! `/api/report/{id}/issues` (code issues in such a file, for the viewer's underlines) and
+//! `/api/report/{id}/folds` (its foldable blocks).
 
 use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use refactor_diff_core::{FileDiff, file_diff, find_issues, split_lines};
+use refactor_diff_core::{FileDiff, file_diff, find_folds, find_issues, split_lines};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -70,6 +71,25 @@ pub async fn get_issues(
         "path": path,
         "side": side.as_str(),
         "issues": issues,
+    })))
+}
+
+/// Foldable blocks (functions, classes, bodies, literals, import runs) in a file at one side's
+/// revision (`?side=old|new&path=`), for the viewer's fold toggles.
+pub async fn get_folds(
+    State(state): State<Arc<AppState>>,
+    Path(report_id): Path<String>,
+    Query(query): Query<SourceQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let (side, path, text) = read_side_file(state, &report_id, query).await?;
+    let folds = {
+        let path = path.clone();
+        run_blocking(move || find_folds(&path, &text)).await?
+    };
+    Ok(Json(json!({
+        "path": path,
+        "side": side.as_str(),
+        "folds": folds,
     })))
 }
 
