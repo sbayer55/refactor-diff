@@ -8,6 +8,8 @@ level, collapses the repeated mechanical edits into patterns such as
 `rename get_user → fetch_user ×42 in 17 files`, and shows you only the leftover changes
 that need a real review.
 
+![Needs review: a rename, a retype and a layout change are dimmed and tagged, leaving one real logic change to read](docs/screenshots/needs-review.png)
+
 It analyzes **Python, TypeScript and JavaScript** (`.py`, `.pyi`, `.ts`, `.tsx`, `.mts`,
 `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`). Other changed files are listed but not collapsed.
 Support for more languages is planned (see [Roadmap](#roadmap)).
@@ -48,12 +50,12 @@ with the command that installs each one.
   and shortcut list from the menu bar.
 
 Building it requires Rust, Node (for the Tauri CLI only), the Xcode command line tools and
-[just](https://just.systems):
+[just](https://just.systems). The run and build recipes install the Tauri CLI first when it's
+missing, so a fresh clone needs nothing else:
 
 ```bash
-just desktop-setup            # npm install for the Tauri CLI
-just desktop-icons            # once: generates src-tauri/icons from app-icon.svg
 just desktop-dev              # run it
+just desktop-icons            # regenerate src-tauri/icons after changing app-icon.svg
 just desktop-test             # the shell's Rust unit tests (desktop-lint: fmt and clippy)
 just desktop-build            # bundles target/release/bundle/{macos,dmg}
 just desktop-build-universal  # Apple Silicon + Intel in one app
@@ -116,11 +118,15 @@ bar** along the bottom.
   file. Tick **Reviewed** as you go.
   A moved block is one pattern: its page shows the block as a diff from where it came from,
   followed by the import lines that changed because of the move.
+
+  ![A rename pattern: every occurrence grouped by file, with what was verified and where it was applied](docs/screenshots/pattern.png)
 - **✓ verified**: a change whose enclosing statement is provably the same program on both
   sides (see [Verification](#verification)). The status bar counts them.
 - **≈ almost …**: a leftover change that nearly matches a pattern — usually a typo. The
   **Only near misses** filter shows just those.
 - **Warnings**: places where the refactor may be incomplete or inconsistent (see below).
+
+  ![Warnings: references to a renamed function that no longer exists](docs/screenshots/warnings.png)
 - **Files**: every changed file, with its status, kind and whether it was analyzed.
 - **Commits**: when the range has more than one commit, the list of commits with their
   sizes. **Analyze** one to review it against its parent on its own — a refactor PR often has
@@ -153,10 +159,13 @@ The menu greys out what doesn't apply (a line outside any function, a working tr
 commits) and says why. What the model sees is what refactor-diff already knows: the hunk with
 its pattern annotations, the enclosing function at both revisions, references from code
 navigation, the commits that touched the line, the pull request description, and the list of
-mechanical patterns. The answer streams into a band under the hunk; `L21` / `O20` references in
-it highlight those rows of the diff, and `path:line` mentions link to the file viewer. You can
+mechanical patterns. The answer streams in right where you asked: below the hunk bar for a
+question about the hunk, or below the line for a question about a line. `L21` / `O20` references
+in it highlight those rows of the diff, and `path:line` mentions link to the file viewer. You can
 ask a follow-up, copy the answer, or (for a pull request) turn it into a review comment. Answers
 last for the browser session only.
+
+![An answer streamed in right below the line it is about](docs/screenshots/ask-ai.png)
 
 Nothing is sent until you pick a question. The provider in use is always visible: as a chip in
 the top bar, in the menu header, and on every answer. Click the chip to open **Settings** and
@@ -198,6 +207,8 @@ occurrences shows **+N** in the explorer's Patterns tab.
   context and the full-file diff) between unified and side-by-side layout. The toggle is in
   the toolbar above the diffs and in the file viewer. Your choice is remembered. Added and
   deleted files, which have only one side, and windows narrower than 760px always use unified.
+
+![The file viewer showing a full diff side by side](docs/screenshots/split-view.png)
 
 ### Filtering
 
@@ -245,6 +256,8 @@ next unreviewed hunk), `e` to show its context and then reveal more, `o` to open
 editor, `]` / `[` to step through the mechanical patterns, `g r` / `g w` / `g f` to jump to
 Needs review / Warnings / Files, and `/` to search. In the file viewer `n` / `p` move between
 changes.
+
+![The command palette](docs/screenshots/command-palette.png)
 
 ### Open in editor
 

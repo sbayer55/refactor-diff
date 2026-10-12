@@ -1298,6 +1298,7 @@ function renderReview() {
     html += "</section>";
   }
   content.innerHTML = html;
+  for (const hunkId of state.answers.keys()) renderAnswers(hunkId);
 }
 
 function hunkHtml(h) {
@@ -1314,7 +1315,7 @@ function hunkHtml(h) {
       ${state.report.source.pr ? `<button type="button" class="link" data-hunk-comment title="Comment on this hunk in the PR (c)">Comment</button>` : ""}
       <button type="button" class="link" data-hunk-open>${done ? "Show" : "Hide"}</button>
       <button type="button" class="link" data-hunk-context>Show context</button></div>
-    <table class="diff">${hunkRows(h)}</table>${answersHtml(h.id)}</div>`;
+    <table class="diff">${hunkRows(h)}</table></div>`;
 }
 
 // What changed since the previous analysis of the same comparison (new commits pushed).
@@ -1548,6 +1549,98 @@ function setPane(name, on) {
   applyPanes();
 }
 
+// Pane widths, set by dragging the strip between a pane and the diff (or with the arrow keys
+// when it has focus); double-click resets. Kept as CSS variables on <body>.
+const PANE_WIDTH = {
+  explorer: { def: 272, min: 180, max: 560 },
+  inspector: { def: 316, min: 240, max: 640 },
+};
+const MIN_STREAM = 420;
+// The widths asked for; what's shown can be less when the window is too narrow for them.
+const paneWant = { explorer: PANE_WIDTH.explorer.def, inspector: PANE_WIDTH.inspector.def };
+
+function loadPaneWidths() {
+  let saved = {};
+  try { saved = JSON.parse(prefGet("refactor-diff:pane-widths") || "{}"); } catch {}
+  for (const name of Object.keys(PANE_WIDTH)) {
+    paneWant[name] = Number(saved[name]) || PANE_WIDTH[name].def;
+  }
+  applyPaneWidths();
+}
+
+function applyPaneWidths() {
+  for (const name of Object.keys(PANE_WIDTH)) applyPaneWidth(name, paneWant[name]);
+}
+
+function paneWidth(name) {
+  return parseFloat(document.body.style.getPropertyValue(`--${name}-w`)) || PANE_WIDTH[name].def;
+}
+
+// Clamp to the pane's limits and leave the diff at least MIN_STREAM pixels.
+function applyPaneWidth(name, px) {
+  const { min, max } = PANE_WIDTH[name];
+  const other = name === "explorer" ? "inspector" : "explorer";
+  const otherW = $(`#${other}`)?.offsetWidth || 0;
+  const room = window.innerWidth - otherW - MIN_STREAM;
+  const w = Math.round(Math.max(min, Math.min(max, room, px)));
+  document.body.style.setProperty(`--${name}-w`, `${w}px`);
+  const handle = document.querySelector(`[data-resize="${name}"]`);
+  if (handle) {
+    handle.setAttribute("aria-valuenow", String(w));
+    handle.setAttribute("aria-valuemin", String(min));
+    handle.setAttribute("aria-valuemax", String(max));
+  }
+  return w;
+}
+
+// Record what's shown for `name` as the width asked for, and save it.
+function savePaneWidth(name) {
+  paneWant[name] = paneWidth(name);
+  const widths = {};
+  for (const n of Object.keys(PANE_WIDTH)) if (paneWant[n] !== PANE_WIDTH[n].def) widths[n] = paneWant[n];
+  prefSet("refactor-diff:pane-widths", JSON.stringify(widths));
+}
+
+function initPaneResizers() {
+  for (const handle of document.querySelectorAll("[data-resize]")) {
+    const name = handle.dataset.resize;
+    handle.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      handle.setPointerCapture(e.pointerId);
+      const startX = e.clientX, startW = paneWidth(name);
+      // Dragging right widens the explorer and narrows the inspector.
+      const sign = name === "explorer" ? 1 : -1;
+      handle.classList.add("dragging");
+      document.body.classList.add("resizing");
+      const move = (ev) => applyPaneWidth(name, startW + sign * (ev.clientX - startX));
+      const up = () => {
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", up);
+        handle.removeEventListener("pointercancel", up);
+        handle.classList.remove("dragging");
+        document.body.classList.remove("resizing");
+        savePaneWidth(name);
+      };
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", up);
+      handle.addEventListener("pointercancel", up);
+    });
+    handle.addEventListener("dblclick", () => { applyPaneWidth(name, PANE_WIDTH[name].def); savePaneWidth(name); });
+    handle.addEventListener("keydown", (e) => {
+      const grow = name === "explorer" ? "ArrowRight" : "ArrowLeft";
+      const shrink = name === "explorer" ? "ArrowLeft" : "ArrowRight";
+      if (e.key !== grow && e.key !== shrink) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const step = e.shiftKey ? 64 : 16;
+      applyPaneWidth(name, paneWidth(name) + (e.key === grow ? step : -step));
+      savePaneWidth(name);
+    });
+  }
+  window.addEventListener("resize", applyPaneWidths);
+}
+
 function applyPanes() {
   for (const name of ["explorer", "inspector"]) {
     const on = state.panes[name];
@@ -1556,6 +1649,7 @@ function applyPanes() {
     btn.setAttribute("aria-pressed", String(on));
     btn.title = `${on ? "Hide" : "Show"} the ${name} (${name === "explorer" ? "\\" : "|"})`;
   }
+  applyPaneWidths();
 }
 
 function loadSyntax() {
@@ -1698,6 +1792,7 @@ function renderCtx(box, fd) {
   const rest = fd.lines.length - hi;
   if (rest > 0) rows += `<tr class="expand"><td colspan="4">${more("down", Math.min(CTX_STEP, rest))}${rest > CTX_STEP ? " · " + all("down", rest) : ""}</td></tr>`;
   box.querySelector("table").innerHTML = rows;
+  if (box.dataset.hunk) renderAnswers(box.dataset.hunk);
 }
 
 async function openCtx(box, path, lo, hi) {
@@ -2810,6 +2905,8 @@ async function init() {
   loadLayout();
   loadSyntax();
   loadPanes();
+  loadPaneWidths();
+  initPaneResizers();
   trackTopbarHeight();
   narrowQuery.addEventListener("change", () => { if (state.report) rerender(); });
   window.addEventListener("hashchange", route);
@@ -2827,6 +2924,7 @@ async function init() {
     loadLayout();
     loadSyntax();
     loadPanes();
+    loadPaneWidths();
   } catch {}
   setMode(defaults.mode || "refs");
   const form = $("#source-form");
@@ -2843,7 +2941,8 @@ async function init() {
 
 // ---------- Ask: AI help on a hunk or a line ----------
 // An Ask link on every hunk bar and a badge on hovered diff lines open a menu of predefined
-// tasks (plus a custom prompt). The answer streams into a band under the hunk; it lives in
+// tasks (plus a custom prompt). The answer streams in right where Ask was clicked: under the
+// hunk bar, or as a row below the asked-about line. It lives in
 // state.answers for this browser session only. Settings (provider, key, model) are on the
 // server in ~/.config/refactor-diff/settings.json; the top-bar chip shows what will be used.
 
@@ -2898,10 +2997,7 @@ function answersOf(hunkId) {
   return state.answers.get(hunkId) || [];
 }
 
-// The answer band under a hunk, from state (so re-renders keep it).
-function answersHtml(hunkId) {
-  const list = answersOf(hunkId);
-  if (!list.length) return "";
+function bandHtml(list) {
   return `<div class="ai-band">${list.map(answerHtml).join("")}</div>`;
 }
 
@@ -3020,13 +3116,33 @@ function hunkElement(hunkId) {
   return document.querySelector(`#content .hunk[data-hunk="${CSS.escape(hunkId)}"]`);
 }
 
-// Re-render the band of one hunk (and the answers count on its bar) from state.
+// The diff row showing `side` line `line` of `path` in a hunk (or its context window).
+function answerRow(el, { path, side, line }) {
+  const s = side === "old" ? "o" : "n";
+  const cell = [...el.querySelectorAll(`.diff td[data-s="${s}"][data-l="${line}"]`)].find((td) => td.dataset.p === path);
+  return cell?.closest("tr") || null;
+}
+
+// Re-render the answers of one hunk (and the answers count on its bar) from state. Answers to
+// a line go in a full-width row right below that line; answers to the hunk (or to a line no
+// longer on screen) go in a band right below the hunk bar.
 function renderAnswers(hunkId) {
   const el = hunkElement(hunkId);
   if (!el) return;
-  el.querySelector(".ai-band")?.remove();
-  const html = answersHtml(hunkId);
-  if (html) el.insertAdjacentHTML("beforeend", html);
+  el.querySelectorAll(".ai-band, tr.ai-row").forEach((x) => x.remove());
+  const top = [];
+  const byRow = new Map();
+  for (const a of answersOf(hunkId)) {
+    const row = a.focus.onLine ? answerRow(el, a.focus) : null;
+    if (!row) { top.push(a); continue; }
+    if (!byRow.has(row)) byRow.set(row, []);
+    byRow.get(row).push(a);
+  }
+  for (const [row, list] of byRow) {
+    const cols = [...row.cells].reduce((n, td) => n + td.colSpan, 0);
+    row.insertAdjacentHTML("afterend", `<tr class="ai-row"><td colspan="${cols}">${bandHtml(list)}</td></tr>`);
+  }
+  if (top.length) el.querySelector(".hunk-bar").insertAdjacentHTML("afterend", bandHtml(top));
   const badge = el.querySelector("[data-answers-badge]");
   const n = answersOf(hunkId).length;
   if (badge) {
@@ -3053,7 +3169,7 @@ function openAskMenu(hunkEl, anchor, { side = null, line = null } = {}) {
   const h = state.report.hunks[hunkEl.dataset.hunk];
   let focus;
   if (line) {
-    focus = { path: h.path, side: side === "o" ? "old" : "new", line };
+    focus = { path: h.path, side: side === "o" ? "old" : "new", line, onLine: true };
   } else {
     const at = hunkAnchor(h);
     focus = { path: h.path, side: at.new_no ? "new" : "old", line: at.new_no || at.old_no || h.new_start };
@@ -3302,7 +3418,7 @@ async function onAskClick(btn) {
   if ("hunkAsk" in btn.dataset) {
     openAskMenu(btn.closest(".hunk"), btn);
   } else if ("askLine" in btn.dataset) {
-    openAskMenu(btn.closest(".hunk"), btn, { side: btn.dataset.s, line: Number(btn.dataset.l) });
+    openAskMenu(btn.closest(".hunk"), btn, { side: btn.dataset.sd, line: Number(btn.dataset.ln) });
   } else if (a && "aiStop" in btn.dataset) {
     a.controller?.abort();
   } else if (a && "aiDismiss" in btn.dataset) {
