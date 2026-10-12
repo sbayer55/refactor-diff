@@ -171,7 +171,8 @@ button.primary:disabled { opacity: 0.6; cursor: progress; }
 }
 .pane-toggle:hover { color: var(--text); border-color: var(--border); }
 .pane-toggle[aria-pressed="true"] { color: var(--text); background: var(--panel-2); border-color: var(--border); }
-body.hide-explorer .explorer, body.hide-inspector .inspector { display: none; }
+body.hide-explorer .explorer, body.hide-inspector .inspector,
+body.hide-explorer [data-resize="explorer"], body.hide-inspector [data-resize="inspector"] { display: none; }
 
 /* ---- three panes ---- */
 .body { display: flex; align-items: flex-start; min-height: calc(100vh - var(--topbar-h) - var(--status-h)); }
@@ -180,16 +181,30 @@ body.hide-explorer .explorer, body.hide-inspector .inspector { display: none; }
   height: calc(100vh - var(--topbar-h) - var(--status-h)); overflow: hidden;
   background: var(--panel);
 }
-.explorer { width: 272px; border-right: 1px solid var(--border); }
-.inspector { width: 316px; border-left: 1px solid var(--border); overflow-y: auto; }
+.explorer { width: var(--explorer-w, 272px); border-right: 1px solid var(--border); }
+.inspector { width: var(--inspector-w, 316px); border-left: 1px solid var(--border); overflow-y: auto; }
+/* A zero-width strip on the pane's border; its ::before is the 7px grab area. */
+.pane-resizer {
+  position: sticky; top: var(--topbar-h); z-index: 5; flex: none; width: 0;
+  height: calc(100vh - var(--topbar-h) - var(--status-h)); outline: none;
+}
+.pane-resizer::before { content: ""; position: absolute; inset: 0 -3px; cursor: col-resize; }
+.pane-resizer[data-resize="explorer"] { margin-left: -1px; }
+.pane-resizer::after {
+  content: ""; position: absolute; inset: 0 -1px; background: var(--accent); opacity: 0; transition: opacity 0.12s;
+}
+.pane-resizer:hover::after, .pane-resizer:focus-visible::after, .pane-resizer.dragging::after { opacity: 1; transition-delay: 0.1s; }
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing * { cursor: col-resize !important; }
 .stream { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .content { padding: 12px 14px 60px; min-width: 0; }
 
 @media (max-width: 1000px) {
-  .inspector { display: none; }
+  .inspector, [data-resize="inspector"] { display: none; }
 }
 @media (max-width: 860px) {
   .body { display: block; }
+  .pane-resizer { display: none; }
   .explorer { position: static; width: auto; height: auto; max-height: 50vh; border-right: 0; border-bottom: 1px solid var(--border); }
   .cmd { position: static; }
   .source-form { margin-left: 0; }
@@ -684,8 +699,13 @@ button.pill.ai-provider.unset { background: var(--warn-bg); color: var(--warn-fg
 .ask-ctx .primary { padding: 4px 12px; font-size: 12px; }
 .ask-custom p.muted { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
 
-/* Answer bands under a hunk, in the comment-box style. */
-.ai-band { padding: 8px 12px 10px; background: var(--panel-2); border-top: 1px solid var(--border); }
+/* Answer bands, in the comment-box style: under the hunk bar, or in a row below the asked-about line. */
+.ai-band { padding: 8px 12px 10px; background: var(--panel-2); border-bottom: 1px solid var(--border); }
+.diff tr.ai-row > td {
+  padding: 0; font-family: var(--sans); line-height: normal; white-space: normal; word-break: normal;
+}
+/* width: 0 + min-width: 100% fills the row without letting long answer lines widen the table. */
+.diff tr.ai-row .ai-band { width: 0; min-width: 100%; box-sizing: border-box; border-top: 1px solid var(--border); }
 .ai-answer + .ai-answer { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
 .ai-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
 .ai-head .ai-title { color: var(--text); font-weight: 600; }
