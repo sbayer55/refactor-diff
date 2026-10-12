@@ -469,6 +469,24 @@ a.tag:hover { color: var(--text); }
 .hunk.done:not(.open) [data-hunk-context] { display: none; }
 .hunk.kbd-focus, .occurrence.kbd-focus { box-shadow: inset 3px 0 0 var(--accent); }
 
+/* code folding: a chevron in the line-number cell of each fold's first line */
+.diff.foldable td.no { position: relative; padding-left: 16px; }
+.fold-toggle {
+  position: absolute; left: 1px; top: 2px; width: 14px; height: 16px; padding: 0;
+  border: 0; border-radius: 3px; background: none; color: var(--muted); cursor: pointer;
+  font: 10px/16px var(--sans); opacity: 0;
+}
+.fold-toggle::before { content: "▾"; }
+.diff tr:hover .fold-toggle, .fold-toggle:focus-visible, tr.folded .fold-toggle { opacity: 1; }
+.fold-toggle:hover { background: var(--panel-2); color: var(--text); }
+tr.folded .fold-toggle::before { content: "▸"; }
+.diff tr.folded-away, .diff tr.folded-away + tr.ai-row { display: none; }
+.diff td[data-fold-label]::after {
+  content: attr(data-fold-label); margin-left: 8px; padding: 0 6px; border-radius: 8px;
+  background: var(--panel-2); color: var(--muted); font: 11px/16px var(--sans); white-space: nowrap;
+}
+.diff tr.has-changes td[data-fold-label]::after { background: var(--warn-bg); color: var(--warn-fg); }
+
 /* side-by-side rows: [old no][old code][new no][new code] */
 .diff td.side { width: 50%; }
 .diff td.side.del { background: var(--del-bg); }

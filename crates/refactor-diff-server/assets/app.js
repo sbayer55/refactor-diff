@@ -19,6 +19,8 @@ const state = {
   syntax: false, // syntax-color changed lines too (unchanged lines always are)
   issuesOn: true, // underline code issues (preference; see applyIssues())
   issues: new Map(), // "side:path" -> Promise of that file's code issues (see /api/report/{id}/issues)
+  folds: new Map(), // "side:path" -> Promise of that file's foldable blocks (see /api/report/{id}/folds)
+  folded: new Set(), // collapsed folds, "side:path:start" (see applyFolds())
   repo: "", // absolute repository path (for editor links)
   editor: null, // URL template from --editor
   focus: -1, // keyboard focus: index into the page's hunks / occurrences
@@ -553,6 +555,8 @@ function loadReport(report) {
   state.shown = PAGE;
   state.fileDiffs = new Map();
   state.issues = new Map();
+  state.folds = new Map();
+  state.folded = new Set(); // line numbers may have moved
   setReview(report.review);
   applyFilters();
   renderStatus();
@@ -2126,16 +2130,21 @@ function renderCtx(box, fd) {
   let rows = "";
   if (lo > 0) rows += `<tr class="expand"><td colspan="4">${more("up", Math.min(CTX_STEP, lo))}${lo > CTX_STEP ? " · " + all("up", lo) : ""}</td></tr>`;
   rows += diffRows(fd.lines.slice(lo, hi), {
-    tags: !focus.size, focus, path: box.dataset.path, syntax: fileSyntax(fd),
+    tags: !focus.size, focus, path: box.dataset.path, syntax: fileSyntax(fd), anchors: true,
   });
   const rest = fd.lines.length - hi;
   if (rest > 0) rows += `<tr class="expand"><td colspan="4">${more("down", Math.min(CTX_STEP, rest))}${rest > CTX_STEP ? " · " + all("down", rest) : ""}</td></tr>`;
-  box.querySelector("table").innerHTML = rows;
+  const table = box.querySelector("table");
+  table.innerHTML = rows;
+  // Resolves before the next paint: openCtx already waited for the folds.
+  foldsFor(box.dataset.path, "diff").then((folds) => {
+    if (table.isConnected && box.classList.contains("ctx")) applyFolds(table, box.dataset.path, "diff", folds);
+  });
   if (box.dataset.hunk) renderAnswers(box.dataset.hunk);
 }
 
 async function openCtx(box, path, lo, hi) {
-  const fd = await loadFileDiff(path);
+  const [fd] = await Promise.all([loadFileDiff(path), foldsFor(path, "diff")]);
   box.classList.add("ctx");
   box.dataset.path = path;
   box.dataset.lo = Math.max(0, lo(fd));
@@ -2158,7 +2167,9 @@ async function onContentClick(e) {
   const btn = e.target.closest("button");
   if (!btn) return;
   try {
-    if (btn.dataset.reviewGroup) {
+    if (btn.dataset.fold) {
+      toggleFold(btn.dataset.fold);
+    } else if (btn.dataset.reviewGroup) {
       const id = btn.dataset.reviewGroup;
       const on = !state.reviewed.has(id);
       toggleReviewed(id, on);
@@ -2182,6 +2193,7 @@ async function onContentClick(e) {
       const u = state.report.units[box.dataset.unit];
       if (box.classList.contains("ctx")) {
         box.classList.remove("ctx");
+        box.querySelector("table").classList.remove("foldable");
         box.querySelector("table").innerHTML = unitRows(u);
         btn.textContent = "Show context";
         return;
@@ -2364,6 +2376,161 @@ function renderFiles() {
   content.innerHTML = html + "</tbody></table>";
 }
 
+// ---------- code folding ----------
+// Foldable blocks (functions, classes, bodies, literals, import runs) come from the server per
+// file and side. A table is decorated once its rows are in the DOM: each fold's header row
+// gets a chevron in its line-number cell, and the rows inside a collapsed fold get
+// `folded-away`. Collapsed folds are kept in state.folded ("side:path:start") for the session,
+// so re-renders, layout switches and context windows on the same file agree.
+
+const tableFolds = new WeakMap(); // table -> [{key, head, code, rows, lines, changed}]
+
+function loadFolds(path, side) {
+  const key = `${side}:${path}`;
+  if (!state.folds.has(key)) {
+    const url = `/api/report/${state.report.id}/folds?side=${side}&path=${encodeURIComponent(path)}`;
+    // Files the server can't read (one side of an added or deleted file) just don't fold.
+    state.folds.set(key, api(url).then((r) => r.folds, () => []));
+  }
+  return state.folds.get(key);
+}
+
+// The folds a table in `mode` needs: both sides for a diff, one for the original / new file.
+async function foldsFor(path, mode) {
+  const [old, neu] = await Promise.all([
+    mode === "new" ? [] : loadFolds(path, "old"),
+    mode === "old" ? [] : loadFolds(path, "new"),
+  ]);
+  return { old, new: neu };
+}
+
+function rowChanged(tr) {
+  return tr.classList.contains("add") || tr.classList.contains("del")
+    || Boolean(tr.querySelector("td.side.add, td.side.del"));
+}
+
+// Decorate `table` (rows carrying data-o / data-n) with `folds`. A diff folds by its new-side
+// blocks, plus original-side blocks that start on a deleted line; a fold needs both its first
+// and last line on screen (context windows can cut through a block).
+function applyFolds(table, path, mode, folds) {
+  for (const b of table.querySelectorAll(".fold-toggle")) b.remove();
+  const rows = [...table.rows];
+  const at = { o: new Map(), n: new Map() };
+  rows.forEach((tr, i) => {
+    if (tr.dataset.o) at.o.set(Number(tr.dataset.o), i);
+    if (tr.dataset.n) at.n.set(Number(tr.dataset.n), i);
+  });
+  const ranges = [];
+  const heads = new Set();
+  const add = (side, list) => {
+    const s = side === "old" ? "o" : "n";
+    for (const f of list) {
+      const from = at[s].get(f.start), to = at[s].get(f.end);
+      if (from == null || to == null || to <= from || heads.has(from)) continue;
+      const head = rows[from];
+      if (side === "old" && mode === "diff" && head.dataset.n) continue;
+      const code = head.querySelector(`td[data-s="${s}"]`) || head.querySelector("td.text");
+      if (!code) continue;
+      heads.add(from);
+      const inside = rows.slice(from + 1, to + 1);
+      const lines = inside.filter((tr) => tr.dataset.o || tr.dataset.n);
+      ranges.push({
+        key: `${side}:${path}:${f.start}`, head, code, rows: inside,
+        lines: lines.length, changed: lines.filter(rowChanged).length,
+      });
+      // The chevron sits in the line-number cell of the fold's side.
+      let gutter = code.previousElementSibling;
+      if (gutter?.classList.contains("sign")) {
+        gutter = gutter.previousElementSibling;
+        if (mode === "diff" && side === "old" && gutter?.previousElementSibling) gutter = gutter.previousElementSibling;
+      }
+      gutter?.insertAdjacentHTML("afterbegin", `<button type="button" class="fold-toggle" data-fold="${esc(ranges.at(-1).key)}"></button>`);
+      head.classList.add("fold-start");
+      head.classList.toggle("has-changes", ranges.at(-1).changed > 0);
+    }
+  };
+  if (mode !== "old") add("new", folds.new);
+  if (mode !== "new") add("old", folds.old);
+  tableFolds.set(table, ranges);
+  table.classList.toggle("foldable", ranges.length > 0);
+  paintFolds(table);
+}
+
+// Show / hide rows to match state.folded.
+function paintFolds(table) {
+  const ranges = (tableFolds.get(table) || []).filter((r) => r.head.isConnected);
+  const hidden = new Set();
+  for (const r of ranges) {
+    if (state.folded.has(r.key)) for (const tr of r.rows) hidden.add(tr);
+  }
+  for (const tr of table.rows) tr.classList.toggle("folded-away", hidden.has(tr));
+  for (const r of ranges) {
+    const folded = state.folded.has(r.key);
+    r.head.classList.toggle("folded", folded);
+    const btn = r.head.querySelector(".fold-toggle");
+    if (btn) {
+      btn.setAttribute("aria-expanded", String(!folded));
+      btn.setAttribute("aria-label", folded ? "Unfold" : "Fold");
+      btn.title = `${folded ? "Unfold" : "Fold"} (z: fold unchanged blocks / unfold all)`;
+    }
+    if (folded) {
+      r.code.dataset.foldLabel = `⋯ ${plural(r.lines, "line")}${r.changed ? ` · ${r.changed} changed` : ""}`;
+    } else {
+      delete r.code.dataset.foldLabel;
+    }
+  }
+}
+
+function foldTables() {
+  return [...$("#content").querySelectorAll("table.diff")]
+    .filter((t) => tableFolds.get(t)?.some((r) => r.head.isConnected));
+}
+
+function foldRanges() {
+  return foldTables().flatMap((t) => tableFolds.get(t).filter((r) => r.head.isConnected));
+}
+
+function hasFolds() {
+  return foldTables().length > 0;
+}
+
+function repaintFolds() {
+  for (const t of foldTables()) paintFolds(t);
+}
+
+function toggleFold(key) {
+  if (state.folded.has(key)) state.folded.delete(key);
+  else state.folded.add(key);
+  repaintFolds();
+}
+
+// which: "all", "unchanged" (blocks without changed lines) or "none" (unfold everything).
+function foldAll(which) {
+  for (const r of foldRanges()) {
+    if (which === "none") state.folded.delete(r.key);
+    else if (which === "all" || !r.changed) state.folded.add(r.key);
+  }
+  repaintFolds();
+}
+
+// z: fold the unchanged blocks, or unfold everything when something on the page is folded.
+function toggleFolds() {
+  const ranges = foldRanges();
+  if (ranges.some((r) => state.folded.has(r.key))) { foldAll("none"); return; }
+  if (!ranges.some((r) => !r.changed)) { toast("Every block here has changes; nothing to fold."); return; }
+  foldAll("unchanged");
+}
+
+// Unfold every fold that hides `tr` (e.g. the target of a link to a line).
+function unfoldAround(tr) {
+  const table = tr?.closest("table");
+  if (!table || !tr.classList.contains("folded-away")) return;
+  for (const r of tableFolds.get(table) || []) {
+    if (r.rows.includes(tr)) state.folded.delete(r.key);
+  }
+  repaintFolds();
+}
+
 // ---------- file viewer ----------
 
 const MODES = [["diff", "Diff"], ["old", "Original"], ["new", "New"]];
@@ -2373,9 +2540,9 @@ async function renderFileView(path, mode, line) {
   const content = $("#content");
   const hash = location.hash;
   content.innerHTML = `<div class="empty"><span class="spinner"></span> Loading ${esc(path)}…</div>`;
-  let fd;
+  let fd, folds;
   try {
-    fd = await loadFileDiff(path);
+    [fd, folds] = await Promise.all([loadFileDiff(path), foldsFor(path, mode)]);
   } catch (e) {
     showError(e.message);
     return;
@@ -2434,13 +2601,9 @@ async function renderFileView(path, mode, line) {
   for (const b of content.querySelectorAll("[data-jump]")) {
     b.addEventListener("click", () => jumpChange(b.dataset.jump === "next" ? 1 : -1));
   }
-  const target = line && nearestRow(content, line[0], Number(line.slice(1)));
-  if (target) {
-    target.classList.add("target");
-    target.scrollIntoView({ block: "center" });
-  } else {
-    scrollMainTo(0);
-  }
+  const table = content.querySelector("section.viewer table.diff");
+  if (table) applyFolds(table, path, mode, folds);
+  showTarget(content, line?.[0], Number(line?.slice(1)));
 }
 
 // Lives in the sticky viewer bar so it stays reachable while scrolling a long file.
@@ -2461,7 +2624,9 @@ function nearestRow(root, side, num) {
 }
 
 function jumpChange(dir) {
-  const starts = [...document.querySelectorAll("#content tr.chg-start")];
+  // A collapsed block with changes inside is a stop of its own; hidden rows have no position.
+  const starts = [...document.querySelectorAll(
+    "#content tr.chg-start:not(.folded-away), #content tr.folded.has-changes:not(.folded-away)")];
   if (!starts.length) return;
   const mid = window.innerHeight / 3;
   const tops = starts.map((el) => el.getBoundingClientRect().top);
@@ -2490,6 +2655,7 @@ const KEY_HELP = [
     ["g r", "g w", "go to Needs review / Warnings"],
     ["g f", "g c", "go to Files / Commits"],
     ["n", "p", "next / previous change in the file viewer"],
+    ["z", "", "fold unchanged blocks; again to unfold all (file viewer, expanded context)"],
     ["/", "", "search"],
   ]],
   ["Other", [
@@ -2636,6 +2802,11 @@ function paletteCommands() {
     { id: "view.warnings", group: "View", title: "Go to Warnings", keys: "g w", when: hasReport, run: go("#warnings") },
     { id: "view.files", group: "View", title: "Go to Files", keys: "g f", when: hasReport, run: go("#files") },
     { id: "view.commits", group: "View", title: "Go to Commits", keys: "g c", when: hasReport, run: go("#commits") },
+
+    { id: "view.fold.unchanged", group: "View", title: "Fold unchanged blocks", keys: "z", when: hasFolds,
+      run: () => foldAll("unchanged") },
+    { id: "view.fold.all", group: "View", title: "Fold all blocks", when: hasFolds, run: () => foldAll("all") },
+    { id: "view.fold.none", group: "View", title: "Unfold all blocks", keys: "z", when: hasFolds, run: () => foldAll("none") },
 
     { id: "pane.explorer", group: "Panes", title: `${state.panes.explorer ? "Hide" : "Show"} the explorer`, keys: "\\",
       run: () => setPane("explorer", !state.panes.explorer) },
@@ -2882,6 +3053,7 @@ function onKey(e) {
     case "l": if (!inFile) fileStep(1); else return; break;
     case "j": if (!inFile) moveFocus(1); else return; break;
     case "k": if (!inFile) moveFocus(-1); else return; break;
+    case "z": if (hasFolds()) toggleFolds(); else return; break;
     case "x": toggleFocusedReviewed(); break;
     case "e": expandFocused(); break;
     case "o": { const at = focusedLocation(); if (at) openInEditor(at.path, at.line); break; }
@@ -3193,6 +3365,7 @@ function plainRows(lines, { path = null, side = null, lang = path } = {}) {
 function showTarget(content, side, line) {
   const target = line && nearestRow(content, side, line);
   if (target) {
+    unfoldAround(target);
     target.classList.add("target");
     target.scrollIntoView({ block: "center" });
   } else {
@@ -3207,8 +3380,10 @@ async function renderBrowseView(path, mode, line) {
   const hash = location.hash;
   const side = mode === "old" ? "old" : "new";
   content.innerHTML = `<div class="empty"><span class="spinner"></span> Loading ${esc(path)}…</div>`;
-  let src = null, error = null;
-  try { src = await loadSource(path, side); } catch (e) { error = e.message; }
+  let src = null, error = null, folds = null;
+  try {
+    [src, folds] = await Promise.all([loadSource(path, side), foldsFor(path, side)]);
+  } catch (e) { error = e.message; }
   if (location.hash !== hash) return;
   const tok = line || "";
   const tabs = `<span class="tab disabled" title="This file has no changes in this diff">Diff</span>
@@ -3224,6 +3399,8 @@ async function renderBrowseView(path, mode, line) {
     ${error ? `<div class="empty"><p>${esc(error)}</p></div>`
       : `<section class="file viewer"><table class="diff">${plainRows(src.lines, { path, side: s })}</table></section>`}`;
   $("#back-btn").addEventListener("click", () => history.back());
+  const table = content.querySelector("section.viewer table.diff");
+  if (table) applyFolds(table, path, side, folds);
   showTarget(content, s, Number(tok.slice(1)));
 }
 

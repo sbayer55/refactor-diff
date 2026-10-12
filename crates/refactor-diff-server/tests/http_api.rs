@@ -138,6 +138,7 @@ async fn unknown_report_is_404() {
         "/api/report/nope/commits",
         "/api/report/nope/source?side=old&path=api.py",
         "/api/report/nope/issues?side=old&path=api.py",
+        "/api/report/nope/folds?side=old&path=api.py",
     ] {
         let res = server.get(path).await;
         assert_eq!(res.status, StatusCode::NOT_FOUND, "{path}");
@@ -490,6 +491,42 @@ async fn issues_are_served_per_side() {
     assert_eq!(bad.status, StatusCode::BAD_REQUEST);
     let missing = server
         .get(&format!("/api/report/{id}/issues?side=old&path=nope.py"))
+        .await;
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn folds_are_served_per_side() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    commit(&repo, &[("a.py", Some("x = 1\n"))], "before");
+    git(&repo, &["checkout", "-qb", "feature"]);
+    let after = "def f():\n    if x:\n        return 1\n    return 2\n";
+    commit(&repo, &[("a.py", Some(after))], "after");
+
+    let server = TestServer::new(&repo);
+    let data = server.analyze(REFS()).await;
+    let id = data["id"].as_str().unwrap();
+    let old = server
+        .get(&format!("/api/report/{id}/folds?side=old&path=a.py"))
+        .await
+        .json();
+    assert_eq!(old, json!({"path": "a.py", "side": "old", "folds": []}));
+    let new = server
+        .get(&format!("/api/report/{id}/folds?side=new&path=a.py"))
+        .await
+        .json();
+    assert_eq!(
+        new["folds"],
+        json!([{"start": 1, "end": 4}, {"start": 2, "end": 3}])
+    );
+
+    let bad = server
+        .get(&format!("/api/report/{id}/folds?side=mid&path=a.py"))
+        .await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+    let missing = server
+        .get(&format!("/api/report/{id}/folds?side=old&path=nope.py"))
         .await;
     assert_eq!(missing.status, StatusCode::NOT_FOUND);
 }

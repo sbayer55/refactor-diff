@@ -434,6 +434,40 @@ pub const SNAPSHOT_SUFFIXES: &[&str] = &[
     ".py", ".pyi", ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs",
 ];
 
+/// The tree-sitter grammars the analyzers use, picked by path.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Lang {
+    Python,
+    TypeScript,
+    Tsx,
+    JavaScript,
+}
+
+impl Lang {
+    pub(crate) fn for_path(path: &str) -> Option<Self> {
+        Some(match analyzer_for(path)?.name() {
+            "python" => Lang::Python,
+            "typescript" => Lang::TypeScript,
+            "tsx" => Lang::Tsx,
+            "javascript" => Lang::JavaScript,
+            _ => return None,
+        })
+    }
+
+    pub(crate) fn grammar(self) -> tree_sitter::Language {
+        match self {
+            Lang::Python => tree_sitter_python::LANGUAGE.into(),
+            Lang::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            Lang::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
+            Lang::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
+        }
+    }
+
+    pub(crate) fn is_python(self) -> bool {
+        self == Lang::Python
+    }
+}
+
 /// Parse `text` with `language`, returning the tree (never `None` without a timeout).
 #[allow(dead_code)] // used by the analyzers
 pub(crate) fn parse(language: &tree_sitter::Language, text: &str) -> Option<tree_sitter::Tree> {
