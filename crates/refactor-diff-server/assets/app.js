@@ -160,6 +160,7 @@ async function postReview(changes) {
 function toggleReviewed(id, on) {
   if (on) state.reviewed.add(id); else state.reviewed.delete(id);
   refreshPatternTags(id);
+  refreshFileDiff();
   renderExplorer();
   renderInspector();
   postReview({ groups: { [on ? "add" : "remove"]: [id] } });
@@ -1337,6 +1338,18 @@ function shortLabel(label) {
 const VERIFIED_TITLE = "Verified: the enclosing statement parses to the same program on both sides "
   + "once the diff's renames are applied (docstrings and type annotations ignored).";
 
+// The visible mechanical patterns a unit belongs to.
+function unitPatterns(unit) {
+  return unit.signatures.map((key) => state.groupsByKey.get(key))
+    .filter((g) => g && g.mechanical && state.view.groupsById.has(g.id));
+}
+
+// A unit is reviewed when it is fully explained by patterns that are all marked reviewed.
+function unitReviewed(unit) {
+  const pats = unitPatterns(unit);
+  return unit.explained && pats.length > 0 && pats.every((g) => state.reviewed.has(g.id));
+}
+
 function unitTags(unit) {
   const tags = unit.signatures.map((key) => {
     const g = state.groupsByKey.get(key);
@@ -1491,16 +1504,29 @@ function lineState(ln, focus) {
 
 // Pattern tags go above the first line of each unit that isn't dimmed-out or focused.
 // `lead` empty cells line the tags up with the code column, which spans `span` columns.
-function tagRow(st, tagged, lead, span) {
+// With `fold` (the file viewer), a unit whose patterns are all reviewed gets a bar that shows
+// or hides its folded lines instead.
+function tagRow(st, tagged, lead, span, fold = false) {
   if (!st.unit || st.hidden || st.focused || tagged.has(st.unit.id)) return "";
   tagged.add(st.unit.id);
   const t = unitTags(st.unit);
-  return t ? `<tr class="tags">${"<td></td>".repeat(lead)}<td colspan="${span}">${t}</td></tr>` : "";
+  if (!t) return "";
+  const cells = "<td></td>".repeat(lead);
+  if (fold && isReviewFolded(st)) {
+    const n = st.unit.old.length + st.unit.new.length;
+    return `<tr class="tags review-fold" data-review-fold="${st.unit.id}">${cells}<td colspan="${span}">${t}<span class="review-fold-act"><span class="review-fold-n">${
+      plural(n, "line")} reviewed</span><button type="button" class="link" data-review-fold-toggle>Show</button></span></td></tr>`;
+  }
+  return `<tr class="tags">${cells}<td colspan="${span}">${t}</td></tr>`;
+}
+
+function isReviewFolded(st) {
+  return Boolean(st.unit) && !st.hidden && unitReviewed(st.unit);
 }
 
 // `anchors` adds data-o / data-n line attributes and marks where each run of changes starts
 // (used by the file viewer for jumping to a line and between changes).
-function unifiedRows(lines, { tags = false, focus = null, anchors = false, path = null, syntax = null, ask = false } = {}) {
+function unifiedRows(lines, { tags = false, focus = null, anchors = false, path = null, syntax = null, ask = false, fold = false } = {}) {
   const sx = syntax || syntaxSpans(lines, path);
   const plain = oneSided(path);
   const tagged = new Set();
@@ -1509,12 +1535,13 @@ function unifiedRows(lines, { tags = false, focus = null, anchors = false, path 
   const span = ask ? 2 : 1;
   for (const ln of lines) {
     const st = lineState(ln, focus);
-    if (tags) rows += tagRow(st, tagged, 3, span);
+    if (tags) rows += tagRow(st, tagged, 3, span, fold);
     if (ln.from) { rows += fromRow(ln, 3, span); continue; }
-    const changed = ln.t !== " ";
-    const attrs = anchors ? anchorAttrs(ln.o, ln.n) : "";
+    const folded = fold && isReviewFolded(st);
+    const changed = ln.t !== " " && !folded;
+    const attrs = (anchors ? anchorAttrs(ln.o, ln.n) : "") + (folded ? ` data-review-units="${st.unit.id}"` : "");
     const p = ln.path || path;
-    rows += `<tr class="${st.cls}${st.dim ? " explained" : ""}${st.focused ? " focus" : ""}${
+    rows += `<tr class="${st.cls}${st.dim ? " explained" : ""}${st.focused ? " focus" : ""}${folded ? " review-folded" : ""}${
       anchors && changed && !prevChanged ? " chg-start" : ""}"${attrs}>
       <td class="no">${ln.o ?? ""}</td><td class="no">${ln.n ?? ""}</td>
       <td class="sign">${ln.t === " " ? "" : ln.t}</td>
@@ -1539,7 +1566,7 @@ function fromRow(ln, lead, span) {
 
 // Side by side: removed lines on the left, added lines on the right, paired in order within
 // each block of changes; unchanged lines appear on both sides.
-function splitRows(lines, { tags = false, focus = null, anchors = false, path = null, syntax = null, ask = false } = {}) {
+function splitRows(lines, { tags = false, focus = null, anchors = false, path = null, syntax = null, ask = false, fold = false } = {}) {
   const sx = syntax || syntaxSpans(lines, path);
   const tagged = new Set();
   let rows = "";
@@ -1557,13 +1584,17 @@ function splitRows(lines, { tags = false, focus = null, anchors = false, path = 
   for (const [left, right] of pairLines(lines)) {
     if (tags) {
       for (const ln of left === right ? [left] : [left, right].filter(Boolean)) {
-        rows += tagRow(lineState(ln, focus), tagged, 1, span);
+        rows += tagRow(lineState(ln, focus), tagged, 1, span, fold);
       }
     }
     if (left && left.from) { rows += fromRow(left, 1, span); continue; }
-    const changed = left !== right;
-    const attrs = anchors ? anchorAttrs(left?.o, right?.n) : "";
-    rows += `<tr class="split-row${anchors && changed && !prevChanged ? " chg-start" : ""}"${attrs}>${
+    // A pair is folded only when every line in it belongs to a folded unit.
+    const sides = left === right ? [left] : [left, right].filter(Boolean);
+    const folded = fold && left !== right && sides.every((ln) => isReviewFolded(lineState(ln, focus)));
+    const changed = left !== right && !folded;
+    const attrs = (anchors ? anchorAttrs(left?.o, right?.n) : "")
+      + (folded ? ` data-review-units="${[...new Set(sides.map((ln) => ln.unit))].join(" ")}"` : "");
+    rows += `<tr class="split-row${folded ? " review-folded" : ""}${anchors && changed && !prevChanged ? " chg-start" : ""}"${attrs}>${
       cell(left, "old")}${cell(right, "new")}${ask ? askCell(right ? "n" : "o", right ? right.n : left?.o, changed) : ""}</tr>`;
     prevChanged = changed;
   }
@@ -2167,7 +2198,10 @@ async function onContentClick(e) {
   const btn = e.target.closest("button");
   if (!btn) return;
   try {
-    if (btn.dataset.fold) {
+    if ("reviewFoldToggle" in btn.dataset) {
+      const bar = btn.closest(".review-fold");
+      setReviewFold(bar.dataset.reviewFold, !bar.classList.contains("open"));
+    } else if (btn.dataset.fold) {
       toggleFold(btn.dataset.fold);
     } else if (btn.dataset.reviewGroup) {
       const id = btn.dataset.reviewGroup;
@@ -2533,6 +2567,37 @@ function unfoldAround(tr) {
 
 // ---------- file viewer ----------
 
+// The full diff of a file, with pattern tags and units whose patterns are reviewed folded.
+function fileDiffRows(fd, path) {
+  return diffRows(fd.lines, { anchors: true, path, tags: true, fold: true });
+}
+
+// Re-render the open file diff in place (keeps the scroll position), e.g. after a pattern's
+// reviewed mark changes.
+async function refreshFileDiff() {
+  const [view, id, mode] = location.hash.replace(/^#/, "").split("/");
+  const table = $("#content section.viewer table.diff");
+  if (view !== "file" || (mode || "diff") !== "diff" || !table) return;
+  const path = decodeURIComponent(id || "");
+  if (!state.report.files.some((f) => f.path === path)) return;
+  const open = [...table.querySelectorAll(".review-fold.open")].map((tr) => tr.dataset.reviewFold);
+  const [fd, folds] = await Promise.all([loadFileDiff(path), foldsFor(path, "diff")]);
+  table.innerHTML = fileDiffRows(fd, path);
+  applyFolds(table, path, "diff", folds);
+  for (const u of open) setReviewFold(u, true);
+}
+
+// Show or hide a folded unit's lines.
+function setReviewFold(unitId, on) {
+  const content = $("#content");
+  const bar = content.querySelector(`.review-fold[data-review-fold="${CSS.escape(unitId)}"]`);
+  if (bar) {
+    bar.classList.toggle("open", on);
+    bar.querySelector("[data-review-fold-toggle]").textContent = on ? "Hide" : "Show";
+  }
+  for (const tr of content.querySelectorAll(`tr[data-review-units~="${CSS.escape(unitId)}"]`)) tr.classList.toggle("open", on);
+}
+
 const MODES = [["diff", "Diff"], ["old", "Original"], ["new", "New"]];
 
 async function renderFileView(path, mode, line) {
@@ -2561,7 +2626,7 @@ async function renderFileView(path, mode, line) {
   const counts = mode === "old" ? plural(fd.old_lines, "line") : mode === "new" ? plural(fd.new_lines, "line")
     : `<span class="adds">+${fd.lines.filter((l) => l.t === "+").length}</span> <span class="dels">−${fd.lines.filter((l) => l.t === "-").length}</span>`;
 
-  let body = mode === "diff" ? diffRows(rows, { anchors: true, path }) : "";
+  let body = mode === "diff" ? fileDiffRows(fd, path) : "";
   let prevChanged = false;
   const sx = syntaxSpans(rows, path);
   const plain = oneSided(path);
@@ -2603,6 +2668,8 @@ async function renderFileView(path, mode, line) {
   }
   const table = content.querySelector("section.viewer table.diff");
   if (table) applyFolds(table, path, mode, folds);
+  const target = line ? nearestRow(content, line[0], Number(line.slice(1))) : null;
+  for (const id of (target?.dataset.reviewUnits || "").split(" ").filter(Boolean)) setReviewFold(id, true);
   showTarget(content, line?.[0], Number(line?.slice(1)));
 }
 
