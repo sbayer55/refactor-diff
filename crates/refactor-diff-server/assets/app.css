@@ -503,8 +503,12 @@ body.syntax-mode .diff td.side.del, body.syntax-mode .diff td.side.add { backgro
   padding: 6px 0; margin-bottom: 8px; background: var(--bg);
 }
 .viewer-bar .spacer { flex: 1; }
+/* Every control in the bar shares one height (the version tabs would otherwise take the pane tabs' 40px). */
+.viewer-bar > .toggle, .viewer-bar > .tabs, .viewer-bar > .layout-toggle { height: 24px; }
+.viewer-bar > .toggle { padding: 0 9px; }
 .viewer-bar .tabs { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-.viewer-bar .tabs .tab { padding: 3px 10px; border: 0; font: 11.5px var(--mono); text-transform: none; letter-spacing: 0; }
+.viewer-bar .tabs .tab { padding: 0 10px; border: 0; font: 11.5px var(--mono); text-transform: none; letter-spacing: 0; }
+.viewer-bar .layout-toggle button { display: inline-flex; align-items: center; padding: 0 8px; }
 .viewer-bar .tabs .tab[aria-current="page"] { background: var(--panel-3); color: var(--text); }
 .viewer-bar .tabs .tab.disabled { opacity: 0.45; cursor: not-allowed; }
 .file.viewer { overflow-x: auto; }
