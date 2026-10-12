@@ -381,6 +381,11 @@ With [just](https://github.com/casey/just) installed, `just` lists the project's
 `just check` runs the linters and tests, `just fmt` formats, `just run main..HEAD` starts
 the CLI from the checkout, and the `desktop-*` recipes wrap the desktop app's build steps.
 
+Jedi and parso aren't checked in. The first build downloads their wheels from PyPI, checks them
+against the hashes pinned in `crates/refactor-diff-server/python/wheels.lock` and embeds them
+in the binary. To build offline, set `REFACTOR_DIFF_PY_WHEELS` to a directory holding those
+`.whl` files. To move to new versions, change them in the `justfile` and run `just pin-python`.
+
 Layout (a Cargo workspace):
 
 | Crate | Purpose |
