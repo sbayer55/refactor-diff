@@ -363,6 +363,17 @@ button.link:hover { color: var(--accent); }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---- content ---- */
+/* One file at a time: only the current file's section, under a pager. */
+#content.single-file section.file:not(.current) { display: none; }
+.file-pager {
+  display: flex; align-items: center; gap: 10px; margin: 0 0 10px; padding: 6px 8px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); font-size: 12px;
+}
+.file-pager .where { color: var(--muted); white-space: nowrap; }
+.file-pager .where b { color: var(--text); font-weight: 600; }
+.file-pager .path { flex: 1; min-width: 0; font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-pager .toggle { padding: 2px 9px; }
+.file-pager .toggle:disabled { opacity: 0.45; cursor: default; }
 .page-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 12px; }
 .page-head h2 { margin: 0; font-size: 14px; display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
 .page-head .spacer { flex: 1; }
@@ -414,6 +425,16 @@ button.link:hover { color: var(--accent); }
   padding: 0 6px; margin: 0 4px 2px 0; border-radius: 3px; background: var(--panel-3); color: var(--muted);
 }
 a.tag:hover { color: var(--text); }
+/* A pattern's tag: [☐ checkbox | link]. The box marks every match of the pattern reviewed. */
+.tag.pattern { display: inline-flex; align-items: baseline; gap: 4px; padding-left: 2px; }
+.tag.pattern a { color: inherit; }
+.tag.pattern a:hover { color: var(--text); }
+.tag-review {
+  border: 0; background: none; padding: 0 2px; margin: 0; font: 12px/1 var(--sans); color: var(--faint); cursor: pointer;
+}
+.tag-review:hover, .tag-review:focus-visible { color: var(--accent); }
+.tag.pattern.reviewed { background: var(--ok-bg); color: var(--ok-fg); }
+.tag.pattern.reviewed .tag-review { color: var(--ok-fg); }
 .tag.unique { background: var(--warn-bg); color: var(--warn-fg); }
 .tag.verified { background: var(--ok-bg); color: var(--ok-fg); }
 .tag.near { background: var(--warn-bg); color: var(--warn-fg); border: 1px dashed var(--warn-fg); }
