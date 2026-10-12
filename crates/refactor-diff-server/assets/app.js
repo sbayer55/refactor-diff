@@ -1542,10 +1542,11 @@ function splitRows(lines, { tags = false, focus = null, anchors = false, path = 
   let prevChanged = false;
   const span = ask ? 4 : 3;
   const cell = (ln, side) => {
-    if (!ln) return `<td class="no"></td><td class="side empty"></td>`;
+    const sd = side === "old" ? "side-o" : "side-n";
+    if (!ln) return `<td class="no"></td><td class="side ${sd} empty"></td>`;
     const st = lineState(ln, focus);
     const num = side === "old" ? ln.o : ln.n;
-    return `<td class="no ${st.cls}">${num}</td><td class="side ${st.cls}${st.dim ? " explained" : ""}${
+    return `<td class="no ${st.cls}">${num}</td><td class="side ${sd} ${st.cls}${st.dim ? " explained" : ""}${
       st.focused ? " focus" : ""}"${navAttrs(ln.path || path, side === "old" ? "o" : "n", num)}>${
       codeHtml(ln, sx)}</td>`;
   };
@@ -2981,6 +2982,54 @@ function onCodeMouseDown(e) {
   if (modDown(e) && e.target.closest?.("[data-l]")) e.preventDefault(); // no text selection
 }
 
+// Text selection in a diff covers code only: a drag that starts on one side of a split diff
+// stays on that side, and gutters, tags and Ask badges are never part of it (see app.css).
+// `body[data-sel]` names the code column being selected: "o"/"n" (split sides) or "u".
+function codeColumn(td) {
+  if (!td) return null;
+  if (td.classList.contains("no")) td = td.nextElementSibling; // a line number picks its code
+  if (!td) return null;
+  if (td.classList.contains("side-o")) return "o";
+  if (td.classList.contains("side-n")) return "n";
+  return td.classList.contains("text") ? "u" : null;
+}
+
+const CODE_CELLS = { o: "td.side-o", n: "td.side-n", u: "td.text" };
+
+function onSelectStart(e) {
+  if (e.button !== 0 || e.detail > 1) return; // keep the column on double/triple-click
+  const col = codeColumn(e.target.closest?.(".diff td"));
+  if (col) document.body.dataset.sel = col;
+  else delete document.body.dataset.sel;
+}
+
+// Copies the selected code as lines, one per code cell, without whatever the browser would
+// pick up between cells (line numbers, the other side, tabs between table cells).
+function onCodeCopy(e) {
+  const col = document.body.dataset.sel;
+  const sel = window.getSelection();
+  if (!col || !sel.rangeCount || sel.isCollapsed) return;
+  const range = sel.getRangeAt(0);
+  const root = range.commonAncestorContainer;
+  const scope = root.nodeType === 1 ? root : root.parentElement;
+  const inCell = scope.closest(CODE_CELLS[col]);
+  const cells = inCell ? [inCell] : [...scope.querySelectorAll(`.diff ${CODE_CELLS[col]}`)];
+  const lines = [];
+  for (const cell of cells) {
+    if (!range.intersectsNode(cell) || cell.classList.contains("empty")) continue;
+    const r = document.createRange();
+    r.selectNodeContents(cell);
+    if (cell.contains(range.startContainer)) r.setStart(range.startContainer, range.startOffset);
+    if (cell.contains(range.endContainer)) r.setEnd(range.endContainer, range.endOffset);
+    lines.push(r.toString() || null); // null: nothing selected in this cell
+  }
+  while (lines.length && lines[0] === null) lines.shift();
+  while (lines.length && lines.at(-1) === null) lines.pop();
+  if (!lines.length) return;
+  e.preventDefault();
+  e.clipboardData.setData("text/plain", lines.map((l) => l ?? "").join("\n"));
+}
+
 function onCodeClick(e) {
   if (!modDown(e)) return;
   const hit = wordUnder(e);
@@ -3278,6 +3327,8 @@ async function init() {
   window.addEventListener("hashchange", closeAskMenu);
   $("#ai-chip").addEventListener("click", (e) => { e.preventDefault(); showSettings(); });
   $("#content").addEventListener("mousedown", onCodeMouseDown);
+  document.addEventListener("mousedown", onSelectStart);
+  document.addEventListener("copy", onCodeCopy);
   $("#content").addEventListener("mousemove", onCodeMouseMove);
   document.addEventListener("keyup", (e) => {
     if (e.key === "Meta" || e.key === "Control") { document.body.classList.remove("nav-armed"); setHoverWord(null); }
