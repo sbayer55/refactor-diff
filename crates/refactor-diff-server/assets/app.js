@@ -2419,7 +2419,6 @@ async function renderFileView(path, mode, line) {
     <div class="viewer-bar">
       ${backButton()}
       <nav class="tabs" aria-label="File version">${tabs}</nav>
-      ${highlightToggle()}
       ${issuesToggle()}
       ${mode === "diff" ? layoutToggle(path) : ""}
       <span class="spacer"></span>
