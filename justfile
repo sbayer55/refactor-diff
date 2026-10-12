@@ -3,10 +3,10 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 desktop := justfile_directory() / "desktop"
-vendor  := justfile_directory() / "crates/refactor-diff-server/python/vendor"
+wheels_lock := justfile_directory() / "crates/refactor-diff-server/python/wheels.lock"
 bundle  := justfile_directory() / "target/release/bundle"
 
-# Pinned pure-Python dependencies bundled into the binary for Python code navigation.
+# Pure-Python dependencies bundled into the binary for Python code navigation (`just pin-python`).
 jedi_version  := "0.20.0"
 parso_version := "0.8.7"
 
@@ -54,25 +54,21 @@ clean:
     cargo clean
     rm -rf "{{ desktop }}/src-tauri/gen"
 
-# Refresh the vendored jedi/parso to the pinned versions (needs network; commit the result)
-vendor-python:
+# Pin jedi/parso in python/wheels.lock to the versions above (needs network; commit the result)
+pin-python:
     #!/usr/bin/env bash
     set -euo pipefail
-    tmp="$(mktemp -d)"
-    trap 'rm -rf "$tmp"' EXIT
-    python3 -m pip download --no-deps --only-binary=:all: --dest "$tmp" \
-        "jedi=={{ jedi_version }}" "parso=={{ parso_version }}"
-    rm -rf "{{ vendor }}"
-    mkdir -p "{{ vendor }}/LICENSES"
-    for whl in "$tmp"/*.whl; do unzip -q "$whl" -d "{{ vendor }}"; done
-    find "{{ vendor }}" -name '__pycache__' -type d -prune -exec rm -rf {} +
-    for info in "{{ vendor }}"/*.dist-info; do
-        name="$(basename "$info" | cut -d- -f1)"
-        for f in LICENSE.txt AUTHORS.txt; do [ -f "$info/$f" ] && cp "$info/$f" "{{ vendor }}/LICENSES/$name-$f"; done
-        rm -rf "$info"
-    done
-    { echo "jedi=={{ jedi_version }}"; echo "parso=={{ parso_version }}"; } > "{{ vendor }}/VERSIONS"
-    du -sh "{{ vendor }}"
+    {
+        echo "# Pure-Python wheels bundled into the binary for Python code navigation, fetched by build.rs."
+        echo "# One wheel per line: <url> <sha256>. Regenerate with \`just pin-python\`."
+        for spec in "jedi/{{ jedi_version }}" "parso/{{ parso_version }}"; do
+            curl -fsSL "https://pypi.org/pypi/$spec/json" | python3 -c 'import json, sys
+    whl = [u for u in json.load(sys.stdin)["urls"] if u["filename"].endswith("-py2.py3-none-any.whl") or u["filename"].endswith("-py3-none-any.whl")]
+    print(whl[0]["url"], whl[0]["digests"]["sha256"])'
+        done
+    } > "{{ wheels_lock }}.tmp"
+    mv "{{ wheels_lock }}.tmp" "{{ wheels_lock }}"
+    cat "{{ wheels_lock }}"
 
 # ---------------------------------------------------------- Desktop app ---
 
