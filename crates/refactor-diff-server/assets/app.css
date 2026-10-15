@@ -635,6 +635,16 @@ body.nav-armed [data-l] { cursor: pointer; }
 .issues-label { text-decoration: underline wavy var(--issue-warning); text-decoration-skip-ink: none; text-underline-offset: 3px; }
 [data-issues][aria-pressed="false"] .issues-label { text-decoration-color: var(--faint); }
 
+/* ---- inline messages (issue text after the line; see setInline) ---- */
+.diff td[data-issue-msg]:not([data-fold-label])::after {
+  content: attr(data-issue-msg); margin-left: 2.5em; font: italic 11.5px var(--sans); color: var(--issue-info);
+  opacity: 0.9; white-space: pre-wrap; word-break: normal; overflow-wrap: anywhere; -webkit-user-select: none; user-select: none;
+}
+.diff td[data-issue-sev="warning"]::after { color: var(--issue-warning); }
+.diff td[data-issue-sev="error"]::after { color: var(--issue-error); }
+body.inline-off .diff td[data-issue-msg]::after { content: none; }
+body.inline-off .diff tr.tags:not(.review-fold), body.inline-off .diff tr.ai-row, body.inline-off .ai-band { display: none; }
+
 .nav-panel {
   position: fixed; top: 0; right: 0; bottom: 0; z-index: 30; width: min(460px, 100vw);
   display: flex; flex-direction: column; background: var(--panel);
