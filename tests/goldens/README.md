@@ -94,3 +94,7 @@ Every golden above is matched exactly by the Rust crates (`cargo test`), except 
   the token value (Rust strings cannot hold a lone surrogate); Python produced `'\ud83d'`.
 - `settings.json` and review files are written as UTF-8 escaped to ASCII exactly like
   `json.dumps`; the Rust writer produces the same bytes for every sample here.
+- `settings.public.json` carries a `jev` section (Jev risk scoring through Vercel AI Gateway,
+  added to the Rust server after the Python package was removed). It is reported by
+  `public_view` with its defaults filled in, but is not part of the stored defaults, so
+  `settings.sample.json` is still byte-for-byte what the Python tool wrote.

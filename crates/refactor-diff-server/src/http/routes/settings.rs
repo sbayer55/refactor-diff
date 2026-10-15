@@ -20,7 +20,7 @@ pub async fn get_settings(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(public_view(&state.settings.load()))
 }
 
-/// Merge `{"ai": {...}, "reposDir": "..."}` over the stored settings (masked secrets keep
+/// Merge `{"ai": {...}, "jev": {...}, "reposDir": "..."}` over the stored settings (masked secrets keep
 /// their stored value).
 pub async fn save_settings(
     State(state): State<Arc<AppState>>,
@@ -57,11 +57,17 @@ pub async fn test_settings(
         Ok(settings) => settings,
         Err(e) => return failed(e.to_string()),
     };
-    let provider = match state.providers.build(&resolved) {
-        Ok(provider) => provider,
-        Err(e) => return failed(e.0),
+    let result = if str_or_empty(&body.provider) == "jev" {
+        match state.jev_factory.build(&resolved) {
+            Ok(evaluator) => evaluator.test().await,
+            Err(e) => return failed(e.0),
+        }
+    } else {
+        match state.providers.build(&resolved) {
+            Ok(provider) => provider.test().await,
+            Err(e) => return failed(e.0),
+        }
     };
-    let result = provider.test().await;
     Json(serde_json::to_value(result).expect("a test result serializes"))
 }
 

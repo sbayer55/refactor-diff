@@ -9,6 +9,7 @@ use refactor_diff_core::Category;
 use serde::Serialize;
 
 use crate::ai::ProviderFactory;
+use crate::ai::jev::JevFactory;
 use crate::git::GitHub;
 
 /// Everything [`crate::App::build`] needs.
@@ -33,6 +34,8 @@ pub struct ServerConfig {
     /// The AI providers behind the Ask menu; the real ones (Claude, Ollama, OpenAI-compatible)
     /// when `None`.
     pub providers: Option<Arc<dyn ProviderFactory>>,
+    /// The Jev risk-scoring client; the real Vercel AI Gateway client when `None`.
+    pub jev: Option<Arc<dyn JevFactory>>,
     /// Served as `/api/config`'s `desktop`: the UI is inside the desktop app (whose shell
     /// handles things like the Settings window).
     pub desktop: bool,
@@ -53,6 +56,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("path", &self.path)
             .field("github", &self.github.as_ref().map(|_| "<custom>"))
             .field("providers", &self.providers.as_ref().map(|_| "<custom>"))
+            .field("jev", &self.jev.as_ref().map(|_| "<custom>"))
             .field("desktop", &self.desktop)
             .field("settings_only", &self.settings_only)
             .finish()

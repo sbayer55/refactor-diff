@@ -77,6 +77,11 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(routes::ai::ai_refs_count),
         )
         .route("/api/report/{report_id}/ai/ask", post(routes::ai::ai_ask))
+        .route("/api/report/{report_id}/jev", get(routes::jev::get))
+        .route(
+            "/api/report/{report_id}/jev/score",
+            post(routes::jev::score),
+        )
         .route("/static/{*path}", get(assets::static_file))
         .fallback(not_found)
         .with_state(state)

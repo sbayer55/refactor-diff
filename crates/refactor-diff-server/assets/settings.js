@@ -1,7 +1,8 @@
 "use strict";
 
-// The assistant settings form, shared by the review UI's settings dialog (browser) and the
-// standalone /settings page that the desktop app shows in its own Settings window (⌘,).
+// The assistant settings form (the Ask provider and Jev risk scoring), shared by the review
+// UI's settings dialog (browser) and the standalone /settings page that the desktop app shows
+// in its own Settings window (⌘,).
 // Settings live on the server in ~/.config/refactor-diff/settings.json; see /api/settings.
 
 const Settings = (() => {
@@ -41,6 +42,7 @@ const Settings = (() => {
   // which answers through `setReposDir`).
   function render(root, data, { onSaved, onClose, onPickReposDir, closeLabel = "Cancel" }) {
     const ai = data.ai;
+    const jev = data.jev || { api_key: "", base_url: "", auto: false, zero_data_retention: false };
     const $ = (sel) => root.querySelector(sel);
     const field = (label, name, value, { type = "text", width = "", placeholder = "", list = "", hint = "" } = {}) =>
       `<label class="field ${width}">${label}${hint ? ` <span class="muted">${hint}</span>` : ""}
@@ -90,6 +92,23 @@ const Settings = (() => {
           <label class="toggle"><input type="checkbox" name="context.pr" ${ai.context.pr ? "checked" : ""}>PR description</label>
           <label class="toggle"><input type="checkbox" name="context.references" ${ai.context.references ? "checked" : ""}>References</label>
         </div>
+        <div class="settings-section">
+          <div class="settings-row">
+            <span class="kind ai">Jev</span><b>Risk scoring</b><span class="muted">TypeSafe AI's Jev through Vercel AI Gateway</span>
+            <span class="ai-status" id="jev-status"></span>
+            <span class="spacer"></span>
+            <button type="button" class="toggle" id="jev-test">Test connection</button>
+          </div>
+          <div class="fields">
+            ${field("AI Gateway API key", "jev.api_key", jev.api_key, { type: "password", width: "wide", placeholder: "vck_…" })}
+            ${field("Base URL", "jev.base_url", jev.base_url, { width: "wide", placeholder: "https://ai-gateway.vercel.sh", hint: "(optional)" })}
+          </div>
+          <div class="settings-row toggles">
+            <label class="toggle"><input type="checkbox" name="jev.auto" ${jev.auto ? "checked" : ""}>Score needs-review hunks automatically after each analysis</label>
+            <label class="toggle"><input type="checkbox" name="jev.zero_data_retention" ${jev.zero_data_retention ? "checked" : ""}>Ask the gateway for zero data retention</label>
+          </div>
+          <p class="muted">Each needs-review hunk and its enclosing function are sent to Jev, which returns risk probabilities used to rank the list and fill the RISK panel. Nothing is sent until you run <b>Score with Jev</b> or turn on automatic scoring; collapsed pattern members are never sent.</p>
+        </div>
         <div class="fields repos-dir">
           ${field("Repositories folder", "reposDir", data.reposDir ?? "~/code/", { width: "wide", placeholder: "~/code/", hint: "(for GitHub links in the desktop app)" })}
           ${onPickReposDir ? '<button type="button" class="toggle" id="settings-pick-repos">Choose…</button>' : ""}
@@ -114,6 +133,12 @@ const Settings = (() => {
         pr: form.querySelector('[name="context.pr"]').checked,
         references: form.querySelector('[name="context.references"]').checked,
       },
+    });
+    const currentJev = () => ({
+      api_key: value("jev.api_key"),
+      base_url: value("jev.base_url"),
+      auto: form.querySelector('[name="jev.auto"]').checked,
+      zero_data_retention: form.querySelector('[name="jev.zero_data_retention"]').checked,
     });
     const preview = () => {
       const cfg = current();
@@ -150,6 +175,22 @@ const Settings = (() => {
         btn.disabled = false;
       }
     });
+    $("#jev-test").addEventListener("click", async () => {
+      const el = $("#jev-status");
+      const set = (text, cls = "") => { el.textContent = text; el.className = `ai-status ${cls}`; };
+      set("Testing…", "live");
+      const btn = $("#jev-test");
+      btn.disabled = true;
+      try {
+        const res = await api("/api/settings/test", { provider: "jev", config: currentJev() });
+        if (res.ok) set(`Connected · ${(res.latency_ms / 1000).toFixed(1)} s`, "ok");
+        else set(res.error, "error");
+      } catch (e) {
+        set(e.message, "error");
+      } finally {
+        btn.disabled = false;
+      }
+    });
     if (onPickReposDir) $("#settings-pick-repos").addEventListener("click", () => onPickReposDir(value("reposDir")));
     $("#settings-close").addEventListener("click", onClose);
     $("#settings-cancel").addEventListener("click", onClose);
@@ -157,7 +198,7 @@ const Settings = (() => {
       const btn = $("#settings-save");
       btn.disabled = true;
       try {
-        const saved = await api("/api/settings", { ai: current(), reposDir: value("reposDir") });
+        const saved = await api("/api/settings", { ai: current(), jev: currentJev(), reposDir: value("reposDir") });
         form.querySelector('[name="reposDir"]').value = saved.reposDir;
         onSaved(saved, status);
       } catch (e) {

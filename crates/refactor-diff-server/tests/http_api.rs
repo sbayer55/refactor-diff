@@ -139,6 +139,7 @@ async fn unknown_report_is_404() {
         "/api/report/nope/source?side=old&path=api.py",
         "/api/report/nope/issues?side=old&path=api.py",
         "/api/report/nope/folds?side=old&path=api.py",
+        "/api/report/nope/jev",
     ] {
         let res = server.get(path).await;
         assert_eq!(res.status, StatusCode::NOT_FOUND, "{path}");
@@ -156,6 +157,7 @@ async fn unknown_report_is_404() {
         "/api/report/nope/ai/menu",
         "/api/report/nope/ai/refs-count",
         "/api/report/nope/ai/ask",
+        "/api/report/nope/jev/score",
     ] {
         let res = server.post(path, json!({})).await;
         assert_eq!(res.status, StatusCode::NOT_FOUND, "{path}");
@@ -710,7 +712,10 @@ async fn settings_round_trip_masks_secrets() {
     assert_eq!(res.error(), "Unknown provider 'cursor'.");
     let res = server.post("/api/settings", json!({"nothing": 1})).await;
     assert_eq!(res.status, StatusCode::BAD_REQUEST);
-    assert_eq!(res.error(), "Expected an object with an 'ai' section.");
+    assert_eq!(
+        res.error(),
+        "Expected an object with an 'ai' or 'jev' section."
+    );
 }
 
 #[tokio::test]

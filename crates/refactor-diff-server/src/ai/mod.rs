@@ -7,6 +7,7 @@
 
 pub mod claude;
 pub mod context;
+pub mod jev;
 pub mod nav_adapter;
 pub mod ollama;
 pub mod openai;

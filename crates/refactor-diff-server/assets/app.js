@@ -38,7 +38,20 @@ const state = {
   desktop: false, // running in the desktop app (see /api/config)
   singleFile: false, // show one file's section at a time on Needs review / pattern pages (preference)
   currentFile: null, // path of the file shown in single-file mode (null: the page's first)
+  jev: emptyJev(), // Jev risk scores for the report's needs-review hunks (see loadJev())
+  riskSort: false, // order the needs-review list by Jev risk instead of file order (preference)
 };
+
+function emptyJev() {
+  return {
+    status: { state: "idle" }, // idle | running {done, total} | done {...} | error {message}
+    byHunk: new Map(), // hunk id -> HunkRisk (see /api/report/{id}/jev)
+    failures: [],
+    configured: false, // a Vercel AI Gateway key is set
+    auto: false, // scoring starts by itself after each analysis
+    timer: 0, // the poll while a job runs
+  };
+}
 
 // Side-by-side needs room for two code columns; narrower windows always get unified diffs.
 const narrowQuery = window.matchMedia("(max-width: 760px)");
@@ -89,7 +102,7 @@ async function api(path, body) {
     body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  if (!res.ok) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { settings: data.settings });
   return data;
 }
 
@@ -573,6 +586,8 @@ function loadReport(report) {
   state.issues = new Map();
   state.folds = new Map();
   state.folded = new Set(); // line numbers may have moved
+  clearTimeout(state.jev.timer);
+  state.jev = { ...emptyJev(), configured: state.jev.configured, auto: state.jev.auto };
   setReview(report.review);
   applyFilters();
   renderStatus();
@@ -582,6 +597,7 @@ function loadReport(report) {
   } else {
     route();
   }
+  loadJev();
 }
 
 // A report the server already has (e.g. the whole range, after looking at one commit).
@@ -685,11 +701,13 @@ function renderStatus() {
     <span class="${stats.hunks && !left ? "ok" : ""}">${stats.hunks_done}/${stats.hunks} hunks</span>
     <span>${plural(stats.residual_units, "change")} to review</span>
     <span class="${v.warnings.length ? "warn" : ""}">${plural(v.warnings.length, "warning")}</span>
+    ${jevStatusHtml()}
     <span class="spacer"></span>
     <span>${plural(stats.mechanical_groups, "pattern")} · ${stats.files_analyzed}/${stats.files_changed} files</span>
     <span>${splitActive() ? "split" : "unified"} · ${state.syntax ? "syntax" : "diff"} · min repeats ${state.report.source.min_count ?? 2}</span>
     <button type="button" class="link" id="status-help"><kbd>?</kbd> help</button>`;
   $("#status-help").addEventListener("click", () => showHelp(true));
+  $("#status-jev")?.addEventListener("click", () => scoreWithJev());
 }
 
 // ---------- outputs: Markdown summary and PR comments ----------
@@ -1037,7 +1055,7 @@ function renderInspector() {
   let html = "";
   if (view === "group" && id) html += inspectorPattern(id);
   else if (!view || view === "review") html += inspectorHunk();
-  html += inspectorProgress() + inspectorWarnings() + inspectorReport() + inspectorKeys();
+  html += inspectorProgress() + inspectorRisk() + inspectorWarnings() + inspectorReport() + inspectorKeys();
   el.innerHTML = `<div class="insp">${html}</div>`;
 }
 
@@ -1214,6 +1232,10 @@ function onInspectorClick(e) {
     goTo("#warnings", `#warning-${Number(w.dataset.warningIndex)}`);
     return;
   }
+  const rh = e.target.closest("[data-risk-hunk]");
+  if (rh) { e.preventDefault(); goToHunk(rh.dataset.riskHunk); return; }
+  const ra = e.target.closest("[data-risk-ask]");
+  if (ra) { e.preventDefault(); askAboutRisk(ra.dataset.riskAsk); return; }
   const btn = e.target.closest("[data-act]");
   if (!btn) return;
   switch (btn.dataset.act) {
@@ -1232,6 +1254,9 @@ function onInspectorClick(e) {
     case "copy-md": copySummary(); break;
     case "post-summary": postSummary(); break;
     case "help": showHelp(true); break;
+    case "jev-score": scoreWithJev(); break;
+    case "jev-settings": showSettings(); break;
+    case "jev-sort": setRiskSort(true); break;
   }
 }
 
@@ -1415,15 +1440,22 @@ function renderReview() {
     content.innerHTML = `<div class="empty"><h2>Nothing left to review</h2><p>${why}</p></div>`;
     return;
   }
-  const byFile = new Map();
+  let byFile = new Map();
   for (const hid of v.residualHunks) {
     const h = r.hunks[hid];
     if (!byFile.has(h.path)) byFile.set(h.path, []);
     byFile.get(h.path).push(h);
   }
+  if (riskSortActive()) {
+    // Riskiest hunks first within a file, riskiest files first; unscored hunks keep their place at the end.
+    const risk = (h) => riskOf(h.id)?.risk ?? -1;
+    for (const hunks of byFile.values()) hunks.sort((a, b) => risk(b) - risk(a));
+    byFile = new Map([...byFile.entries()].sort((a, b) => Math.max(...b[1].map(risk)) - Math.max(...a[1].map(risk))));
+  }
   let html = `<div class="page-head">
     <p>Changes that don't belong to a repeated pattern. Lines already explained by a pattern are dimmed.
-    Tick a hunk when you've read it; ticked hunks fold up and stay ticked across restarts and new commits.</p></div>
+    Tick a hunk when you've read it; ticked hunks fold up and stay ticked across restarts and new commits.</p>
+    ${riskSortToggle()}</div>
     ${deltaBanner()}
     ${navHint()}`;
   for (const [path, hunks] of byFile) {
@@ -1448,6 +1480,7 @@ function hunkHtml(h) {
       <label class="review-box" title="Reviewed (x)"><input type="checkbox" data-review-hunk="${h.fingerprint}" ${done ? "checked" : ""}></label>
       <span>@@ line ${h.new_start} @@</span>
       ${hunkIsNew(h) ? `<span class="badge-new" title="Not in the diff last time">new</span>` : ""}
+      <span data-risk-chip>${riskOf(h.id) ? riskChip(riskOf(h.id)) : ""}</span>
       <span class="badge-new" data-answers-badge ${answersOf(h.id).length ? "" : "hidden"}>${plural(answersOf(h.id).length, "answer")}</span>
       <span class="spacer"></span>
       <button type="button" class="link ask" data-hunk-ask title="Ask the AI about this hunk (a)" ${
@@ -2786,6 +2819,7 @@ const KEY_HELP = [
     ["o", "", "open the focused hunk in your editor"],
     ["c", "", "comment on the focused hunk (pull requests)"],
     ["a", "", "ask the AI about the focused hunk"],
+    ["g s", "", "score the needs-review hunks with Jev (rank by risk)"],
   ]],
   ["Navigate", [
     ["l", "h", "next / previous file"],
@@ -2917,6 +2951,7 @@ const PALETTE_MAX = 50; // rows rendered; the rest are summarized in a footer
 
 const hasReport = () => Boolean(state.report);
 const inFileView = () => location.hash.startsWith("#file/") || location.hash.startsWith("#lib/");
+const hasScores = () => hasReport() && state.jev.byHunk.size > 0;
 
 // Each command: { id, title, group, keys?, when?, dynamic?, run }
 //   title    shown and fuzzy-matched; describes the *next* state ("Hide docs edits")
@@ -2966,6 +3001,12 @@ function paletteCommands() {
       when: () => hasReport() && state.singleFile, run: () => setSingleFile(false) },
     { id: "review.next-file", group: "Review", title: "Next file", keys: "l", when: hasFileSections, run: () => fileStep(1) },
     { id: "review.prev-file", group: "Review", title: "Previous file", keys: "h", when: hasFileSections, run: () => fileStep(-1) },
+    { id: "jev.score", group: "Review", title: "Score with Jev (rank needs review by risk)", keys: "g s", when: hasReport,
+      run: () => scoreWithJev() },
+    { id: "jev.rescore", group: "Review", title: "Rescore with Jev (ignore cached scores)", when: hasScores,
+      run: () => scoreWithJev(true) },
+    { id: "jev.sort", group: "Review", title: state.riskSort ? "Sort needs review by file" : "Sort needs review by risk",
+      when: hasScores, run: () => setRiskSort(!state.riskSort) },
     { id: "layout.diff", group: "Layout", title: "Highlighting: diff",
       when: () => hasReport() && state.syntax, run: () => setSyntax(false) },
     { id: "layout.syntax", group: "Layout", title: "Highlighting: syntax",
@@ -3176,6 +3217,7 @@ function onKey(e) {
     pendingG = 0;
     const go = { r: "#review", w: "#warnings", f: "#files", c: "#commits" }[e.key];
     if (go) { location.hash = go; e.preventDefault(); }
+    else if (e.key === "s") { scoreWithJev(); e.preventDefault(); }
     return;
   }
   const inFile = location.hash.startsWith("#file/") || location.hash.startsWith("#lib/");
@@ -3658,12 +3700,16 @@ async function init() {
   loadInlinePref();
   watchIssues();
   loadSingleFile();
+  loadRiskSort();
   loadPanes();
   loadPaneWidths();
   initPaneResizers();
   trackTopbarHeight();
   narrowQuery.addEventListener("change", () => { if (state.report) rerender(); });
   window.addEventListener("hashchange", route);
+  document.addEventListener("change", (e) => {
+    if (e.target.matches?.("[data-risk-sort]")) setRiskSort(e.target.checked);
+  });
 
   let defaults = {};
   try {
@@ -3678,6 +3724,7 @@ async function init() {
     loadLayout();
     loadSyntax();
     loadSingleFile();
+    loadRiskSort();
     loadPanes();
     loadPaneWidths();
   } catch {}
@@ -3693,6 +3740,192 @@ async function init() {
   window.refactorDiff = { openPalette, showHelp: () => showHelp(true), showSettings, reloadSettings: loadAiSettings, openSource };
   await loadSources(defaults);
   if (defaults.mode) runAnalysis();
+}
+
+// ---------- Jev risk scoring ----------
+// The needs-review hunks can be scored by TypeSafe AI's Jev through Vercel AI Gateway (see
+// /api/report/{id}/jev): per hunk, probabilities for seven concerns, a blast radius, a reviewer
+// effort and the one thing to check first. The scores rank the list, put a chip on each hunk
+// bar and fill the RISK section of the inspector. They are a third kind of annotation, kept
+// apart from the report's refactor warnings and from code issues, and never enter either.
+// Scoring runs on demand (g s, the status bar, the palette) or, with the setting on, after
+// each analysis; the server caches scores by hunk fingerprint.
+
+const CONCERN_LABELS = {
+  hardcoded_secret: "hard-coded secret", injection_risk: "injection risk", touches_auth: "touches auth",
+  weakens_tests: "weakens tests", breaks_api: "breaks API", data_migration: "data migration",
+  debug_leftovers: "debug leftovers", secret: "hard-coded secret", injection: "injection risk", auth: "auth change",
+  api_contract: "API contract", test_weakening: "test weakening", debug: "debug leftovers",
+  migration: "data migration", logic: "logic change", none: "no concern", insufficient_evidence: "unclear",
+};
+const concernLabel = (name) => CONCERN_LABELS[name] || String(name || "").replace(/_/g, " ");
+const pctOf = (p) => `${Math.round((p || 0) * 100)}%`;
+
+function loadRiskSort() {
+  state.riskSort = prefGet("refactor-diff:risk-sort") === "risk";
+}
+
+function setRiskSort(on) {
+  state.riskSort = on;
+  prefSet("refactor-diff:risk-sort", on ? "risk" : "file");
+  rerender();
+}
+
+const riskSortActive = () => state.riskSort && state.jev.byHunk.size > 0;
+const riskOf = (hunkId) => state.jev.byHunk.get(hunkId) || null;
+const jevRunning = () => state.jev.status.state === "running";
+
+// The flagged hunks among the visible needs-review hunks, riskiest first.
+function flaggedHunks() {
+  const v = state.view;
+  if (!v) return [];
+  return v.residualHunks.map(riskOf).filter((r) => r && r.flagged).sort((a, b) => b.risk - a.risk);
+}
+
+function riskSortToggle() {
+  if (!state.jev.byHunk.size) return "";
+  return `<label class="toggle risk-sort" title="Riskiest hunks and files first"><input type="checkbox" data-risk-sort ${state.riskSort ? "checked" : ""}>Sort by risk</label>`;
+}
+
+// Fetch the job's state (and the scores so far); keep polling while it runs.
+async function loadJev() {
+  const report = state.report;
+  if (!report) return;
+  clearTimeout(state.jev.timer);
+  state.jev.timer = 0;
+  let data;
+  try { data = await api(`/api/report/${report.id}/jev`); } catch { return; }
+  if (state.report !== report) return;
+  applyJevData(data);
+}
+
+function applyJevData(data) {
+  const wasRunning = jevRunning();
+  state.jev.status = data.status || { state: "idle" };
+  state.jev.configured = Boolean(data.configured);
+  state.jev.auto = Boolean(data.auto);
+  state.jev.failures = data.failures || [];
+  state.jev.byHunk = new Map(Object.entries(data.hunks || {}));
+  clearTimeout(state.jev.timer);
+  state.jev.timer = jevRunning() ? setTimeout(loadJev, 1000) : 0;
+  if (wasRunning && !jevRunning() && riskSortActive()) { rerender(); return; }
+  paintRiskChips();
+  if (!riskSortToggleShown() && state.jev.byHunk.size) { rerender(); return; }
+  renderStatus();
+  renderInspector();
+}
+
+const riskSortToggleShown = () => Boolean(document.querySelector("#content [data-risk-sort]")) || !(location.hash === "#review" || !location.hash);
+
+// Fill the chip placeholder on every rendered hunk bar.
+function paintRiskChips(root = document) {
+  for (const el of root.querySelectorAll("[data-hunk] [data-risk-chip]")) {
+    const r = riskOf(el.closest("[data-hunk]").dataset.hunk);
+    el.innerHTML = r ? riskChip(r) : "";
+  }
+}
+
+function riskChip(r) {
+  const lines = r.concerns.map((c) => `${concernLabel(c.name)} ${pctOf(c.p)}`);
+  lines.push(`blast radius: ${r.blast_label}`, `reviewer effort: ${r.effort_label}`);
+  const label = r.flagged ? concernLabel(r.primary_concern) : "low risk";
+  return `<span class="tag risk ${esc(r.level)}" title="${esc(lines.join("\n"))}">${esc(label)} · ${pctOf(r.risk)}</span>`;
+}
+
+async function scoreWithJev(force = false) {
+  const report = state.report;
+  if (!report) return;
+  try {
+    const data = await api(`/api/report/${report.id}/jev/score`, { force });
+    if (state.report !== report) return;
+    toast(force ? "Rescoring every needs-review hunk with Jev…" : "Scoring the needs-review hunks with Jev…");
+    applyJevData(data);
+  } catch (e) {
+    toast(e.message, { error: true });
+    if (e.settings) showSettings();
+  }
+}
+
+function jevStatusHtml() {
+  const s = state.jev.status;
+  if (s.state === "running") return `<button type="button" class="link" id="status-jev" disabled>Jev ${s.done}/${s.total}…</button>`;
+  if (s.state === "error") return `<button type="button" class="link warn" id="status-jev" title="${esc(s.message)}">Jev failed · retry</button>`;
+  if (state.jev.byHunk.size) {
+    const n = flaggedHunks().length;
+    return `<span class="${n ? "warn" : ""}">${plural(n, "risk flag")}</span>`;
+  }
+  return `<button type="button" class="link" id="status-jev" title="Rank the needs-review hunks by risk with Jev (g s)">Score with Jev</button>`;
+}
+
+function inspectorRisk() {
+  const j = state.jev;
+  const s = j.status;
+  const flagged = flaggedHunks();
+  const count = j.byHunk.size ? `<span style="${flagged.length ? "color: var(--bad-fg)" : ""}">${flagged.length} flagged</span>` : "";
+  const muted = (html) => `<div class="prose" style="color: var(--muted)">${html}</div>`;
+  let body;
+  if (s.state === "running") {
+    body = `<div class="card"><div class="row"><span class="l">scoring with Jev</span><span class="v">${s.done} / ${s.total}</span></div>
+      <div class="meter"><div style="width:${s.total ? Math.round((100 * s.done) / s.total) : 0}%"></div></div></div>`;
+  } else if (s.state === "error") {
+    body = `<div class="card risk high"><div class="prose">${esc(s.message)}</div>
+      <div class="links"><button type="button" class="link" data-act="jev-score">Try again</button><button type="button" class="link" data-act="jev-settings">Settings</button></div></div>`;
+  } else if (!j.byHunk.size && !j.configured) {
+    body = muted(`Rank what's left by risk with TypeSafe AI's Jev. <button type="button" class="link" data-act="jev-settings">Set up Jev in Settings</button>`);
+  } else if (!j.byHunk.size) {
+    body = muted(`Not scored yet. <button type="button" class="link" data-act="jev-score">Score with Jev</button>`);
+  } else {
+    const shown = flagged.slice(0, 4);
+    const cards = shown.map(riskCard).join("");
+    const more = flagged.length > shown.length
+      ? `<button type="button" class="link prose" data-act="jev-sort">…and ${flagged.length - shown.length} more · sort by risk</button>` : "";
+    const note = s.note ? muted(esc(s.note)) : "";
+    const failed = j.failures.length ? muted(`${plural(j.failures.length, "hunk")} couldn't be scored: ${esc(j.failures[0].error)}`) : "";
+    body = (cards || muted("Nothing flagged among the visible hunks.")) + more + note + failed
+      + `<div class="links"><label class="toggle risk-sort"><input type="checkbox" data-risk-sort ${state.riskSort ? "checked" : ""}>Sort by risk</label>
+         <button type="button" class="link" data-act="jev-score" title="Score the hunks that have no cached score">Score again</button></div>`;
+  }
+  return `<h2>Risk ${count}</h2>${body}`;
+}
+
+function riskCard(r) {
+  const top = r.concerns.slice(0, 3).map((c) =>
+    `<div class="row"><span class="l">${esc(concernLabel(c.name))}</span><span class="v">${pctOf(c.p)}</span></div>
+     <div class="meter risk"><div style="width:${Math.round((c.p || 0) * 100)}%"></div></div>`).join("");
+  const h = state.report.hunks[r.hunk_id];
+  return `<div class="card risk ${esc(r.level)}">
+    <div class="prose"><b>${esc(concernLabel(r.primary_concern))}</b> · risk ${pctOf(r.risk)} · ${esc(r.blast_label)} / ${esc(r.effort_label)}</div>
+    ${top}
+    <div class="loc" style="color: var(--muted)">${esc(r.path)}:${h ? h.new_start : ""}</div>
+    <div class="links"><a href="#review" data-risk-hunk="${esc(r.hunk_id)}">view</a><a href="#review" data-risk-ask="${esc(r.hunk_id)}">ask</a></div>
+  </div>`;
+}
+
+// Scroll the needs-review page to a hunk and give it the keyboard focus.
+function goToHunk(hunkId) {
+  goTo("#review", `[data-hunk="${hunkId}"]`);
+  setTimeout(() => {
+    const el = document.querySelector(`[data-hunk="${hunkId}"]`);
+    if (!el) return;
+    const i = focusables().indexOf(el);
+    if (i >= 0) { state.focus = i; applyFocus(false); }
+  }, 60);
+}
+
+// Open the Ask menu on a flagged hunk with a prompt about what Jev found.
+function askAboutRisk(hunkId) {
+  const r = riskOf(hunkId);
+  goToHunk(hunkId);
+  setTimeout(() => {
+    const el = document.querySelector(`[data-hunk="${hunkId}"]`);
+    if (!el) { toast("That hunk isn't on the page (filtered out or folded).", { error: true }); return; }
+    openAskMenu(el, el.querySelector("[data-hunk-ask]"));
+    const box = document.querySelector("#ask-menu textarea");
+    if (!box || !r) return;
+    const top = r.concerns.slice(0, 2).map((c) => `${concernLabel(c.name)} ${pctOf(c.p)}`).join(", ");
+    box.value = `Jev flagged this hunk: ${concernLabel(r.primary_concern)} (${pctOf(r.confidence)} confidence; ${top}). Is that concern real here, and what would make this change safe?`;
+    box.focus();
+  }, 120);
 }
 
 // ---------- Ask: AI help on a hunk or a line ----------
@@ -4240,6 +4473,7 @@ async function showSettings() {
     onSaved: (saved) => {
       state.ai = saved.ai.active;
       state.aiContext = saved.ai.context;
+      if (saved.jev) { state.jev.configured = !!saved.jev.configured; state.jev.auto = !!saved.jev.auto; renderInspector(); }
       renderAiChip();
       toast(state.ai.configured ? `Ask will use ${providerLabel()}.` : "Saved. That provider still needs its details before Ask works.");
       close();
