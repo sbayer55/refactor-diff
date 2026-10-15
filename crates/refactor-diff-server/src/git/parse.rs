@@ -141,9 +141,115 @@ pub fn commit_records(out: &str) -> Vec<super::Commit> {
         .collect()
 }
 
+/// `git log --numstat -z --format=%x1e...` records: the `%x1f`-split head fields of each
+/// commit and, when the commit touched the file, `(insertions, deletions, path)` with the
+/// path the file had *after* the commit (a rename record names old then new). Binary files
+/// count as zero.
+pub type NumstatRecord = (Vec<String>, Option<(u32, u32, String)>);
+
+pub fn numstat_z(out: &[u8]) -> Vec<NumstatRecord> {
+    let text = String::from_utf8_lossy(out);
+    text.split('\x1e')
+        .filter(|r| !r.is_empty())
+        .map(|record| {
+            let (head, rest) = record.split_once('\0').unwrap_or((record, ""));
+            let head: Vec<String> = head.split('\x1f').map(String::from).collect();
+            let rest = rest.strip_prefix('\n').unwrap_or(rest);
+            let mut fields = rest.split('\0');
+            let Some(stat) = fields.next().filter(|s| !s.is_empty()) else {
+                return (head, None);
+            };
+            let mut parts = stat.splitn(3, '\t');
+            let n = |s: Option<&str>| s.and_then(|s| s.parse().ok()).unwrap_or(0);
+            let (add, del) = (n(parts.next()), n(parts.next()));
+            let path = match parts.next() {
+                Some(p) if !p.is_empty() => p.to_string(),
+                _ => {
+                    let _old = fields.next();
+                    fields.next().unwrap_or("").to_string()
+                }
+            };
+            (head, Some((add, del, path)))
+        })
+        .collect()
+}
+
+/// `git blame --porcelain`: per final line, `(commit sha, line number in that commit, the
+/// file's name in that commit)`.
+pub fn blame_porcelain(out: &[u8]) -> Vec<(String, u32, String)> {
+    let text = String::from_utf8_lossy(out);
+    let mut filenames: HashMap<String, String> = HashMap::new();
+    let mut lines = Vec::new();
+    let mut current: Option<(String, u32)> = None;
+    for line in text.split('\n') {
+        if let Some(content) = line.strip_prefix('\t') {
+            let _ = content;
+            if let Some((sha, orig)) = current.take() {
+                let name = filenames.get(&sha).cloned().unwrap_or_default();
+                lines.push((sha, orig, name));
+            }
+            continue;
+        }
+        if current.is_none() {
+            let mut parts = line.split(' ');
+            let (Some(sha), Some(orig)) = (parts.next(), parts.next()) else {
+                continue;
+            };
+            if sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+                current = Some((sha.to_string(), orig.parse().unwrap_or(0)));
+            }
+            continue;
+        }
+        if let Some(name) = line.strip_prefix("filename ") {
+            if let Some((sha, _)) = &current {
+                filenames.insert(sha.clone(), name.to_string());
+            }
+        }
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_numstat_z() {
+        let out = b"\x1eaaa\x1fa\x1fFirst\x1fMe\x1f2026-01-01T00:00:00+00:00\0\n99\t1\tCargo.lock\0\
+\x1ebbb\x1fb\x1fRename\x1fMe\x1f2026-01-02T00:00:00+00:00\0\n1652\t562\t\0old/Cargo.lock\0Cargo.lock\0\
+\x1eccc\x1fc\x1fBinary\x1fMe\x1f2026-01-03T00:00:00+00:00\0\n-\t-\tx.png\0\
+\x1eddd\x1fd\x1fMerge\x1fMe\x1f2026-01-04T00:00:00+00:00\0\n";
+        let got = numstat_z(out);
+        assert_eq!(got.len(), 4);
+        assert_eq!(got[0].0[2], "First");
+        assert_eq!(got[0].1, Some((99, 1, "Cargo.lock".into())));
+        assert_eq!(got[1].1, Some((1652, 562, "Cargo.lock".into())));
+        assert_eq!(got[2].1, Some((0, 0, "x.png".into())));
+        assert_eq!(got[3].1, None);
+        assert!(numstat_z(b"").is_empty());
+    }
+
+    #[test]
+    fn parses_blame_porcelain() {
+        let out = b"e431db1a4f51446f7ac499f9b2d18ce5c7ca155b 1 1 2\nauthor Me\nsummary First\nfilename old.py\n\tline one\n\
+e431db1a4f51446f7ac499f9b2d18ce5c7ca155b 2 2\n\tline two\n\
+0000000000000000000000000000000000000000 3 3 1\nauthor Not Committed Yet\nfilename new.py\n\tline three\n";
+        let got = blame_porcelain(out);
+        assert_eq!(got.len(), 3);
+        assert_eq!(
+            got[0],
+            (
+                "e431db1a4f51446f7ac499f9b2d18ce5c7ca155b".into(),
+                1,
+                "old.py".into()
+            )
+        );
+        assert_eq!(got[1].1, 2);
+        assert_eq!(got[1].2, "old.py");
+        assert_eq!(got[2].0, "0".repeat(40));
+        assert_eq!(got[2].2, "new.py");
+        assert!(blame_porcelain(b"").is_empty());
+    }
 
     #[test]
     fn parses_name_status() {

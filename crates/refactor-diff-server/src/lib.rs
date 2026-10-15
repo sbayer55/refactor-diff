@@ -8,6 +8,7 @@ pub mod app;
 pub mod config;
 pub mod exec;
 pub mod git;
+pub mod history;
 pub mod http;
 pub mod nav;
 pub mod paths;

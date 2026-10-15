@@ -14,6 +14,7 @@ use crate::ai::{DefaultFactory, ProviderFactory};
 use crate::config::ServerConfig;
 use crate::exec::Tools;
 use crate::git::{GhCli, Git, GitHub, SourceError};
+use crate::history::HistoryCache;
 use crate::http::error::ApiError;
 use crate::nav::Navigator;
 use crate::prefs::PrefsStore;
@@ -53,6 +54,8 @@ pub struct AppState {
     pub navigator: Navigator,
     /// Review UI preferences (`ui.json`).
     pub prefs: PrefsStore,
+    /// Per-file history: commit pages, versions, blames and diffs by sha.
+    pub history: HistoryCache,
     /// The UI runs inside the desktop app.
     pub desktop: bool,
     /// Only the settings page and its API are served (no repository).
@@ -153,6 +156,7 @@ impl App {
             reviews: ReviewStore::new(&repo, config.state_dir.as_deref()),
             settings: SettingsStore::new(config.state_dir.as_deref()),
             prefs: PrefsStore::new(config.state_dir.as_deref()),
+            history: HistoryCache::default(),
             desktop: config.desktop,
             settings_only: config.settings_only,
             defaults: serde_json::to_value(&config.defaults).expect("defaults serialize"),

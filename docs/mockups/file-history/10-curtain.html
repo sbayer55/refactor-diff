@@ -1,0 +1,115 @@
+<meta charset="utf-8">
+<title>Curtain Compare</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="shared/theme.css">
+<link rel="stylesheet" href="shared/engine2.css">
+<style>
+/* Layout: one pane. When A is pinned the older version is laid over the newer one and a curtain
+   you drag reveals either side; rows are aligned so the same block sits under the curtain on both.
+   Drag toward the right to read the old text, toward the left to read the new. */
+.main { display: flex; flex: 1; min-height: 0; }
+.stage { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.stack { position: relative; }
+.layer.a { position: absolute; inset: 0; clip-path: inset(0 calc(100% - var(--x)) 0 0); background: var(--bg); transition: clip-path .5s cubic-bezier(.2,.8,.2,1); }
+.stage.dragging .layer.a { transition: none; }
+.curtain { position: absolute; top: 40px; bottom: 0; left: var(--x); width: 0; z-index: 8; pointer-events: none; display: none; transition: left .5s cubic-bezier(.2,.8,.2,1); }
+.stage.dragging .curtain { transition: none; }
+.stage.split .curtain { display: block; }
+.curtain::before { content: ''; position: absolute; top: 0; bottom: 0; left: -1px; width: 2px; background: var(--accent); box-shadow: 0 0 10px 1px color-mix(in oklab, var(--accent) 55%, transparent); }
+.curtain .grip { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 22px; height: 44px; border-radius: 11px; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; font: 700 11px var(--mono); pointer-events: auto; cursor: ew-resize; box-shadow: var(--shadow); touch-action: none; }
+.curtain .tag { position: absolute; top: 8px; font: 600 10px var(--mono); padding: 2px 7px; border-radius: 10px; white-space: nowrap; pointer-events: none; }
+.curtain .tag.l { right: 6px; background: var(--panel-2); border: 1.5px solid var(--accent); color: var(--accent); }
+.curtain .tag.r { left: 6px; background: var(--accent); color: var(--accent-ink); }
+.layer.a .row.del { background: var(--del-bg); } .layer.b .row.add { background: var(--add-bg); }
+.layer.a .hunk-btn, .layer.a .fold-btn { display: none; }
+.hdr-side { display: inline-flex; gap: 6px; align-items: center; margin-left: 6px; font-size: 11px; color: var(--muted); }
+.pane-head .seg button { padding: 2px 8px; }
+.row .age { cursor: pointer; }
+</style>
+
+<div class="app">
+  <div id="topbar"></div>
+  <div class="toolbar">
+    <button class="btn">← Back</button>
+    <span class="path">server/users.py <span>file history</span></span>
+    <span class="seg"><button>Diff</button><button>Original</button><button>New</button><button class="on">History</button></span>
+    <span class="spacer"></span>
+    <span class="seg" id="snap"><button data-x="0%">newer</button><button data-x="50%" class="on">half</button><button data-x="100%">older</button></span>
+    <button class="btn" id="foldall" title="Fold or unfold every unchanged region (f)">fold unchanged <kbd>f</kbd></button>
+    <button class="btn">Open in editor</button>
+  </div>
+  <div class="hint"><span><kbd>↑</kbd><kbd>↓</kbd> newer / older</span><span>hover a commit to ghost its diff where you are</span><span><kbd>p</kbd> pin A: the older version drops in behind a curtain, drag it to reveal</span><span><kbd>[</kbd><kbd>]</kbd> nudge the curtain · <kbd>\</kbd> sweep it</span></div>
+  <div class="main">
+    <div class="side" id="side"><div class="clist" id="clist"><div class="side-head">9 commits · newest first</div></div></div>
+    <div class="stage" id="stage" style="--x: 50%">
+      <div class="pane-head" id="hl"></div>
+      <div class="code-pane" id="pl"><div class="stack" id="stack"><div class="layer b" id="lb"></div><div class="layer a" id="la"></div></div></div>
+      <div class="curtain" id="curtain"><span class="tag l" id="tagl"></span><span class="tag r" id="tagr"></span><div class="grip" id="grip">⋮</div></div>
+      <div class="ghost-banner" id="banner"></div>
+    </div>
+  </div>
+  <div class="statusbar"><span class="dot">●</span><span id="status"></span></div>
+</div>
+
+<script src="shared/history.js"></script>
+<script src="shared/engine2.js"></script>
+<script>
+(() => {
+  const { commits, lines, stats, blame, short, rel } = FH;
+  const { N, mapLine, rowTop, anchorOf, restoreAnchor, morphTo, renderSingle, aligned, renderSide, renderGhost, wireFolds, foldAllRuns, commitList, header, keys } = FH2;
+  FH.topbar(document.getElementById('topbar'), 'mockup 10 · curtain');
+  const $ = (id) => document.getElementById(id);
+  const stage = $('stage'), pl = $('pl'), lb = $('lb'), la = $('la');
+  const st = { cur: N - 1, pinned: null, ghost: null, folded: false, x: 50 };
+  const list = commitList($('clist'), { hover: onHover, leave: onLeave, select, pin });
+  wireFolds(stage);
+  // The scrolling element is the pane; renderers write into the B layer (and A when split).
+  const single = (v) => { renderSingle(lb, v); la.replaceChildren(); pl.dataset.mode = 'single'; pl.dataset.version = v; };
+  const anchor = () => { const a = anchorOf(lb, pl); return { version: +pl.dataset.version || st.cur, line: a.line, offset: a.offset }; };
+  const restore = (line, offset) => restoreAnchor(lb, line, offset, null, pl);
+  const split = () => st.pinned !== null && st.pinned !== st.cur;
+
+  function setX(v, animate) { st.x = Math.max(0, Math.min(100, v)); stage.style.setProperty('--x', st.x + '%'); $('snap').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.x === st.x + '%')); }
+  function paint() {
+    stage.classList.toggle('split', split()); $('side').classList.toggle('compact', split());
+    const lo = split() ? Math.min(st.pinned, st.cur) : st.cur, hi = split() ? Math.max(st.pinned, st.cur) : st.cur;
+    header($('hl'), st.cur, st, { pin });
+    if (split()) { $('hl').querySelector('.msg').insertAdjacentHTML('afterend', `<span class="hdr-side">curtain: <b>${short(commits[lo].sha)}</b> older ◂ ▸ <b>${short(commits[hi].sha)}</b> newer</span>`); $('tagl').textContent = `${short(commits[lo].sha)} older${lo === st.pinned ? ' · A' : ''}`; $('tagr').textContent = `${short(commits[hi].sha)} newer${hi === st.pinned ? ' · A' : ''}`; }
+    list.paint(st);
+    const c = commits[st.cur], s = split() ? stats(lo, hi) : null;
+    $('status').textContent = `${FH.file} @ ${short(c.sha)} · ${lines(st.cur).length} lines · ${rel(c.date)}` + (s ? ` · vs A ${short(commits[st.pinned].sha)}: +${s.add} −${s.del} · curtain at ${st.x}%` : '');
+  }
+  function show(a) {
+    if (!split()) { single(st.cur); if (a) restore(mapLine(a.version, st.cur, a.line), a.offset); return; }
+    const lo = Math.min(st.pinned, st.cur), hi = Math.max(st.pinned, st.cur), segs = aligned(lo, hi);
+    renderSide(lb, segs, 'r', hi, lo); renderSide(la, segs, 'l', lo, hi);
+    if (st.folded) foldAllRuns(stage, true);
+    pl.dataset.mode = 'split'; pl.dataset.version = st.cur;
+    if (a) { const lay = st.cur === hi ? lb : la; restoreAnchor(lay, mapLine(a.version, st.cur, a.line), a.offset, null, pl); }
+  }
+  function select(i) {
+    i = Math.max(0, Math.min(N - 1, i)); if (i === st.cur && st.ghost === null) return;
+    const a = anchor(), wasGhost = st.ghost !== null; st.ghost = null; $('banner').classList.remove('show'); st.cur = i;
+    if (!split() && !wasGhost && lb.dataset.mode === 'single') { morphTo(lb, i, { scroller: pl }); pl.dataset.version = i; }
+    else show(a);
+    paint();
+  }
+  function pin(i) {
+    const a = anchor(); const was = split();
+    st.pinned = (st.pinned === i || i === undefined && st.pinned !== null) ? null : (i ?? st.cur); st.ghost = null; $('banner').classList.remove('show');
+    if (split() && !was) { setX(0); show(a); requestAnimationFrame(() => setTimeout(() => setX(50), 30)); } else show(a);
+    paint();
+  }
+  function onHover(i) { if (st.pinned !== null || i === st.cur) return; st.ghost = i; const a = anchor(); renderGhost(lb, st.cur, i, pl); const s = stats(Math.min(st.cur, i), Math.max(st.cur, i)), fwd = i > st.cur; $('banner').innerHTML = `<span>${fwd ? 'Forward to' : 'Back to'} <b>${short(commits[i].sha)}</b> · <span class="stat-add">+${fwd ? s.add : s.del}</span> <span class="stat-del">−${fwd ? s.del : s.add}</span></span><button class="btn" id="cmp">Behind the curtain <kbd>⏎</kbd></button>`; $('cmp').onclick = enter; $('banner').classList.add('show'); }
+  function onLeave() { if (st.ghost === null) return; const a = anchor(); st.ghost = null; single(st.cur); restore(a.line, a.offset); $('banner').classList.remove('show'); }
+  function enter() { if (st.ghost === null) return; const t = st.ghost; st.ghost = null; st.pinned = st.cur; const a = anchor(); st.cur = t; setX(0); show(a); requestAnimationFrame(() => setTimeout(() => setX(50), 30)); $('banner').classList.remove('show'); paint(); }
+  // Drag the curtain.
+  $('grip').addEventListener('pointerdown', (e) => { $('grip').setPointerCapture(e.pointerId); stage.classList.add('dragging'); const mv = (ev) => { const r = pl.getBoundingClientRect(); setX(Math.round((ev.clientX - r.left) / r.width * 100)); paint(); }; $('grip').onpointermove = mv; $('grip').onpointerup = () => { $('grip').onpointermove = null; stage.classList.remove('dragging'); }; });
+  $('snap').querySelectorAll('button').forEach(b => b.onclick = () => { setX(parseInt(b.dataset.x)); paint(); });
+  $('foldall').onclick = () => { st.folded = !st.folded; foldAllRuns(stage, st.folded); $('foldall').classList.toggle('on', st.folded); };
+  document.addEventListener('keydown', (e) => { if (!split()) return; if (e.key === '[') { setX(st.x - 10); paint(); } if (e.key === ']') { setX(st.x + 10); paint(); } if (e.key === '\\') { setX(st.x < 50 ? 100 : 0); paint(); } });
+  lb.addEventListener('click', (e) => { if (!e.target.classList.contains('age') || pl.dataset.mode !== 'single') return; const r = e.target.parentElement, origin = blame(st.cur)[+r.dataset.line], text = r.querySelector('.src').textContent; if (origin === st.cur) { r.classList.add('focus'); setTimeout(() => r.classList.remove('focus'), 900); return; } select(origin); setTimeout(() => { const t = Array.from(lb.querySelectorAll('.row')).find(x => x.querySelector('.src').textContent === text); if (t) { t.classList.add('focus'); t.scrollIntoView({ block: 'center' }); setTimeout(() => t.classList.remove('focus'), 1400); } }, 650); });
+  keys({ newer: () => select(st.cur + 1), older: () => select(st.cur - 1), pin: () => pin(st.cur), enter, checkout: () => FH.checkoutMenu(null, st.cur), fold: () => $('foldall').click(), escape: () => st.ghost !== null ? onLeave() : st.pinned !== null ? pin(st.pinned) : null, first: () => select(0), last: () => select(N - 1) });
+  single(st.cur); paint();
+})();
+</script>

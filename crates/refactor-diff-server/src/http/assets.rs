@@ -82,6 +82,8 @@ mod tests {
             "syntax.js",
             "settings.html",
             "settings.js",
+            "history.js",
+            "history.css",
         ] {
             assert!(Assets::get(name).is_some(), "{name} missing from assets/");
         }

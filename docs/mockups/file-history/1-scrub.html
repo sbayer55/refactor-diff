@@ -1,0 +1,221 @@
+<meta charset="utf-8">
+<title>History Scrubber</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="shared/theme.css">
+<style>
+/* Layout: app chrome / file toolbar / timeline strip / code + inspector / status. The strip is the
+   whole idea: a scrubbable track inside the normal file viewer, so history is one mode among Diff, Original, New. */
+.main { display: flex; flex: 1; min-height: 0; }
+.inspector { width: 272px; flex: none; border-left: 1px solid var(--border); background: var(--panel); padding: 12px; display: flex; flex-direction: column; gap: 14px; overflow: auto; }
+.inspector h4 { margin: 0; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.strip { flex: none; border-bottom: 1px solid var(--border); background: var(--panel); padding: 10px 16px 6px; display: grid; gap: 6px; }
+.strip-head { display: flex; align-items: center; gap: 10px; font-size: 11.5px; color: var(--muted); }
+.strip-head .spacer { flex: 1; }
+.track-wrap { position: relative; height: 54px; }
+.track { position: absolute; left: 8px; right: 8px; top: 22px; height: 4px; border-radius: 2px; background: var(--panel-3); }
+.track .pr-span { position: absolute; top: 0; height: 100%; background: var(--info); opacity: .55; border-radius: 2px; }
+.track .range { position: absolute; top: -3px; height: 10px; background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 5px; opacity: 0; transition: opacity .2s; }
+.track .range.on { opacity: 1; }
+.tick { position: absolute; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; background: var(--panel-3); border: 2px solid var(--faint); cursor: pointer; transition: transform .15s, border-color .15s, box-shadow .2s; }
+.tick:hover { transform: scale(1.3); border-color: var(--text); }
+.tick.glow { box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent) 45%, transparent); border-color: var(--accent); }
+.tick.pr { border-color: var(--info); }
+.tick.past { background: var(--muted); }
+.tick .lbl { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); font-family: var(--mono); font-size: 10px; color: var(--faint); white-space: nowrap; }
+.tick .flag { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); font-family: var(--mono); font-size: 9.5px; padding: 0 5px; border-radius: 8px; white-space: nowrap; }
+.tick .flag.base { background: var(--panel-3); color: var(--text); } .tick .flag.head { background: var(--accent); color: var(--accent-ink); }
+.head-knob { position: absolute; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%; background: var(--accent); border: 3px solid var(--bg); box-shadow: 0 0 0 2px var(--accent); cursor: grab; transition: left .22s cubic-bezier(.2,.8,.2,1); z-index: 3; touch-action: none; }
+.head-knob.dragging { transition: none; cursor: grabbing; transform: scale(1.15); }
+.head-knob::after { content: 'B'; position: absolute; inset: 0; display: grid; place-items: center; font: 700 9px var(--mono); color: var(--accent-ink); }
+.a-knob { position: absolute; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 4px; transform: rotate(45deg); background: var(--panel); border: 2px solid var(--accent); cursor: grab; z-index: 2; transition: left .22s cubic-bezier(.2,.8,.2,1), opacity .2s; touch-action: none; }
+.a-knob[hidden] { display: none; }
+.a-knob span { position: absolute; inset: 0; display: grid; place-items: center; transform: rotate(-45deg); font: 700 9px var(--mono); color: var(--accent); }
+.tip { position: absolute; transform: translate(-50%, -100%); bottom: auto; background: var(--panel-2); border: 1px solid var(--border); box-shadow: var(--shadow); border-radius: 5px; padding: 6px 9px; font-size: 11.5px; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity .12s; z-index: 5; }
+.tip.show { opacity: 1; }
+.tip b { font-family: var(--mono); color: var(--accent); margin-right: 6px; }
+.delta { display: flex; gap: 10px; font-family: var(--mono); font-size: 12px; }
+.vs { font-size: 11.5px; color: var(--muted); display: grid; gap: 6px; }
+.vs .pair { display: flex; align-items: center; gap: 6px; font-family: var(--mono); }
+.vs .pair i { font-style: normal; width: 16px; height: 16px; display: grid; place-items: center; border-radius: 3px; font-weight: 700; font-size: 9px; }
+.vs .pair i.a { border: 1.5px solid var(--accent); color: var(--accent); } .vs .pair i.b { background: var(--accent); color: var(--accent-ink); }
+.row .age { cursor: pointer; }
+.row .age:hover { width: 10px; }
+.age-tip { position: fixed; z-index: 30; pointer-events: none; }
+.actions { display: grid; gap: 6px; }
+.actions .btn { justify-content: center; }
+@media (max-width: 760px) { .inspector { display: none; } }
+</style>
+
+<div class="app">
+  <div id="topbar"></div>
+  <div class="toolbar">
+    <button class="btn">← Back</button>
+    <span class="path">server/users.py <span>file history</span></span>
+    <span class="seg"><button>Diff</button><button>Original</button><button>New</button><button class="on">History</button></span>
+    <span class="seg" style="margin-left:auto"><button class="on">Unified</button><button>Split</button></span>
+    <button class="btn">Open in editor</button>
+  </div>
+  <div class="strip">
+    <div class="strip-head">
+      <span><b id="pos" class="mono"></b> <span id="count"></span></span>
+      <span class="spacer"></span>
+      <span class="legend">line age <span class="ramp"></span> newest</span>
+      <span class="seg"><button id="sp-commits" class="on">space by commit</button><button id="sp-time">by time</button></span>
+      <span>step <kbd>←</kbd><kbd>→</kbd> · mark A <kbd>a</kbd> · hold A and move B to compare</span>
+    </div>
+    <div class="track-wrap" id="wrap">
+      <div class="track" id="track"><div class="pr-span" id="prspan"></div><div class="range" id="range"></div></div>
+      <div class="a-knob" id="aknob" hidden><span>A</span></div>
+      <div class="head-knob" id="knob" tabindex="0" role="slider" aria-label="history position"></div>
+      <div class="tip" id="tip"></div>
+    </div>
+  </div>
+  <div class="main">
+    <div class="code-pane" id="code"></div>
+    <aside class="inspector">
+      <div>
+        <h4>Showing</h4>
+        <div class="commit-card" id="card"></div>
+      </div>
+      <div>
+        <h4 id="delta-h">Change vs parent</h4>
+        <div class="delta" id="delta"></div>
+      </div>
+      <div class="vs" id="vs"></div>
+      <div class="actions">
+        <button class="btn primary" id="checkout">Checkout this commit</button>
+        <button class="btn" id="cmp">Compare from here (A)</button>
+        <button class="btn" id="cmp-base" title="Jump A to the PR base">A = base · B = head</button>
+      </div>
+      <div class="muted" style="font-size:11.5px; line-height:1.5">Drag <b>B</b> to scrub. Lines that leave the file flash red and collapse; lines that arrive expand in green. The gutter stripe is each line's age in this version. Click a stripe to jump to the commit that wrote it.</div>
+    </aside>
+  </div>
+  <div class="statusbar"><span class="dot">●</span><span id="status"></span><span style="margin-left:auto">history · unified · min repeats 2</span></div>
+</div>
+
+<script src="shared/history.js"></script>
+<script>
+(() => {
+  const { commits, lines, stats, blame, short, initials, fmtDate, rel } = FH;
+  FH.topbar(document.getElementById('topbar'), 'mockup 1 · scrubber');
+  const N = commits.length;
+  const $ = (id) => document.getElementById(id);
+  const code = $('code'), track = $('track'), knob = $('knob'), aknob = $('aknob'), tip = $('tip');
+  let cur = N - 1, a = null, byTime = false, ticks = [];
+
+  const t0 = +new Date(commits[0].date), t1 = +new Date(commits[N - 1].date);
+  const pos = (i) => byTime ? (+new Date(commits[i].date) - t0) / (t1 - t0) : i / (N - 1);
+  const pxLeft = (i) => track.offsetLeft + pos(i) * track.offsetWidth;
+
+  function buildTicks() {
+    ticks.forEach(t => t.remove()); ticks = [];
+    commits.forEach((c, i) => {
+      const t = document.createElement('div');
+      t.className = 'tick' + (c.pr ? ' pr' : '');
+      t.innerHTML = `<span class="lbl">${short(c.sha)}</span>` + (c.tag ? `<span class="flag ${c.tag}">${c.tag}</span>` : '');
+      t.addEventListener('click', () => go(i));
+      t.addEventListener('mouseenter', (e) => showTip(i, t));
+      t.addEventListener('mouseleave', () => tip.classList.remove('show'));
+      $('wrap').insertBefore(t, aknob); ticks.push(t);
+    });
+    layout();
+  }
+  function layout() {
+    ticks.forEach((t, i) => { t.style.left = pxLeft(i) + 'px'; t.style.top = '24px'; t.classList.toggle('past', i <= cur); });
+    const b = commits.findIndex(c => c.tag === 'base');
+    $('prspan').style.left = (pos(b) * 100) + '%'; $('prspan').style.width = ((pos(N - 1) - pos(b)) * 100) + '%';
+    knob.style.left = pxLeft(cur) + 'px'; knob.style.top = '24px';
+    if (a !== null) {
+      aknob.hidden = false; aknob.style.left = pxLeft(a) + 'px'; aknob.style.top = '24px';
+      const lo = Math.min(a, cur), hi = Math.max(a, cur);
+      $('range').classList.add('on'); $('range').style.left = (pos(lo) * 100) + '%'; $('range').style.width = ((pos(hi) - pos(lo)) * 100) + '%';
+    } else { aknob.hidden = true; $('range').classList.remove('on'); }
+  }
+  function showTip(i, el) {
+    const c = commits[i], s = stats(Math.max(0, i - 1), i);
+    tip.innerHTML = `<b>${short(c.sha)}</b>${c.message}<div class="muted">${c.author} · ${fmtDate(c.date)} · <span class="stat-add">+${i ? s.add : lines(0).length}</span> <span class="stat-del">−${s.del}</span></div>`;
+    tip.style.left = el.style.left; tip.style.top = '8px'; tip.classList.add('show');
+  }
+
+  function go(i, opts) {
+    i = Math.max(0, Math.min(N - 1, i));
+    if (i === cur && !opts?.force) return;
+    cur = i; render(opts);
+  }
+  function render(opts) {
+    const c = commits[cur];
+    if (a !== null && a !== cur) { FH.renderUnified(code, a, cur); FH.scrollToChange(code); }
+    else { FH.morph(code, cur, opts); if (!opts?.instant) setTimeout(() => FH.scrollToChange(code), 30); }
+    layout();
+    $('pos').textContent = `${cur + 1} / ${N}`;
+    $('count').textContent = `· ${lines(cur).length} lines · ${rel(c.date)}`;
+    $('card').innerHTML = `<div><span class="sha">${short(c.sha)}</span> ${c.tag ? `<span class="chip ${c.tag}">${c.tag}</span>` : ''} ${c.pr ? '<span class="chip pr">in this PR</span>' : ''}</div>
+      <div class="msg">${c.message}</div><div class="who"><span class="avatar">${initials(c.author)}</span> ${c.author} · ${fmtDate(c.date)}</div>`;
+    const s = cur ? stats(cur - 1, cur) : { add: lines(0).length, del: 0 };
+    $('delta').innerHTML = `<span class="stat-add">+${s.add}</span><span class="stat-del">−${s.del}</span><span class="muted">${cur ? 'vs ' + short(commits[cur - 1].sha) : 'file created'}</span>`;
+    if (a !== null) {
+      const d = stats(a, cur);
+      $('vs').innerHTML = `<div class="pair"><i class="a">A</i>${short(commits[a].sha)} <span class="muted">${commits[a].message}</span></div><div class="pair"><i class="b">B</i>${short(c.sha)} <span class="muted">${c.message}</span></div><div>A → B: <span class="stat-add">+${d.add}</span> <span class="stat-del">−${d.del}</span> across ${Math.abs(cur - a)} commit${Math.abs(cur - a) === 1 ? '' : 's'}</div>`;
+      $('cmp').textContent = 'Exit compare'; $('cmp').classList.add('on');
+    } else { $('vs').innerHTML = ''; $('cmp').textContent = 'Compare from here (A)'; $('cmp').classList.remove('on'); }
+    $('status').textContent = `${FH.file} @ ${short(c.sha)} · ${c.author} · ${fmtDate(c.date)}` + (a !== null ? ` · comparing A ${short(commits[a].sha)} → B ${short(c.sha)}` : '');
+    $('checkout').textContent = `Checkout ${short(c.sha)}`;
+  }
+
+  // Drag either knob; snap to the nearest tick.
+  function drag(el, onIndex) {
+    el.addEventListener('pointerdown', (e) => {
+      el.setPointerCapture(e.pointerId); el.classList.add('dragging');
+      const move = (ev) => {
+        const r = track.getBoundingClientRect(), x = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
+        let best = 0; commits.forEach((_, i) => { if (Math.abs(pos(i) - x) < Math.abs(pos(best) - x)) best = i; });
+        onIndex(best);
+      };
+      const up = () => { el.classList.remove('dragging'); el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); };
+      el.addEventListener('pointermove', move); el.addEventListener('pointerup', up);
+    });
+  }
+  drag(knob, (i) => go(i));
+  drag(aknob, (i) => { if (i !== a) { a = i; render({ force: true }); } });
+
+  $('cmp').onclick = () => { if (a === null) { a = cur; render(); } else { a = null; render({ instant: true }); } };
+  $('cmp-base').onclick = () => { a = commits.findIndex(c => c.tag === 'base'); cur = N - 1; render(); };
+  $('checkout').onclick = () => FH.checkoutMenu($('checkout'), cur);
+  $('sp-commits').onclick = () => { byTime = false; $('sp-commits').classList.add('on'); $('sp-time').classList.remove('on'); layout(); };
+  $('sp-time').onclick = () => { byTime = true; $('sp-time').classList.add('on'); $('sp-commits').classList.remove('on'); layout(); };
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft') { e.preventDefault(); go(cur - 1); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); go(cur + 1); }
+    if (e.key === 'Home') go(0); if (e.key === 'End') go(N - 1);
+    if (e.key === 'a') $('cmp').click();
+    if (e.key === 'c') $('checkout').click();
+  });
+
+  // Blame hop: hover an age stripe for who wrote the line; click to jump there.
+  let ageTip;
+  code.addEventListener('mouseover', (e) => {
+    if (!e.target.classList.contains('age')) return;
+    const row = e.target.parentElement, i = Array.from(code.children).indexOf(row);
+    const v = code.dataset.version === '' ? null : +code.dataset.version;
+    if (v === null) return;
+    const origin = blame(v)[i]; if (origin == null) return;
+    const c = commits[origin];
+    ageTip = ageTip || Object.assign(document.createElement('div'), { className: 'tip age-tip' });
+    document.body.appendChild(ageTip);
+    ageTip.innerHTML = `<b>${short(c.sha)}</b>${c.message}<div class="muted">${c.author} · ${rel(c.date)} · click to jump</div>`;
+    const r = row.getBoundingClientRect(); ageTip.style.left = (r.left + 160) + 'px'; ageTip.style.top = (r.top - 4) + 'px'; ageTip.classList.add('show');
+    ticks[origin].classList.add('glow');
+  });
+  code.addEventListener('mouseout', (e) => { if (e.target.classList.contains('age')) { ageTip?.classList.remove('show'); ticks.forEach(t => t.classList.remove('glow')); } });
+  code.addEventListener('click', (e) => {
+    if (!e.target.classList.contains('age')) return;
+    const row = e.target.parentElement, i = Array.from(code.children).indexOf(row), v = +code.dataset.version;
+    if (Number.isNaN(v)) return;
+    const origin = blame(v)[i]; ageTip?.classList.remove('show'); ticks.forEach(t => t.classList.remove('glow'));
+    a = null; go(origin);
+  });
+
+  buildTicks(); render({ instant: true });
+  window.addEventListener('resize', layout);
+})();
+</script>

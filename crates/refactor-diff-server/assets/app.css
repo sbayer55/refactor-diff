@@ -47,6 +47,10 @@
   --sx-builtin: #79c0ff;
   --sx-self: #ffa657;
   --sx-deco: #d2a8ff;
+  --info: #6cb6ff;
+  --info-soft: #16283d;
+  --heat-new: #e3b341;
+  --heat-old: #2b3440;
   --shadow: 0 8px 24px rgb(0 0 0 / 0.4);
   --radius: 4px;
   --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -107,6 +111,10 @@
     --sx-builtin: #0550ae;
     --sx-self: #953800;
     --sx-deco: #8250df;
+    --info: #0969da;
+    --info-soft: #dbeafe;
+    --heat-new: #c98a00;
+    --heat-old: #dcdcd6;
     --shadow: 0 8px 24px rgb(0 0 0 / 0.16);
     color-scheme: light;
   }
