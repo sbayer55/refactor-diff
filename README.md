@@ -50,8 +50,8 @@ with the command that installs each one.
   and shortcut list from the menu bar.
 - **Open from GitHub.** The Chrome extension in [`browser-extension/`](browser-extension/)
   adds an *Open in Refactor Diff* button to pull request and compare pages. To install it,
-  go to `chrome://extensions`, turn on Developer mode, click *Load unpacked* and pick that
-  folder. The button opens a link such as
+  run `just extension-build`, then go to `chrome://extensions`, turn on Developer mode,
+  click *Load unpacked* and pick `target/browser-extension/`. The button opens a link such as
   `refactor-diff://open?repo=OWNER/NAME&pr=123` (or `&base=main&head=topic`). The app then
   looks for a checkout of that repository: the folder used last time, the open and recent
   repositories, and `<repositories folder>/NAME` or `<repositories folder>/OWNER/NAME`. If it

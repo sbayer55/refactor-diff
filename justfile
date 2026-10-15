@@ -5,6 +5,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 desktop := justfile_directory() / "desktop"
 wheels_lock := justfile_directory() / "crates/refactor-diff-server/python/wheels.lock"
 bundle  := justfile_directory() / "target/release/bundle"
+extension_out := justfile_directory() / "target/browser-extension"
 
 # Pure-Python dependencies bundled into the binary for Python code navigation (`just pin-python`).
 jedi_version  := "0.20.0"
@@ -145,9 +146,18 @@ desktop-clean:
 extension-test:
     node --test browser-extension/*.test.js
 
-# Zip the browser extension into target/ (for sharing; load it unpacked for development)
+# Build the loadable extension into target/browser-extension (Load unpacked in chrome://extensions)
 [group('extension')]
-extension-zip:
-    mkdir -p "{{ justfile_directory() }}/target"
+extension-build:
+    rm -rf "{{ extension_out }}"
+    mkdir -p "{{ extension_out }}"
+    rsync -a --exclude '*.test.js' --exclude 'README.md' --exclude '.*' \
+      "{{ justfile_directory() }}/browser-extension/" "{{ extension_out }}/"
+    @echo "Built {{ extension_out }}"
+    @echo "Load it in chrome://extensions → Developer mode → Load unpacked (or reload its card)."
+
+# Zip the built extension into target/ (for sharing)
+[group('extension')]
+extension-zip: extension-build
     rm -f "{{ justfile_directory() }}/target/refactor-diff-extension.zip"
-    cd "{{ justfile_directory() }}/browser-extension" && zip -r -X "{{ justfile_directory() }}/target/refactor-diff-extension.zip" . -x '*.test.js' -x 'README.md' -x '.*' -x '*/.*'
+    cd "{{ extension_out }}" && zip -r -X "{{ justfile_directory() }}/target/refactor-diff-extension.zip" .
