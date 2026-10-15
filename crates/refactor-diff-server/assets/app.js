@@ -1277,6 +1277,12 @@ function route(opts) {
   lastRoute = key;
   setViewTitle(view, id, rest);
   renderExplorer();
+  if (window.History?.isOpen() && !(view === "file" && rest[0] === "history")) History.close();
+  if (view === "file" && rest[0] === "history") {
+    History.open($("#content"), decodeURIComponent(id || ""), History.parseHash(rest.slice(1)));
+    renderInspector();
+    return;
+  }
   if (view === "file") {
     renderFileView(decodeURIComponent(id || ""), rest[0] || "diff", rest[1] || "");
     renderInspector();
@@ -1321,7 +1327,7 @@ function setViewTitle(view, id, rest) {
   } else if (view === "commits") {
     html = `Commits ${meta(state.commits.length)}`;
   } else if (view === "file") {
-    const mode = { diff: "full diff", old: "original", new: "new" }[rest[0] || "diff"];
+    const mode = { diff: "full diff", old: "original", new: "new", history: "history" }[rest[0] || "diff"];
     html = `<span class="transform">${esc(decodeURIComponent(id || ""))}</span>${meta(mode)}`;
   } else if (view === "lib") {
     html = `<span class="transform">${esc(shortPath(decodeURIComponent(id || "")))}</span>${meta("library")}`;
@@ -2702,7 +2708,7 @@ function setReviewFold(unitId, on) {
   for (const tr of content.querySelectorAll(`tr[data-review-units~="${CSS.escape(unitId)}"]`)) tr.classList.toggle("open", on);
 }
 
-const MODES = [["diff", "Diff"], ["old", "Original"], ["new", "New"]];
+const MODES = [["diff", "Diff"], ["old", "Original"], ["new", "New"], ["history", "History"]];
 
 async function renderFileView(path, mode, line) {
   if (!state.report.files.some((f) => f.path === path)) return renderBrowseView(path, mode, line);
@@ -2973,6 +2979,9 @@ function paletteCommands() {
     if (el) fn(el); else toast("Focus a hunk first (j / k).", { error: true });
   };
   const cmds = [
+    { id: "file.history", group: "View", title: "Open file history", when: () => location.hash.startsWith("#file/") && !window.History?.isOpen(),
+      run: () => { const id = location.hash.split("/")[1]; if (id) location.hash = fileHref(decodeURIComponent(id), "history"); } },
+    ...(window.History?.isOpen() ? History.commands() : []),
     { id: "view.review", group: "View", title: "Go to Needs review", keys: "g r", when: hasReport, run: go("#review") },
     { id: "view.warnings", group: "View", title: "Go to Warnings", keys: "g w", when: hasReport, run: go("#warnings") },
     { id: "view.files", group: "View", title: "Go to Files", keys: "g f", when: hasReport, run: go("#files") },
@@ -3204,6 +3213,7 @@ function onKey(e) {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const inField = e.target.closest?.("input, textarea, select, [contenteditable]");
   if (e.key === "Escape") {
+    if (!inField && window.History?.isOpen() && History.onKey(e)) { e.preventDefault(); return; }
     if ($("#help").open) $("#help").close();
     if (askMenu) { closeAskMenu(); return; }
     hideNavPanel();
@@ -3221,6 +3231,7 @@ function onKey(e) {
     return;
   }
   const inFile = location.hash.startsWith("#file/") || location.hash.startsWith("#lib/");
+  if (inFile && window.History?.isOpen() && History.onKey(e)) { e.preventDefault(); return; }
   switch (e.key) {
     case "?": showHelp(); break;
     case "\\": setPane("explorer", !state.panes.explorer); break;
@@ -3573,7 +3584,8 @@ async function renderBrowseView(path, mode, line) {
   const tok = line || "";
   const tabs = `<span class="tab disabled" title="This file has no changes in this diff">Diff</span>
     <a class="tab" href="${fileHref(path, "old", tok)}" ${side === "old" ? 'aria-current="page"' : ""}>Original</a>
-    <a class="tab" href="${fileHref(path, "new", tok)}" ${side === "new" ? 'aria-current="page"' : ""}>New</a>`;
+    <a class="tab" href="${fileHref(path, "new", tok)}" ${side === "new" ? 'aria-current="page"' : ""}>New</a>
+    <a class="tab" href="${fileHref(path, "history", tok)}">History</a>`;
   const s = side === "old" ? "o" : "n";
   content.innerHTML = `
     <div class="page-head viewer-head">
@@ -3737,7 +3749,10 @@ async function init() {
   loadAiSettings();
   // Called by the desktop app's native menu (webview eval), its Settings window, and open
   // links from the browser extension (openSource).
-  window.refactorDiff = { openPalette, showHelp: () => showHelp(true), showSettings, reloadSettings: loadAiSettings, openSource };
+  window.refactorDiff = {
+    openPalette, showHelp: () => showHelp(true), showSettings, reloadSettings: loadAiSettings, openSource,
+    openHistory: (path) => { const p = path || decodeURIComponent(location.hash.split("/")[1] || ""); if (p) location.hash = fileHref(p, "history"); },
+  };
   await loadSources(defaults);
   if (defaults.mode) runAnalysis();
 }

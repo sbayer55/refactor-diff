@@ -250,6 +250,18 @@ occurrences shows **+N** in the explorer's Patterns tab.
   `z` folds every block without changes and pressing it again unfolds everything. **Fold all
   blocks** is in the command palette. Python, TypeScript and JavaScript fold by syntax; other
   files fold by indentation.
+- **History**: the fourth tab of the file viewer (any repository file, changed or not; also
+  **Open file history** in the command palette) lists every commit that touched the file,
+  newest first and following renames, beside the code. `↑` / `↓` step through versions with
+  the line you are reading kept in place; hovering a commit ghosts its diff where you are
+  (`space` keeps it after the mouse leaves, `⏎` opens it side by side). `p` pins the version
+  in view as **A**: the pane splits with the older version on the left, ribbons tie each
+  changed block to its counterpart, and every commit you move to compares against A until you
+  unpin. Unchanged runs and single changes fold (`f` folds all unchanged), scrolling is kept
+  in sync (`s`), the gutter stripe shows each line's age and hovering it or the line number
+  says who wrote the line. **Checkout** restores the file from that commit or checks the
+  commit out (refused while the working tree is dirty). The list's width, the ribbons, wrap
+  and the toolbar's label style are remembered.
 - **Unified / Split**: switch every diff on the page (review hunks, pattern occurrences,
   context and the full-file diff) between unified and side-by-side layout. The toggle is in
   the toolbar above the diffs and in the file viewer. Your choice is remembered. Added and

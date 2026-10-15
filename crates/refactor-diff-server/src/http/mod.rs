@@ -70,6 +70,26 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/api/report/{report_id}/folds",
             get(routes::files::get_folds),
         )
+        .route(
+            "/api/report/{report_id}/history/commits",
+            get(routes::history::list_commits),
+        )
+        .route(
+            "/api/report/{report_id}/history/content",
+            get(routes::history::get_content),
+        )
+        .route(
+            "/api/report/{report_id}/history/diff",
+            get(routes::history::get_diff),
+        )
+        .route(
+            "/api/report/{report_id}/history/blame",
+            get(routes::history::get_blame),
+        )
+        .route(
+            "/api/report/{report_id}/history/checkout",
+            post(routes::history::checkout),
+        )
         .route("/api/library", get(routes::navigate::get_library))
         .route("/api/report/{report_id}/ai/menu", post(routes::ai::ai_menu))
         .route(

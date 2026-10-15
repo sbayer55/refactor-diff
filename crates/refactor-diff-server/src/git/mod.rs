@@ -2,11 +2,13 @@
 
 mod commits;
 mod github;
+mod history;
 mod parse;
 mod sources;
 
 pub use commits::{Commit, TouchingCommit, line_history_new, line_history_old};
 pub use github::{GhCli, GitHub, PrInfo, ReviewCommentPayload};
+pub use history::{Blame, BlameCommit, HistoryCommit, HistoryPage, WORKTREE_SHA};
 pub use parse::{NameStatus, cat_file_batch, commit_records, name_status_z};
 pub use sources::{HeadLookup, ResolvedSource, SourcesInfo, WORKTREE};
 
