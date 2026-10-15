@@ -31,5 +31,13 @@
         "model": "m"
       }
     }
+  },
+  "jev": {
+    "api_key": "",
+    "auto": false,
+    "base_url": "https://ai-gateway.vercel.sh",
+    "configured": false,
+    "model": "typesafe-ai/jev",
+    "zero_data_retention": false
   }
 }

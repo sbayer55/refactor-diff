@@ -942,7 +942,7 @@ pub fn side_path(report: &Report, side: Side, path: &str) -> String {
     path.to_string()
 }
 
-fn fence_lang(path: &str) -> &'static str {
+pub(crate) fn fence_lang(path: &str) -> &'static str {
     match analyzer_for(path).map(|a| a.name()) {
         Some("python") => "python",
         Some("typescript") => "ts",

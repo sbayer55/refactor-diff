@@ -65,7 +65,20 @@ pub async fn run_analysis(
     })
     .await??;
     let report = state.insert_report(report);
+    auto_score(&state, &report);
     Ok(Json(with_review(&state, &report)))
+}
+
+/// Start Jev scoring in the background when the settings ask for it; never affects the
+/// analysis response.
+fn auto_score(state: &Arc<AppState>, report: &Arc<Report>) {
+    let jev = state.settings.load().jev();
+    if !(jev.auto && jev.configured()) {
+        return;
+    }
+    if let Err(e) = crate::ai::jev::job::start(state.clone(), report.clone(), false) {
+        tracing::warn!("automatic Jev scoring didn't start: {e}");
+    }
 }
 
 /// A cached report with its review state.

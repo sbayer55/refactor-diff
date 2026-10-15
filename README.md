@@ -180,6 +180,37 @@ configure one of:
 are stored in `~/.config/refactor-diff/settings.json` (mode 600); the API key never leaves the
 machine except in requests to the provider you chose.
 
+### Rank what's left by risk (Jev)
+
+The needs-review list is in file order. **Score with Jev** sends each leftover hunk to
+[TypeSafe AI's Jev](https://vercel.com/i/what-is-jev), a decision model that answers typed
+questions with probabilities instead of prose, and uses the answers to say where review time
+is best spent:
+
+- A **RISK** section in the inspector lists the flagged hunks, riskiest first, with the main
+  concern (a hard-coded secret, an injection risk, an auth change, a weakened test, a broken
+  API contract, a data migration, debug leftovers), the probability of each, and how far the
+  change can reach. **view** jumps to the hunk; **ask** opens the Ask menu with a question
+  about what Jev found.
+- Every scored hunk bar gets a chip with its primary concern and risk percent; hover it for
+  all the probabilities.
+- **Sort by risk** (in the page head and the RISK section) puts the riskiest hunks and files
+  first. File order stays the default.
+
+Run it with `g s`, the status bar, or the palette; turn on **Score needs-review hunks
+automatically** in Settings to run it after every analysis. Jev is reached through
+[Vercel AI Gateway](https://vercel.com/docs/ai-gateway/modalities/decision): paste an AI
+Gateway key under **Risk scoring** in Settings (separate from the Ask provider) and
+**Test connection**. Each needs-review hunk plus its enclosing function leaves the machine,
+and only then; collapsed pattern members are never sent, and a zero-data-retention option is
+there if your gateway plan supports it. One request per hunk, a few hundred input tokens each.
+Scores are cached in `~/.config/refactor-diff/jev/` by hunk fingerprint, so re-running the
+analysis or pushing new commits reuses them and only new hunks are sent.
+
+The numbers are a classifier's opinion, shown with their probabilities so they read as a
+hint, not a verdict: refactor-diff's own warnings and the deterministic patterns are
+unaffected by them. `docs/jev-risk-plan.md` has the question set and the scoring formula.
+
 ### Review marks survive restarts and new commits
 
 Reviewed marks are stored in `~/.config/refactor-diff/` (or `$XDG_CONFIG_HOME/refactor-diff/`),
@@ -265,7 +296,8 @@ The review loop is `j` / `k` to move between hunks (or
 occurrences on a pattern page), `l` / `h` to go to the next / previous file, `x` to mark the focused one reviewed (focus moves on to the
 next unreviewed hunk), `e` to show its context and then reveal more, `o` to open it in your
 editor, `]` / `[` to step through the mechanical patterns, `g r` / `g w` / `g f` to jump to
-Needs review / Warnings / Files, and `/` to search. In the file viewer `n` / `p` move between
+Needs review / Warnings / Files, `g s` to score the needs-review hunks with Jev, and `/` to
+search. In the file viewer `n` / `p` move between
 changes, and `z` folds the unchanged blocks (again to unfold).
 
 ![The command palette](docs/screenshots/command-palette.png)

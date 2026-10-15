@@ -10,6 +10,9 @@ use std::sync::{Arc, RwLock};
 use refactor_diff_core::Report;
 use tokio_util::sync::CancellationToken;
 
+use crate::ai::jev::job::JevJob;
+use crate::ai::jev::store::JevStore;
+use crate::ai::jev::{DefaultJevFactory, JevFactory};
 use crate::ai::{DefaultFactory, ProviderFactory};
 use crate::config::ServerConfig;
 use crate::exec::Tools;
@@ -61,6 +64,12 @@ pub struct AppState {
     pub shutdown: CancellationToken,
     /// Builds the active AI provider from the settings.
     pub providers: Arc<dyn ProviderFactory>,
+    /// Builds the Jev risk-scoring client from the settings.
+    pub jev_factory: Arc<dyn JevFactory>,
+    /// Cached Jev scores, by hunk fingerprint.
+    pub jev_store: JevStore,
+    /// Jev scoring jobs by report id, for the lifetime of the server.
+    pub jev: RwLock<HashMap<String, Arc<JevJob>>>,
 }
 
 impl AppState {
@@ -149,8 +158,12 @@ impl App {
         let providers = config
             .providers
             .unwrap_or_else(|| Arc::new(DefaultFactory::new()));
+        let jev_factory = config
+            .jev
+            .unwrap_or_else(|| Arc::new(DefaultJevFactory::new()));
         let state = AppState {
             reviews: ReviewStore::new(&repo, config.state_dir.as_deref()),
+            jev_store: JevStore::new(&repo, config.state_dir.as_deref()),
             settings: SettingsStore::new(config.state_dir.as_deref()),
             prefs: PrefsStore::new(config.state_dir.as_deref()),
             desktop: config.desktop,
@@ -167,6 +180,8 @@ impl App {
             navigator,
             shutdown: CancellationToken::new(),
             providers,
+            jev_factory,
+            jev: RwLock::new(HashMap::new()),
         };
         Ok(App {
             state: Arc::new(state),

@@ -12,6 +12,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use refactor_diff_server::ai::ProviderFactory;
+use refactor_diff_server::ai::jev::JevFactory;
 use refactor_diff_server::git::{GitHub, PrInfo, ReviewCommentPayload, SourceError};
 use refactor_diff_server::{App, ServerConfig};
 use serde_json::Value;
@@ -224,6 +225,17 @@ impl TestServer {
     /// Swap the AI providers for a fake factory (`provider_factory=` in the Python tests).
     pub fn with_providers(repo: &Path, providers: Arc<dyn ProviderFactory>) -> Self {
         Self::build(repo, FakeGitHub::unavailable(), None, Some(providers))
+    }
+
+    /// Swap the Jev risk-scoring client for a fake, optionally sharing `state_dir`.
+    pub fn with_jev(repo: &Path, jev: Arc<dyn JevFactory>, state_dir: Option<&Path>) -> Self {
+        Self::build_with(
+            repo,
+            FakeGitHub::unavailable(),
+            state_dir.map(Path::to_path_buf),
+            None,
+            move |c| c.jev = Some(jev),
+        )
     }
 
     /// Any other configuration (`desktop`, `settings_only`, ...), with a fresh state dir and

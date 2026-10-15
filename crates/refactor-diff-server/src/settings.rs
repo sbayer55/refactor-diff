@@ -66,7 +66,64 @@ impl Settings {
     pub fn as_value(&self) -> &Value {
         &self.0
     }
+
+    /// The Jev (Vercel AI Gateway) risk-scoring settings, with the defaults filled in. The
+    /// section is not part of [`defaults`] so a settings file never touched by Jev keeps the
+    /// bytes the Python tool wrote.
+    pub fn jev(&self) -> JevSettings {
+        let j = &self.0["jev"];
+        let text = |key: &str, fallback: &str| -> String {
+            match j[key].as_str().map(str::trim) {
+                Some(s) if !s.is_empty() => s.to_string(),
+                _ => fallback.to_string(),
+            }
+        };
+        JevSettings {
+            api_key: text("api_key", ""),
+            model: text("model", crate::ai::jev::DEFAULT_MODEL),
+            base_url: text("base_url", crate::ai::jev::DEFAULT_BASE_URL),
+            auto: truthy(&j["auto"]),
+            zero_data_retention: truthy(&j["zero_data_retention"]),
+        }
+    }
 }
+
+/// How to reach Jev through Vercel AI Gateway, and whether scoring runs on its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JevSettings {
+    pub api_key: String,
+    pub model: String,
+    pub base_url: String,
+    /// Score every new report as soon as it is analyzed.
+    pub auto: bool,
+    /// Ask the gateway for zero data retention.
+    pub zero_data_retention: bool,
+}
+
+impl JevSettings {
+    pub fn configured(&self) -> bool {
+        !self.api_key.is_empty()
+    }
+
+    /// The stored shape of the section (every key present).
+    pub fn to_value(&self) -> Value {
+        json!({
+            "api_key": self.api_key,
+            "model": self.model,
+            "base_url": self.base_url,
+            "auto": self.auto,
+            "zero_data_retention": self.zero_data_retention,
+        })
+    }
+}
+
+/// Whether Jev can be called: an API key is set.
+pub fn jev_configured(settings: &Settings) -> bool {
+    settings.jev().configured()
+}
+
+const JEV_TEXT_KEYS: &[&str] = &["api_key", "model", "base_url"];
+const JEV_FLAG_KEYS: &[&str] = &["auto", "zero_data_retention"];
 
 /// Python truthiness of a JSON value.
 pub fn truthy(v: &Value) -> bool {
@@ -181,6 +238,11 @@ pub fn public_view(settings: &Settings) -> Value {
         "model": settings.0["ai"]["providers"][&active].get("model").cloned().unwrap_or_else(|| Value::String(String::new())),
         "configured": configured(settings, &active),
     });
+    let jev = settings.jev();
+    let mut jev_view = jev.to_value();
+    jev_view["api_key"] = Value::String(mask(&jev.api_key));
+    jev_view["configured"] = Value::Bool(jev.configured());
+    out["jev"] = jev_view;
     out
 }
 
@@ -205,15 +267,38 @@ fn py_repr(v: &Value) -> String {
     }
 }
 
-/// `current` with the `ai` section of `update` applied; masked secrets keep the stored value,
-/// so the UI can round-trip the public view.
+/// `current` with the `ai` and/or `jev` sections of `update` applied; masked secrets keep the
+/// stored value, so the UI can round-trip the public view.
 pub fn apply_update(current: &Settings, update: &Value) -> Result<Settings, SettingsError> {
-    let Some(ai) = update.get("ai").filter(|a| a.is_object()) else {
+    let ai = update.get("ai").filter(|a| a.is_object());
+    let jev = update.get("jev").filter(|j| j.is_object());
+    if ai.is_none() && jev.is_none() {
         return Err(SettingsError(
-            "Expected an object with an 'ai' section.".into(),
+            "Expected an object with an 'ai' or 'jev' section.".into(),
         ));
-    };
+    }
     let mut merged = current.0.clone();
+    if let Some(jev) = jev.and_then(Value::as_object) {
+        let stored = current.jev();
+        let mut next = stored.to_value();
+        for (key, value) in jev {
+            if JEV_TEXT_KEYS.contains(&key.as_str()) {
+                if key == "api_key" && is_masked(value) {
+                    continue;
+                }
+                let Some(s) = value.as_str() else {
+                    return Err(SettingsError(format!("jev.{key} must be text.")));
+                };
+                next[key] = Value::String(s.trim().to_string());
+            } else if JEV_FLAG_KEYS.contains(&key.as_str()) {
+                next[key] = Value::Bool(truthy(value));
+            }
+        }
+        merged["jev"] = next;
+    }
+    let Some(ai) = ai else {
+        return Ok(Settings(merged));
+    };
     if let Some(provider) = ai.get("provider") {
         if !provider.as_str().is_some_and(|p| PROVIDERS.contains(&p)) {
             return Err(SettingsError(format!(
@@ -283,6 +368,10 @@ pub fn resolve_test_config(
     provider: &str,
     cfg: Option<&Value>,
 ) -> Result<Settings, SettingsError> {
+    if provider == "jev" {
+        let probe = json!({"jev": cfg.cloned().unwrap_or_else(|| json!({}))});
+        return apply_update(current, &probe);
+    }
     if !PROVIDERS.contains(&provider) {
         return Err(SettingsError(format!(
             "Unknown provider {}.",
@@ -380,7 +469,7 @@ mod tests {
         );
         assert_eq!(
             apply_update(&current, &json!({"nope": 1})).unwrap_err().0,
-            "Expected an object with an 'ai' section."
+            "Expected an object with an 'ai' or 'jev' section."
         );
         let stored = Settings(merge(
             &defaults(),
@@ -411,6 +500,65 @@ mod tests {
             resolve_test_config(&stored, "nope", None).unwrap_err().0,
             "Unknown provider 'nope'."
         );
+    }
+
+    #[test]
+    fn jev_section_defaults_and_update_rules() {
+        let current = Settings(defaults());
+        let jev = current.jev();
+        assert_eq!(jev.api_key, "");
+        assert_eq!(jev.model, "typesafe-ai/jev");
+        assert_eq!(jev.base_url, "https://ai-gateway.vercel.sh");
+        assert!(!jev.auto && !jev.zero_data_retention && !jev.configured());
+        assert!(!jev_configured(&current));
+        // The section is not in the defaults, so an untouched file keeps the Python bytes.
+        assert!(defaults().get("jev").is_none());
+        assert_eq!(
+            public_view(&current)["jev"],
+            json!({"api_key": "", "model": "typesafe-ai/jev", "base_url": "https://ai-gateway.vercel.sh", "auto": false, "zero_data_retention": false, "configured": false})
+        );
+
+        let updated = apply_update(
+            &current,
+            &json!({"jev": {"api_key": " vck_abcd1234 ", "auto": "1", "zero_data_retention": 0, "configured": true, "bogus": 1}}),
+        )
+        .unwrap();
+        let jev = updated.jev();
+        assert_eq!(jev.api_key, "vck_abcd1234");
+        assert!(jev.auto && !jev.zero_data_retention && jev.configured());
+        assert_eq!(
+            updated.0["jev"],
+            json!({"api_key": "vck_abcd1234", "model": "typesafe-ai/jev", "base_url": "https://ai-gateway.vercel.sh", "auto": true, "zero_data_retention": false})
+        );
+        assert_eq!(updated.0["ai"], current.0["ai"]);
+        assert_eq!(public_view(&updated)["jev"]["api_key"], json!("••••1234"));
+        assert_eq!(public_view(&updated)["jev"]["configured"], json!(true));
+
+        let kept = apply_update(
+            &updated,
+            &json!({"ai": {"provider": "ollama"}, "jev": {"api_key": "••••1234", "base_url": "http://localhost:9/"}}),
+        )
+        .unwrap();
+        assert_eq!(kept.provider(), "ollama");
+        assert_eq!(kept.jev().api_key, "vck_abcd1234");
+        assert_eq!(kept.jev().base_url, "http://localhost:9/");
+        let cleared = apply_update(&updated, &json!({"jev": {"api_key": ""}})).unwrap();
+        assert!(!cleared.jev().configured());
+        assert_eq!(cleared.jev().model, "typesafe-ai/jev");
+        assert_eq!(
+            apply_update(&current, &json!({"jev": {"api_key": 5}}))
+                .unwrap_err()
+                .0,
+            "jev.api_key must be text."
+        );
+        let probe = resolve_test_config(
+            &updated,
+            "jev",
+            Some(&json!({"api_key": "••••1234", "model": "m2"})),
+        )
+        .unwrap();
+        assert_eq!(probe.jev().api_key, "vck_abcd1234");
+        assert_eq!(probe.jev().model, "m2");
     }
 
     #[test]
