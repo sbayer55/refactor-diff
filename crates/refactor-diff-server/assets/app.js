@@ -18,6 +18,7 @@ const state = {
   split: false, // side-by-side diffs (preference; see splitActive())
   syntax: false, // syntax-color changed lines too (unchanged lines always are)
   issuesOn: true, // underline code issues (preference; see applyIssues())
+  inlineOn: true, // inline issue messages, pattern tags and AI answers in diffs (preference; see setInline())
   issues: new Map(), // "side:path" -> Promise of that file's code issues (see /api/report/{id}/issues)
   folds: new Map(), // "side:path" -> Promise of that file's foldable blocks (see /api/report/{id}/folds)
   folded: new Set(), // collapsed folds, "side:path:start" (see applyFolds())
@@ -402,6 +403,7 @@ function renderFilters() {
     </div>
     <span class="tb-item">${highlightToggle()}</span>
     <span class="tb-item">${issuesToggle()}</span>
+    <span class="tb-item">${inlineToggle()}</span>
     <span class="tb-item">${layoutToggle()}</span>
     <span class="tb-item">${filesToggle()}</span>
     ${filtersActive() ? `<span class="tb-item"><span class="hidden-note">${plural(v.hiddenUnits, "change")} hidden</span>
@@ -1953,6 +1955,9 @@ function bindLayoutToggle(root) {
   for (const b of root.querySelectorAll("[data-issues]")) {
     b.addEventListener("click", () => setIssues(!state.issuesOn));
   }
+  for (const b of root.querySelectorAll("[data-inline]")) {
+    b.addEventListener("click", () => setInline(!state.inlineOn));
+  }
 }
 
 // ---------- code issues (squiggly underlines) ----------
@@ -1980,6 +1985,51 @@ function issuesToggle() {
     <button type="button" data-issues aria-pressed="${state.issuesOn}"
       title="Underline code issues: errors (red), warnings such as unused variables and unreachable code (amber), info such as unused imports and parameters (blue)"><span class="issues-label">Issues</span></button>
   </div>`;
+}
+
+// Inline messages: each issue's message at the end of the line it starts on (Error Lens style),
+// plus the rows drawn between diff lines (pattern tags, "moved from" labels, AI answers). Off
+// hides them all with one body class; the fold bars of reviewed patterns stay, since they're
+// the only way to unfold those lines.
+const ISSUE_ICONS = { error: "✖", warning: "⚠", info: "ℹ" };
+
+function loadInlinePref() {
+  state.inlineOn = prefGet("refactor-diff:inline") !== "off";
+  document.body.classList.toggle("inline-off", !state.inlineOn);
+}
+
+function setInline(on) {
+  state.inlineOn = on;
+  prefSet("refactor-diff:inline", on ? "on" : "off");
+  document.body.classList.toggle("inline-off", !on);
+  rerender();
+}
+
+function inlineToggle() {
+  return `<div class="layout-toggle" role="group" aria-label="Inline messages">
+    <button type="button" data-inline aria-pressed="${state.inlineOn}"
+      title="${state.inlineOn ? "Hide" : "Show"} inline messages: code issue messages, pattern tags and AI answers (i)">Messages</button>
+  </div>`;
+}
+
+// The text shown after a line: its worst issue's message, and how many more there are.
+function issueMessage(hits) {
+  const starts = hits.filter((h) => !h.indent); // a multi-line issue speaks on its first line only
+  if (!starts.length) return null;
+  const rank = (h) => ISSUE_LEVELS.indexOf(h.severity);
+  const worst = starts.reduce((a, b) => (rank(b) < rank(a) ? b : a));
+  const more = new Set(starts.map((h) => h.message)).size - 1;
+  return { severity: worst.severity, text: `${ISSUE_ICONS[worst.severity] || ""} ${worst.message}${more ? ` (+${more} more)` : ""}` };
+}
+
+function setIssueMessage(cell, msg) {
+  if (msg) {
+    cell.dataset.issueMsg = msg.text;
+    cell.dataset.issueSev = msg.severity;
+  } else {
+    delete cell.dataset.issueMsg;
+    delete cell.dataset.issueSev;
+  }
 }
 
 function loadIssues(path, side) {
@@ -2023,14 +2073,19 @@ function utf16At(text, cp) {
 }
 
 function clearIssueHighlights() {
+  if (!hoverHighlight) return;
   for (const level of ISSUE_LEVELS) CSS.highlights.delete(`issue-${level}`);
 }
 
 let issuesGen = 0;
 function applyIssues() {
-  if (!hoverHighlight) return;
   const gen = ++issuesGen;
-  if (!state.issuesOn || !state.report) { clearIssueHighlights(); return; }
+  const underline = state.issuesOn && hoverHighlight;
+  if (!underline) clearIssueHighlights();
+  if (!state.report || (!underline && !state.inlineOn)) {
+    for (const cell of $("#content").querySelectorAll("[data-issue-msg]")) setIssueMessage(cell, null);
+    return;
+  }
   const cells = [...$("#content").querySelectorAll("[data-p][data-s][data-l]")];
   const files = new Map();
   for (const cell of cells) {
@@ -2046,7 +2101,7 @@ function applyIssues() {
         if (!cell.isConnected) continue;
         const side = cell.dataset.s === "o" ? "old" : "new";
         const hits = byFile.get(`${side}:${cell.dataset.p}`)?.get(Number(cell.dataset.l));
-        if (!hits) { cellIssues.delete(cell); continue; }
+        if (!hits) { cellIssues.delete(cell); setIssueMessage(cell, null); continue; }
         const text = cell.textContent;
         const indent = text.length - text.trimStart().length;
         const placed = [];
@@ -2056,10 +2111,13 @@ function applyIssues() {
           if (h.indent) s = Math.max(s, indent);
           if (e <= s) continue;
           placed.push({ s, e, severity: h.severity, message: h.message });
-          ranges[h.severity]?.push(cellRange(cell, s, e));
+          if (underline) ranges[h.severity]?.push(cellRange(cell, s, e));
         }
         cellIssues.set(cell, placed);
+        // Attributes, not children, so the MutationObserver in watchIssues() isn't re-triggered.
+        setIssueMessage(cell, state.inlineOn ? issueMessage(hits) : null);
       }
+      if (!underline) return;
       ISSUE_LEVELS.forEach((level, i) => {
         const hl = new Highlight(...ranges[level]);
         hl.priority = ISSUE_LEVELS.length - i; // errors draw over warnings over info
@@ -2652,6 +2710,7 @@ async function renderFileView(path, mode, line) {
       ${backButton()}
       <nav class="tabs" aria-label="File version">${tabs}</nav>
       ${issuesToggle()}
+      ${inlineToggle()}
       ${mode === "diff" ? layoutToggle(path) : ""}
       <span class="spacer"></span>
       ${fd.status !== "D" ? `<a class="toggle" href="${esc(editorHref(path, line ? Number(line.slice(1)) : 1) || "#")}" title="${EDITOR_TITLE}">Open in editor</a>` : ""}
@@ -2723,6 +2782,7 @@ const KEY_HELP = [
     ["g f", "g c", "go to Files / Commits"],
     ["n", "p", "next / previous change in the file viewer"],
     ["z", "", "fold unchanged blocks; again to unfold all (file viewer, expanded context)"],
+    ["i", "", "show / hide inline messages (code issues, pattern tags, AI answers)"],
     ["/", "", "search"],
   ]],
   ["Other", [
@@ -2901,6 +2961,8 @@ function paletteCommands() {
       when: () => hasReport() && state.issuesOn, run: () => setIssues(false) },
     { id: "layout.issues.show", group: "Layout", title: "Code issues: show underlines",
       when: () => hasReport() && !state.issuesOn, run: () => setIssues(true) },
+    { id: "layout.inline", group: "Layout", title: `${state.inlineOn ? "Hide" : "Show"} inline warnings and messages`, keys: "i",
+      when: hasReport, run: () => setInline(!state.inlineOn) },
 
     ...CATEGORIES.map(([cat, label]) => ({
       id: `filter.cat.${cat}`, group: "Filter", title: `${f.hidden.has(cat) ? "Show" : "Hide"} ${label.toLowerCase()} files`,
@@ -3121,6 +3183,7 @@ function onKey(e) {
     case "j": if (!inFile) moveFocus(1); else return; break;
     case "k": if (!inFile) moveFocus(-1); else return; break;
     case "z": if (hasFolds()) toggleFolds(); else return; break;
+    case "i": if (state.report) setInline(!state.inlineOn); else return; break;
     case "x": toggleFocusedReviewed(); break;
     case "e": expandFocused(); break;
     case "o": { const at = focusedLocation(); if (at) openInEditor(at.path, at.line); break; }
@@ -3579,6 +3642,7 @@ async function init() {
   loadLayout();
   loadSyntax();
   loadIssuesPref();
+  loadInlinePref();
   watchIssues();
   loadSingleFile();
   loadPanes();
@@ -4002,6 +4066,7 @@ function parseSse(buffer, onEvent) {
 
 async function ask(hunkId, focus, task, { prompt = "", pieces = null, answer = null, followUp = "" } = {}) {
   if (!state.ai || !state.ai.configured) { showSettings(); return; }
+  if (!state.inlineOn) setInline(true); // answers are inline; asking means wanting to see one
   let a = answer;
   if (!a) {
     a = {
