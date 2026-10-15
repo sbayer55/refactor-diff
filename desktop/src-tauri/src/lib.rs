@@ -9,9 +9,11 @@
 mod app_state;
 mod backend;
 mod commands;
+mod deep_link;
 mod menu;
 mod preflight;
 mod recents;
+mod repo_match;
 mod settings_window;
 mod shell_path;
 
@@ -57,6 +59,9 @@ pub fn run() {
             commands::remove_recent,
             commands::get_status,
             commands::open_settings,
+            commands::locate_choose,
+            commands::locate_clone,
+            commands::locate_cancel,
             preflight::preflight,
         ])
         .setup(|app| {
@@ -96,10 +101,16 @@ pub fn run() {
         .expect("error while building the application")
         .run(|app, event| match event {
             RunEvent::Ready => restore_last_repo(app.clone()),
-            // A folder dropped on the Dock icon or passed to `open -a "Refactor Diff"`.
+            // A folder dropped on the Dock icon or passed to `open -a "Refactor Diff"`, or a
+            // `refactor-diff://open?…` link from the browser extension.
             #[cfg(target_os = "macos")]
             RunEvent::Opened { urls } => {
                 for url in urls {
+                    if deep_link::is_open_link(&url) {
+                        claim_launch(app);
+                        tauri::async_runtime::spawn(deep_link::handle(app.clone(), url));
+                        continue;
+                    }
                     match url.to_file_path() {
                         Ok(path) if path.is_dir() => {
                             claim_launch(app);
@@ -130,14 +141,16 @@ pub fn allow_navigation(app: &AppHandle, url: &Url) -> bool {
         "http" if url.host_str() == Some("127.0.0.1") => true,
         "refactor-diff" => {
             let app = app.clone();
-            let (host, path) = (
+            let (host, path, query) = (
                 url.host_str().unwrap_or_default().to_string(),
                 url.path().trim_matches('/').to_string(),
+                url.query_pairs().into_owned().collect(),
             );
-            // Not from inside the webview's navigation callback.
+            // Not from inside the webview's navigation callback. Open links (`open`) only
+            // come from outside the app, through `RunEvent::Opened`.
             tauri::async_runtime::spawn(async move {
                 match host.as_str() {
-                    "settings" => settings_window::handle(&app, &path),
+                    "settings" => settings_window::handle(&app, &path, query),
                     _ => tracing::warn!("unknown app URL refactor-diff://{host}/{path}"),
                 }
             });
@@ -153,14 +166,19 @@ pub fn allow_navigation(app: &AppHandle, url: &Url) -> bool {
     }
 }
 
+/// Whether the main window shows the review UI (rather than the landing page).
+pub fn review_showing(app: &AppHandle) -> bool {
+    main_window(app)
+        .and_then(|win| win.url().ok())
+        .is_some_and(|u| u.scheme() == "http" && u.host_str() == Some("127.0.0.1"))
+}
+
 /// Call `window.refactorDiff.<call>` in the review UI, if it's showing.
 pub fn eval_in_review(app: &AppHandle, call: &str) {
-    let Some(win) = main_window(app) else { return };
-    let showing = win
-        .url()
-        .map(|u| u.scheme() == "http" && u.host_str() == Some("127.0.0.1"))
-        .unwrap_or(false);
-    if showing {
+    if !review_showing(app) {
+        return;
+    }
+    if let Some(win) = main_window(app) {
         let _ = win.eval(format!("window.refactorDiff?.{call}"));
     }
 }

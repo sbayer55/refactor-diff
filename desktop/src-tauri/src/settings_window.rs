@@ -6,12 +6,16 @@
 //! Like the review UI, the page uses no Tauri APIs. It reports back by navigating to
 //! `refactor-diff://settings/saved` or `…/close`, which `lib.rs` intercepts.
 
-use std::sync::{
-    Mutex,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    collections::HashMap,
+    path::Path,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
-use refactor_diff_server::ServerConfig;
+use refactor_diff_server::{ServerConfig, paths::home_dir, settings::expand_home};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use url::Url;
@@ -50,7 +54,7 @@ pub fn open(app: &AppHandle) {
         let result = match server_url(&app).await {
             Ok(url) => WebviewWindowBuilder::new(&app, WINDOW, WebviewUrl::External(url))
                 .title("Settings")
-                .inner_size(760.0, 440.0)
+                .inner_size(760.0, 520.0)
                 .min_inner_size(560.0, 400.0)
                 .maximizable(false)
                 .center()
@@ -99,13 +103,48 @@ async fn server_url(app: &AppHandle) -> Result<Url, String> {
 }
 
 /// A `refactor-diff://settings/<what>` navigation from one of the app's pages.
-pub fn handle(app: &AppHandle, what: &str) {
+pub fn handle(app: &AppHandle, what: &str, query: HashMap<String, String>) {
     match what {
         "" => open(app),
+        "pick-repos-dir" => pick_repos_dir(app, query.get("start").map(String::as_str)),
         // The review UI shows the provider in its top bar; refresh it.
         "saved" => crate::eval_in_review(app, "reloadSettings()"),
         "close" => close(app),
         other => tracing::warn!("unknown settings action {other:?}"),
+    }
+}
+
+/// The Repositories folder's Choose…: a folder dialog (starting at the field's value), whose
+/// answer goes back into the form.
+fn pick_repos_dir(app: &AppHandle, start: Option<&str>) {
+    let Some(win) = app.get_webview_window(WINDOW) else {
+        return;
+    };
+    let start = start
+        .map(|s| expand_home(s, &home_dir()))
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(home_dir);
+    app.dialog()
+        .file()
+        .set_title("Repositories Folder")
+        .set_directory(start)
+        .set_parent(&win)
+        .pick_folder(move |picked| {
+            let Some(path) = picked.and_then(|f| f.into_path().ok()) else {
+                return;
+            };
+            let path = abbreviate_home(&path, &home_dir());
+            let arg = serde_json::Value::String(path).to_string();
+            let _ = win.eval(format!("window.refactorDiffSettings?.setReposDir({arg})"));
+        });
+}
+
+/// `path` with the home directory written as `~`, the way the setting shows it.
+fn abbreviate_home(path: &Path, home: &Path) -> String {
+    match path.strip_prefix(home) {
+        Ok(rest) if rest.as_os_str().is_empty() => "~".into(),
+        Ok(rest) => format!("~/{}", rest.display()),
+        Err(_) => path.display().to_string(),
     }
 }
 
@@ -144,4 +183,17 @@ fn show_error(app: &AppHandle, title: &str, detail: &str) {
         .title(title)
         .kind(MessageDialogKind::Error)
         .show(|_| {});
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn home_is_shown_as_tilde() {
+        let home = Path::new("/Users/me");
+        assert_eq!(abbreviate_home(Path::new("/Users/me/code"), home), "~/code");
+        assert_eq!(abbreviate_home(Path::new("/Users/me"), home), "~");
+        assert_eq!(abbreviate_home(Path::new("/srv/repos"), home), "/srv/repos");
+    }
 }

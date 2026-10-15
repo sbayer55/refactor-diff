@@ -36,8 +36,10 @@ const Settings = (() => {
   }
 
   // Fill `root` with the form for `data` (an /api/settings response). `onSaved(saved)` gets
-  // the saved settings; `onClose()` runs for Cancel and the × button.
-  function render(root, data, { onSaved, onClose, closeLabel = "Cancel" }) {
+  // the saved settings; `onClose()` runs for Cancel and the × button. `onPickReposDir()`, when
+  // given, adds a Choose… button for the repositories folder (the desktop app's folder dialog,
+  // which answers through `setReposDir`).
+  function render(root, data, { onSaved, onClose, onPickReposDir, closeLabel = "Cancel" }) {
     const ai = data.ai;
     const $ = (sel) => root.querySelector(sel);
     const field = (label, name, value, { type = "text", width = "", placeholder = "", list = "", hint = "" } = {}) =>
@@ -87,6 +89,10 @@ const Settings = (() => {
           <label class="toggle"><input type="checkbox" name="context.function" ${ai.context.function ? "checked" : ""}>Enclosing function</label>
           <label class="toggle"><input type="checkbox" name="context.pr" ${ai.context.pr ? "checked" : ""}>PR description</label>
           <label class="toggle"><input type="checkbox" name="context.references" ${ai.context.references ? "checked" : ""}>References</label>
+        </div>
+        <div class="fields repos-dir">
+          ${field("Repositories folder", "reposDir", data.reposDir ?? "~/code/", { width: "wide", placeholder: "~/code/", hint: "(for GitHub links in the desktop app)" })}
+          ${onPickReposDir ? '<button type="button" class="toggle" id="settings-pick-repos">Choose…</button>' : ""}
         </div>
       </form>
       <footer><span class="meta muted">Saved to <span class="mono">~/.config/refactor-diff/settings.json</span> · the key only ever goes to the provider</span>
@@ -144,13 +150,15 @@ const Settings = (() => {
         btn.disabled = false;
       }
     });
+    if (onPickReposDir) $("#settings-pick-repos").addEventListener("click", () => onPickReposDir(value("reposDir")));
     $("#settings-close").addEventListener("click", onClose);
     $("#settings-cancel").addEventListener("click", onClose);
     $("#settings-save").addEventListener("click", async () => {
       const btn = $("#settings-save");
       btn.disabled = true;
       try {
-        const saved = await api("/api/settings", { ai: current() });
+        const saved = await api("/api/settings", { ai: current(), reposDir: value("reposDir") });
+        form.querySelector('[name="reposDir"]').value = saved.reposDir;
         onSaved(saved, status);
       } catch (e) {
         status(e.message, "error");
@@ -163,5 +171,11 @@ const Settings = (() => {
     });
   }
 
-  return { PROVIDER_NAMES, SPARK, api, providerLabel, shortModel, render };
+  // Put a folder chosen in the desktop app's dialog into the open form.
+  function setReposDir(root, path) {
+    const input = root.querySelector('[name="reposDir"]');
+    if (input && path) input.value = path;
+  }
+
+  return { PROVIDER_NAMES, SPARK, api, providerLabel, shortModel, render, setReposDir };
 })();

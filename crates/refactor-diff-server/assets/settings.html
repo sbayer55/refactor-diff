@@ -12,13 +12,16 @@
   <script src="/static/settings.js"></script>
   <script>
     // The desktop app shows this page in its Settings window and listens for refactor-diff://
-    // navigations: "saved" refreshes the review window, "close" closes this one. In a browser
-    // (refactor-diff --settings-only) it is just a page.
+    // navigations: "saved" refreshes the review window, "close" closes this one, and
+    // "pick-repos-dir" shows a folder dialog whose answer comes back through
+    // window.refactorDiffSettings.setReposDir. In a browser (refactor-diff --settings-only) it
+    // is just a page.
     (async () => {
       const root = document.getElementById("settings");
       let cfg = {};
       try { cfg = await Settings.api("/api/config"); } catch {}
       const tell = (what) => { if (cfg.desktop) location.href = `refactor-diff://settings/${what}`; };
+      window.refactorDiffSettings = { setReposDir: (path) => Settings.setReposDir(root, path) };
       let data;
       try {
         data = await Settings.api("/api/settings");
@@ -29,6 +32,9 @@
       Settings.render(root, data, {
         closeLabel: cfg.desktop ? "Close" : "Cancel",
         onClose: () => (cfg.desktop ? tell("close") : history.back()),
+        onPickReposDir: cfg.desktop
+          ? (current) => tell(`pick-repos-dir?start=${encodeURIComponent(current)}`)
+          : undefined,
         onSaved: (saved, status) => {
           status(saved.ai.active.configured
             ? `Saved · Ask will use ${Settings.providerLabel(saved.ai.active)}`
