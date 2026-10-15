@@ -1,10 +1,14 @@
-//! Small app-level preferences that outlive a launch: the repository to reopen and the
-//! review UI's zoom. Kept in the app's config directory next to `recents.json`.
+//! Small app-level preferences that outlive a launch: the repository to reopen, the review
+//! UI's zoom and which folder holds which GitHub repository. Kept in the app's config
+//! directory next to `recents.json`.
 
 use std::{
+    collections::BTreeMap,
     path::{Path, PathBuf},
     sync::Mutex,
 };
+
+use refactor_diff_server::settings::SettingsStore;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -21,6 +25,8 @@ pub struct AppState {
     /// Reopen `last_repo` at launch (File ▸ Reopen Last Repository at Launch).
     pub reopen_last: bool,
     pub zoom: f64,
+    /// The folder an open link for a GitHub repository went to, by lowercase `owner/name`.
+    pub github_repos: BTreeMap<String, String>,
 }
 
 impl Default for AppState {
@@ -29,6 +35,7 @@ impl Default for AppState {
             last_repo: None,
             reopen_last: true,
             zoom: 1.0,
+            github_repos: BTreeMap::new(),
         }
     }
 }
@@ -72,6 +79,20 @@ impl Store {
 
 pub fn store(app: &AppHandle) -> tauri::State<'_, Store> {
     app.state::<Store>()
+}
+
+/// The "Repositories folder" setting (Settings window; `~/code/` by default), with `~`
+/// expanded. Read each time, so a change applies at once.
+pub fn repos_dir() -> PathBuf {
+    SettingsStore::new(None).load().repos_dir()
+}
+
+/// The same, as typed (`~/code/`), for showing to the user.
+pub fn repos_dir_label() -> String {
+    SettingsStore::new(None)
+        .load()
+        .repos_dir_setting()
+        .to_string()
 }
 
 fn load_from(path: &Path) -> AppState {
@@ -129,6 +150,23 @@ mod tests {
     }
 
     #[test]
+    fn older_state_files_still_load() {
+        let dir = std::env::temp_dir().join(format!("rd-state-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.json");
+        std::fs::write(
+            &path,
+            r#"{"lastRepo": "/r", "reopenLast": false, "zoom": 1.2}"#,
+        )
+        .unwrap();
+        let state = load_from(&path);
+        assert_eq!(state.last_repo.as_deref(), Some("/r"));
+        assert!(!state.reopen_last);
+        assert!(state.github_repos.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn restore_only_when_nothing_else_claimed_the_launch() {
         let state = with_repo("/r");
         let yes = |_: &Path| true;
@@ -167,6 +205,7 @@ mod tests {
             last_repo: Some("/y".into()),
             reopen_last: false,
             zoom: 1.3,
+            github_repos: [("o/n".to_string(), "/code/n".to_string())].into(),
         };
         save_to(&path, &state).unwrap();
         assert_eq!(load_from(&path), state);
