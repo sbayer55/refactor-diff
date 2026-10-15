@@ -1,0 +1,171 @@
+<meta charset="utf-8">
+<title>Dual Cursor Board</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="shared/theme.css">
+<style>
+/* Layout: one shared timeline with two cursors, A and B, each driving its own code pane.
+   Ribbons between the panes connect the hunks that differ. Any two versions, any order. */
+.tl { flex: none; border-bottom: 1px solid var(--border); background: var(--panel); padding: 10px 24px 4px; }
+.tl-head { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted); flex-wrap: wrap; margin-bottom: 6px; }
+.tl-head .spacer { flex: 1; }
+.tl-wrap { position: relative; height: 60px; }
+.tl-track { position: absolute; left: 10px; right: 10px; top: 28px; height: 4px; background: var(--panel-3); border-radius: 2px; }
+.tl-span { position: absolute; top: 26px; height: 8px; border-radius: 4px; background: var(--accent-soft); border: 1px solid var(--accent); transition: left .25s, width .25s; }
+.tl-span::after { content: attr(data-arrow); position: absolute; left: 50%; top: -18px; transform: translateX(-50%); font: 700 11px var(--mono); color: var(--accent); }
+.tick { position: absolute; top: 30px; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: var(--panel); border: 2px solid var(--faint); cursor: pointer; }
+.tick.pr { border-color: var(--info); }
+.tick:hover { border-color: var(--text); transform: scale(1.3); }
+.tick .lbl { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); font: 10px var(--mono); color: var(--faint); white-space: nowrap; }
+.tick .flag { position: absolute; bottom: 13px; left: 50%; transform: translateX(-50%); font: 9.5px var(--mono); padding: 0 5px; border-radius: 8px; white-space: nowrap; }
+.tick .flag.base { background: var(--panel-3); color: var(--text); } .tick .flag.head { background: var(--accent); color: var(--accent-ink); }
+.cursor { position: absolute; top: 30px; width: 22px; height: 22px; margin: -11px 0 0 -11px; display: grid; place-items: center; font: 700 10px var(--mono); cursor: grab; z-index: 3; transition: left .25s cubic-bezier(.2,.8,.2,1); touch-action: none; user-select: none; }
+.cursor.drag { transition: none; cursor: grabbing; }
+.cursor.ca { border-radius: 4px; transform: rotate(45deg); background: var(--panel); border: 2px solid var(--accent); color: var(--accent); }
+.cursor.ca span { transform: rotate(-45deg); }
+.cursor.cb { border-radius: 50%; background: var(--accent); color: var(--accent-ink); border: 3px solid var(--panel); box-shadow: 0 0 0 2px var(--accent); }
+.board { display: flex; flex: 1; min-height: 0; }
+.pane { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pane-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--panel); font-size: 12px; min-height: 42px; }
+.pane-head .tag { font: 700 10px var(--mono); width: 18px; height: 18px; display: grid; place-items: center; border-radius: 3px; }
+.pane-head .tag.a { border: 1.5px solid var(--accent); color: var(--accent); } .pane-head .tag.b { background: var(--accent); color: var(--accent-ink); }
+.pane-head .sha { font-family: var(--mono); color: var(--accent); }
+.pane-head .msg { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.pane-head .who { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.gutter { width: 64px; flex: none; position: relative; background: var(--panel); border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
+.gutter svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.gutter path { transition: d .3s; }
+.minimap { width: 16px; flex: none; background: var(--panel); border-left: 1px solid var(--border); display: grid; grid-auto-rows: 1fr; gap: 1px; padding: 4px 3px; }
+.minimap i { display: block; background: var(--heat); border-radius: 1px; min-height: 1px; }
+.minimap i.chg { background: var(--add-fg); }
+.row.hl-del { background: var(--del-bg); } .row.hl-add { background: var(--add-bg); }
+.ctl { display: flex; align-items: center; gap: 6px; }
+@media (max-width: 760px) { .pane-head .who { display: none; } .gutter { width: 36px; } }
+</style>
+
+<div class="app">
+  <div id="topbar"></div>
+  <div class="tl">
+    <div class="tl-head">
+      <span class="path mono"><b>server/users.py</b> · compare any two versions</span>
+      <span class="spacer"></span>
+      <span class="ctl">
+        <span class="seg"><button id="both-l" title="Move both cursors back (←)">◀ both</button><button id="both-r" title="Move both cursors forward (→)">both ▶</button></span>
+        <button class="btn" id="lock" title="Keep the distance between A and B when either moves">Lock gap</button>
+        <button class="btn" id="adj" title="Snap B to the commit after A">B = A+1</button>
+        <button class="btn" id="swap" title="Swap A and B">⇄ swap</button>
+        <button class="btn" id="prbtn" title="A = PR base, B = PR head">PR range</button>
+      </span>
+      <span><kbd>[</kbd><kbd>]</kbd> move A · <kbd>{</kbd><kbd>}</kbd> move B · <kbd>←</kbd><kbd>→</kbd> both</span>
+    </div>
+    <div class="tl-wrap" id="wrap">
+      <div class="tl-track" id="track"></div>
+      <div class="tl-span" id="span"></div>
+      <div class="cursor ca" id="ca"><span>A</span></div>
+      <div class="cursor cb" id="cb"><span>B</span></div>
+    </div>
+  </div>
+  <div class="board">
+    <div class="pane">
+      <div class="pane-head" id="ha"></div>
+      <div class="code-pane" id="pa"></div>
+    </div>
+    <div class="gutter" id="gutter"><svg id="svg"></svg></div>
+    <div class="pane">
+      <div class="pane-head" id="hb"></div>
+      <div class="code-pane" id="pb"></div>
+    </div>
+    <div class="minimap" id="mini" title="line age in B"></div>
+  </div>
+  <div class="statusbar"><span class="dot">●</span><span id="status"></span></div>
+</div>
+
+<script src="shared/history.js"></script>
+<script>
+(() => {
+  const { commits, lines, stats, blame, diff, hunks, short, initials, fmtDate, rel, heat } = FH;
+  FH.topbar(document.getElementById('topbar'), 'mockup 5 · dual cursor');
+  const $ = (id) => document.getElementById(id);
+  const N = commits.length, pa = $('pa'), pb = $('pb'), track = $('track');
+  let A = commits.findIndex(c => c.tag === 'base'), B = N - 1, lock = false;
+  const px = (i) => track.offsetLeft + i / (N - 1) * track.offsetWidth;
+
+  commits.forEach((c, i) => {
+    const t = document.createElement('div'); t.className = 'tick' + (c.pr ? ' pr' : '');
+    t.innerHTML = `<span class="lbl">${short(c.sha)}</span>` + (c.tag ? `<span class="flag ${c.tag}">${c.tag}</span>` : '');
+    t.title = `${c.message} · ${c.author} · ${fmtDate(c.date)}\nclick: move B here · shift-click: move A here`;
+    t.addEventListener('click', (e) => { if (e.shiftKey) set(i, B); else set(A, i); });
+    $('wrap').insertBefore(t, $('ca'));
+    t.style.left = px(i) + 'px';
+  });
+
+  function head(el, tag, i) {
+    const c = commits[i];
+    el.innerHTML = `<span class="tag ${tag}">${tag.toUpperCase()}</span><span class="sha">${short(c.sha)}</span>${c.tag ? `<span class="chip ${c.tag}">${c.tag}</span>` : ''}<span class="msg">${c.message}</span><span class="who"><span class="avatar">${initials(c.author)}</span> ${c.author} · ${rel(c.date)}</span><button class="btn" data-co="${i}">Checkout</button>`;
+    el.querySelector('[data-co]').onclick = () => FH.checkoutMenu(null, i);
+  }
+  function set(a, b, instant) {
+    a = Math.max(0, Math.min(N - 1, a)); b = Math.max(0, Math.min(N - 1, b));
+    const moved = a !== A || b !== B; A = a; B = b;
+    FH.morph(pa, A, { instant }); FH.morph(pb, B, { instant });
+    head($('ha'), 'a', A); head($('hb'), 'b', B);
+    document.querySelectorAll('.tick').forEach((t, i) => t.style.left = px(i) + 'px');
+    $('ca').style.left = px(A) + 'px'; $('cb').style.left = px(B) + 'px';
+    const lo = Math.min(A, B), hi = Math.max(A, B);
+    $('span').style.left = px(lo) + 'px'; $('span').style.width = (px(hi) - px(lo)) + 'px';
+    $('span').dataset.arrow = A === B ? '=' : A < B ? 'A → B' : 'B ← A';
+    const s = stats(A, B);
+    $('status').textContent = `A ${short(commits[A].sha)} → B ${short(commits[B].sha)} · ${Math.abs(B - A)} commit${Math.abs(B - A) === 1 ? '' : 's'} apart · ` + (A === B ? 'identical' : `+${s.add} −${s.del} · ${hunks(A, B).length} hunks`);
+    // Highlight rows that differ in each pane.
+    const ops = diff(A, B), delA = new Set(ops.filter(o => o.t === 'del').map(o => o.a)), addB = new Set(ops.filter(o => o.t === 'add').map(o => o.b));
+    const mark = () => {
+      Array.from(pa.children).forEach((r, k) => { if (!r.classList.contains('del') && !r.classList.contains('add')) r.classList.toggle('hl-del', delA.has(k)); });
+      Array.from(pb.children).forEach((r, k) => { if (!r.classList.contains('del') && !r.classList.contains('add')) r.classList.toggle('hl-add', addB.has(k)); });
+    };
+    setTimeout(() => { mark(); if (moved || instant) { FH.scrollToChange(pa); FH.scrollToChange(pb); } }, instant ? 0 : 620);
+    const bl = blame(B);
+    $('mini').innerHTML = lines(B).map((_, k) => `<i class="${addB.has(k) ? 'chg' : ''}" style="--heat:${heat(bl[k], B)}"></i>`).join('');
+    // Ribbons keep up with the row animation for a moment, then settle.
+    const t0 = performance.now(); const tick = () => { ribbons(); if (performance.now() - t0 < 750) requestAnimationFrame(tick); }; tick();
+    $('lock').classList.toggle('on', lock);
+  }
+  function ribbons() {
+    const svg = $('svg'), W = $('gutter').clientWidth, ra = pa.getBoundingClientRect(), rb = pb.getBoundingClientRect(), rg = $('gutter').getBoundingClientRect();
+    const rowsA = pa.children, rowsB = pb.children;
+    const yA = (k, end) => { const r = rowsA[Math.min(k, rowsA.length - 1)]; if (!r) return 0; const b = r.getBoundingClientRect(); return (end && k >= rowsA.length ? b.bottom : b.top) - rg.top; };
+    const yB = (k, end) => { const r = rowsB[Math.min(k, rowsB.length - 1)]; if (!r) return 0; const b = r.getBoundingClientRect(); return (end && k >= rowsB.length ? b.bottom : b.top) - rg.top; };
+    const paths = hunks(A, B).map(h => {
+      const a0 = yA(h.aStart), a1 = h.aEnd > h.aStart ? yA(h.aEnd, true) : a0, b0 = yB(h.bStart), b1 = h.bEnd > h.bStart ? yB(h.bEnd, true) : b0;
+      const kind = h.del && h.add ? 'mod' : h.del ? 'del' : 'add';
+      const col = kind === 'mod' ? 'var(--accent)' : kind === 'del' ? 'var(--del-fg)' : 'var(--add-fg)';
+      const c = W / 2;
+      return `<path d="M0,${a0} C${c},${a0} ${c},${b0} ${W},${b0} L${W},${Math.max(b1, b0 + 2)} C${c},${Math.max(b1, b0 + 2)} ${c},${Math.max(a1, a0 + 2)} 0,${Math.max(a1, a0 + 2)} Z" fill="${col}" fill-opacity=".28" stroke="${col}" stroke-opacity=".7" stroke-width="1"/>`;
+    });
+    svg.innerHTML = paths.join('');
+  }
+  pa.addEventListener('scroll', ribbons); pb.addEventListener('scroll', ribbons); window.addEventListener('resize', () => set(A, B, true));
+
+  function drag(el, which) {
+    el.addEventListener('pointerdown', (e) => {
+      el.setPointerCapture(e.pointerId); el.classList.add('drag');
+      const move = (ev) => { const r = track.getBoundingClientRect(); const i = Math.round(Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)) * (N - 1)); which === 'A' ? moveA(i) : moveB(i); };
+      const up = () => { el.classList.remove('drag'); el.removeEventListener('pointermove', move); };
+      el.addEventListener('pointermove', move); el.addEventListener('pointerup', up, { once: true });
+    });
+  }
+  const moveA = (i) => { if (i === A) return; lock ? set(i, B + (i - A)) : set(i, B); };
+  const moveB = (i) => { if (i === B) return; lock ? set(A + (i - B), i) : set(A, i); };
+  drag($('ca'), 'A'); drag($('cb'), 'B');
+  $('both-l').onclick = () => set(A - 1, B - 1); $('both-r').onclick = () => set(A + 1, B + 1);
+  $('lock').onclick = () => { lock = !lock; $('lock').classList.toggle('on', lock); };
+  $('adj').onclick = () => set(A, Math.min(N - 1, A + 1));
+  $('swap').onclick = () => set(B, A);
+  $('prbtn').onclick = () => set(commits.findIndex(c => c.tag === 'base'), N - 1);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '[') moveA(A - 1); if (e.key === ']') moveA(A + 1);
+    if (e.key === '{') moveB(B - 1); if (e.key === '}') moveB(B + 1);
+    if (e.key === 'ArrowLeft') { e.preventDefault(); if (A > 0 && B > 0) set(A - 1, B - 1); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); if (A < N - 1 && B < N - 1) set(A + 1, B + 1); }
+  });
+  set(A, B, true);
+})();
+</script>

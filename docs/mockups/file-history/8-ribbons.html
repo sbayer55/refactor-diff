@@ -1,0 +1,262 @@
+<meta charset="utf-8">
+<title>Ribbon Compare</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="shared/theme.css">
+<link rel="stylesheet" href="shared/engine2.css">
+<style>
+/* Layout: each side keeps its own true line numbering (no padding rows); ribbons across the gutter
+   tie the blocks that differ, and sync scroll follows the ribbons. Minimaps sit at each pane's edge.
+   The commit list is resizable, can be hidden, and tucks into an edge tab while comparing. */
+.main { display: flex; flex: 1; min-height: 0; position: relative; }
+/* The toolbar is one row: the path truncates, and labels shorten when the bar is narrow. */
+.toolbar { flex-wrap: nowrap; container-type: inline-size; overflow: visible; }
+.toolbar .path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
+.toolbar .spacer { flex: 1 1 0; min-width: 4px; }
+.toolbar .btn, .toolbar .seg { flex: none; }
+.toolbar .btn .ico + .long { margin-left: 0; }
+.toolbar .btn { gap: 5px; }
+.toolbar .ico { display: none; width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; vertical-align: -2px; }
+.toolbar .seg button { display: inline-flex; align-items: center; gap: 5px; }
+@container (max-width: 1040px) { .toolbar.auto .long, .toolbar.auto kbd { display: none; } .toolbar.auto .ico { display: inline-block; } .toolbar.auto .seg button { padding: 4px 7px; } }
+.toolbar.icons .long, .toolbar.icons kbd { display: none; } .toolbar.icons .ico { display: inline-block; } .toolbar.icons .seg button { padding: 4px 7px; }
+.popover { position: absolute; right: 12px; top: calc(var(--topbar-h) + 44px); z-index: 40; width: 300px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow); padding: 10px 12px; display: grid; gap: 10px; font-size: 12px; }
+.popover[hidden] { display: none; }
+.popover h5 { margin: 0; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.popover label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.popover label .sub { color: var(--muted); font-size: 11px; margin-left: auto; }
+.popover .group { display: grid; gap: 5px; }
+.popover input { accent-color: var(--accent); margin: 0; }
+.board { min-width: 0; transition: none; grid-template-columns: minmax(0px, 1fr) minmax(0px, 0fr) minmax(0px, 0fr); }
+.board.split .pane:last-of-type, .board.split .gutter { animation: slidein .4s cubic-bezier(.2,.8,.2,1); }
+@keyframes slidein { from { opacity: 0; transform: translateX(24px); } }
+.board.split { grid-template-columns: minmax(0px, 14fr) minmax(56px, 1fr) minmax(0px, 14fr); }
+.board.split.noribbons { grid-template-columns: minmax(0px, 1fr) minmax(0px, 0fr) minmax(0px, 1fr); }
+.board:not(.split) .gutter, .board.noribbons .gutter { visibility: hidden; border: 0; }
+.gutter { position: relative; background: var(--panel); border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
+.gutter svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.gutter .lock { position: absolute; left: 50%; top: 6px; transform: translateX(-50%); z-index: 2; padding: 2px 6px; font-size: 10.5px; }
+.pane { flex-direction: row; }
+.pane .col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pane .minimap { border-left: 1px solid var(--border); }
+.row.marker { height: 6px; background: var(--accent); opacity: .6; }
+.hunk .hunk-btn { top: 1px; }
+/* commit list: resizable width, hideable, and an edge tab while comparing */
+.side { width: var(--sw, 236px); transition: width .35s cubic-bezier(.2,.8,.2,1), margin-left .35s cubic-bezier(.2,.8,.2,1); }
+.side .clist { width: 100%; }
+.side.tucked { margin-left: calc(10px - var(--sw, 236px)); }
+.side.tucked:hover { margin-left: 0; box-shadow: var(--shadow); z-index: 20; }
+.side.tucked::after { content: 'history'; position: absolute; right: -1px; top: 50%; transform: translateY(-50%) rotate(180deg); writing-mode: vertical-rl; font: 600 10px var(--mono); letter-spacing: .12em; color: var(--muted); background: var(--panel); border: 1px solid var(--border); padding: 8px 2px; border-radius: 0 4px 4px 0; }
+.side.tucked:hover::after, .side.hidden::after { display: none; }
+.side.hidden { margin-left: 0 !important; }
+.ghost-banner .sticky { display: none; font: 600 10px var(--mono); letter-spacing: .06em; text-transform: uppercase; padding: 1px 6px; border-radius: 3px; background: var(--accent); color: var(--accent-ink); }
+.ghost-banner.is-sticky .sticky { display: inline-block; }
+.ghost-banner.is-sticky { border-color: var(--accent); }
+.row .age { cursor: pointer; }
+</style>
+
+<div class="app" id="app">
+  <div id="topbar"></div>
+  <div class="toolbar">
+    <button class="btn tip-right" id="back" data-tip="Back to the file list">← Back</button>
+    <span class="path">server/users.py</span>
+    <span class="seg" id="modes"><button data-tip="Diff: the change under review"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M8 2.5v11M3.8 8h2.4M9.8 8h2.4M11 6.8v2.4"/></svg><span class="long">Diff</span></button><button data-tip="Original: the file before the change"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M3 2.5h5v11H3a1.5 1.5 0 0 1-1.5-1.5V4A1.5 1.5 0 0 1 3 2.5z" fill="currentColor" stroke="none"/></svg><span class="long">Original</span></button><button data-tip="New: the file after the change"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M8 2.5h5A1.5 1.5 0 0 1 14.5 4v8a1.5 1.5 0 0 1-1.5 1.5H8z" fill="currentColor" stroke="none"/></svg><span class="long">New</span></button><button class="on" data-tip="History: every commit that touched this file"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.6 8a5.4 5.4 0 1 0 1.6-3.8"/><path d="M2.4 2.6v3.2h3.2"/><path d="M8 5v3.4l2.2 1.3"/></svg><span class="long">History</span></button></span>
+    <span class="spacer"></span>
+    <button class="btn toggle on" id="sidebtn" data-tip="Show or hide the commit list · h">☰<span class="long"> commits</span></button>
+    <button class="btn toggle on" id="sync" data-tip="Sync scroll, following the ribbons · s"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 2.5v11M2.5 11 5 13.5 7.5 11"/><path d="M11 13.5v-11M8.5 5 11 2.5 13.5 5"/></svg><span class="long">sync scroll</span> <kbd>s</kbd></button>
+    <button class="btn toggle" id="foldall" data-tip="Fold or unfold unchanged regions · f"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8h12"/><path d="M5.5 4.5 8 2l2.5 2.5M5.5 11.5 8 14l2.5-2.5"/></svg><span class="long">fold unchanged</span> <kbd>f</kbd></button>
+    <button class="btn toggle on" id="ribbonsbtn" data-tip="Show or hide the ribbons · r">ribbons</button>
+    <button class="btn toggle" id="wrapbtn" data-tip="Soft-wrap long lines · w">wrap</button>
+    <button class="btn" data-tip="Open this file in your editor">Open<span class="long"> in editor</span></button>
+    <button class="btn tip-left" id="gear" data-tip="History settings" aria-haspopup="true">⚙</button>
+  </div>
+  <div class="popover" id="popover" hidden>
+    <div class="group"><h5>Toolbar labels</h5>
+      <label><input type="radio" name="labels" value="auto" id="labels-auto"> Auto <span class="sub">icons only when the bar is narrow</span></label>
+      <label><input type="radio" name="labels" value="icons" id="labels-icons"> Always icons</label></div>
+    <div class="group"><h5>Help</h5>
+      <label><input type="checkbox" id="tips-on"> Show the tips row</label></div>
+    <div class="muted" style="font-size:11px">Saved in settings and kept between sessions.</div>
+  </div>
+  <div class="hint" id="hint"><span><kbd>↑</kbd><kbd>↓</kbd> newer / older</span><span>hover a commit to ghost its diff where you are · <kbd>space</kbd> keeps it after the mouse leaves</span><span><kbd>p</kbd> pin A: the pane splits, ribbons tie each changed block to its counterpart</span><span>hover a line number or stripe for who wrote it; the status bar follows the line under the mouse</span><button class="close tip-left" id="hintclose" data-tip="Hide these tips (saved in settings)">×</button></div>
+  <div class="main">
+    <div class="side" id="side"><div class="clist" id="clist"><div class="side-head">9 commits · newest first</div></div><div class="resize" id="resize" title="Drag to resize"></div></div>
+    <div class="board" id="board">
+      <div class="pane"><div class="col"><div class="pane-head" id="hl"></div><div class="code-pane" id="pl"></div></div><div class="minimap" id="ml"></div></div>
+      <div class="gutter" id="gutter"><button class="btn lock on" id="lock" data-tip="Sync scroll · s">⇅</button><svg id="svg"></svg></div>
+      <div class="pane"><div class="col"><div class="pane-head" id="hr"></div><div class="code-pane" id="pr"></div></div><div class="minimap" id="mr"></div></div>
+      <div class="ghost-banner" id="banner"></div>
+    </div>
+  </div>
+  <div class="statusbar"><span class="dot">●</span><span id="status"></span><span class="blame-now" id="blamenow"></span></div>
+</div>
+
+<script src="shared/history.js"></script>
+<script src="shared/engine2.js"></script>
+<script>
+(() => {
+  const { commits, lines, stats, short, rel } = FH;
+  const { N, mapLine, rowTop, anchorOf, restoreAnchor, morphTo, renderSingle, aligned, row, segWrapper, renderGhost, wireFolds, foldAllRuns, commitList, header, minimap, blameTips, keys } = FH2;
+  FH.topbar(document.getElementById('topbar'), 'mockup 8 · ribbons');
+  const $ = (id) => document.getElementById(id);
+  const app = $('app'), pl = $('pl'), pr = $('pr'), board = $('board'), side = $('side');
+
+  // Settings stand in for the app's settings.json; here they live in this browser only.
+  const settings = {
+    get(k, d) { try { const v = localStorage.getItem('fh.ribbons.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem('fh.ribbons.' + k, JSON.stringify(v)); } catch {} },
+  };
+  const st = {
+    cur: N - 1, pinned: null, ghost: null, sticky: false,
+    sync: settings.get('sync', true), folded: false,
+    ribbons: settings.get('ribbons', window.innerWidth >= 900), wrap: settings.get('wrap', false),
+    sideShown: settings.get('sideShown', true), sideWidth: settings.get('sideWidth', 236),
+    labels: settings.get('labels', 'auto'),
+  };
+  const list = commitList($('clist'), { hover: onHover, leave: onLeave, select, pin });
+  const mml = minimap($('ml'), pl), mmr = minimap($('mr'), pr);
+  wireFolds(board);
+  board.addEventListener('foldchange', redraw); board.addEventListener('rerender', () => { applyFolds(); redraw(); });
+
+  // ---- hint panel (1) ----
+  $('hint').hidden = settings.get('hintDismissed', false);
+  $('hintclose').onclick = () => { $('hint').hidden = true; settings.set('hintDismissed', true); $('tips-on').checked = false; FH.toast('Tips hidden. <span class="muted">Saved to settings; ⚙ ▸ Show the tips row brings them back.</span>', 3000); };
+  // ---- settings popover: toolbar labels, tips ----
+  const toolbar = document.querySelector('.toolbar');
+  const applyLabels = () => { toolbar.classList.toggle('auto', st.labels === 'auto'); toolbar.classList.toggle('icons', st.labels === 'icons'); $('labels-' + st.labels).checked = true; };
+  document.querySelectorAll('input[name="labels"]').forEach(r => r.onchange = () => { st.labels = r.value; settings.set('labels', st.labels); applyLabels(); });
+  $('tips-on').checked = !$('hint').hidden;
+  $('tips-on').onchange = () => { $('hint').hidden = !$('tips-on').checked; settings.set('hintDismissed', !$('tips-on').checked); };
+  $('gear').onclick = (e) => { e.stopPropagation(); $('popover').hidden = !$('popover').hidden; $('gear').classList.toggle('on', !$('popover').hidden); };
+  document.addEventListener('click', (e) => { if (!$('popover').hidden && !e.target.closest('#popover')) { $('popover').hidden = true; $('gear').classList.remove('on'); } });
+  applyLabels();
+
+  // ---- rendering ----
+  function renderLoose(pane, segs, sideKey, version) {
+    pane.replaceChildren(); pane.dataset.version = version; pane.dataset.mode = 'split';
+    for (const s of segs) {
+      const own = s.items.map(it => it[sideKey]).filter(Boolean);
+      const w = segWrapper(s.type, s.id, s.items.length, s.add, s.del);
+      if (s.type === 'hunk' && !own.length) { const m = document.createElement('div'); m.className = 'row marker'; m.title = 'lines exist only on the other side'; w.appendChild(m); }
+      for (const c of own) w.appendChild(row(c.text, c.line + 1, c.origin, version, c.del ? 'del' : c.add ? 'add' : '', { line: c.line }));
+      pane.appendChild(w);
+    }
+  }
+  function ribbons() {
+    const svg = $('svg'); if (!board.classList.contains('split') || !st.ribbons) { svg.innerHTML = ''; return; }
+    const W = $('gutter').clientWidth, g = $('gutter').getBoundingClientRect(), c = W / 2, out = [];
+    for (const wl of pl.querySelectorAll('.hunk')) {
+      const wr = pr.querySelector(`.hunk[data-id="${wl.dataset.id}"]`); if (!wr) continue;
+      const a = wl.getBoundingClientRect(), b = wr.getBoundingClientRect();
+      const a0 = a.top - g.top, a1 = Math.max(a.bottom - g.top, a0 + 3), b0 = b.top - g.top, b1 = Math.max(b.bottom - g.top, b0 + 3);
+      if (a1 < 0 && b1 < 0 || a0 > g.height && b0 > g.height) continue;
+      const hasL = wl.querySelector('.row.del'), hasR = wr.querySelector('.row.add');
+      const col = hasL && hasR ? 'var(--accent)' : hasL ? 'var(--del-fg)' : 'var(--add-fg)';
+      out.push(`<path data-id="${wl.dataset.id}" d="M0,${a0} C${c},${a0} ${c},${b0} ${W},${b0} L${W},${b1} C${c},${b1} ${c},${a1} 0,${a1} Z" fill="${col}" fill-opacity=".26" stroke="${col}" stroke-opacity=".75" style="cursor:pointer"/>`);
+    }
+    svg.innerHTML = out.join('');
+  }
+  function redraw() { ribbons(); mml.draw(); mmr.draw(); }
+  $('svg').addEventListener('click', (e) => { const id = e.target.dataset?.id; if (!id) return; const wl = pl.querySelector(`[data-id="${id}"]`), wr = pr.querySelector(`[data-id="${id}"]`); pl.scrollTop = rowTop(pl, wl) - pl.clientHeight / 3; pr.scrollTop = rowTop(pr, wr) - pr.clientHeight / 3; });
+  // Mapped sync scroll: the line at the top of one side finds its counterpart on the other. Horizontal follows too (7).
+  let lock = false;
+  function follow(src, dst) {
+    if (!st.sync || lock || !board.classList.contains('split')) return; lock = true;
+    const a = anchorOf(src), from = +src.dataset.version, to = +dst.dataset.version;
+    restoreAnchor(dst, mapLine(from, to, a.line), a.offset); dst.scrollLeft = src.scrollLeft;
+    requestAnimationFrame(() => lock = false);
+  }
+  pl.addEventListener('scroll', () => { follow(pl, pr); ribbons(); }); pr.addEventListener('scroll', () => { follow(pr, pl); ribbons(); });
+
+  const split = () => st.pinned !== null && st.pinned !== st.cur;
+  const curPane = () => !split() ? pl : (st.cur < st.pinned ? pl : pr);
+  function applyFolds() { if (st.folded) foldAllRuns(board, true); }
+  function paint() {
+    board.classList.toggle('split', split()); side.classList.toggle('tucked', split());
+    if (split()) { const lo = Math.min(st.pinned, st.cur), hi = Math.max(st.pinned, st.cur); header($('hl'), lo, st, { pin }); header($('hr'), hi, st, { pin }); }
+    else header($('hl'), st.cur, st, { pin });
+    list.paint(st);
+    const c = commits[st.cur], s = split() ? stats(Math.min(st.pinned, st.cur), Math.max(st.pinned, st.cur)) : null;
+    $('status').textContent = `${FH.file} @ ${short(c.sha)} · ${lines(st.cur).length} lines · ${rel(c.date)}` + (s ? ` · vs A ${short(commits[st.pinned].sha)}: +${s.add} −${s.del}` : st.pinned !== null ? ' · A pinned, move to compare' : '') + (st.ghost !== null ? ` · ghosting ${short(commits[st.ghost].sha)}${st.sticky ? ' (sticky)' : ''}` : '');
+    setTimeout(redraw, 480); mml.draw();
+  }
+  function showSingle(v, line, offset) { renderSingle(pl, v); applyFolds(); restoreAnchor(pl, line, offset); }
+  function renderSplit(anchor) {
+    const lo = Math.min(st.pinned, st.cur), hi = Math.max(st.pinned, st.cur), segs = aligned(lo, hi);
+    renderLoose(pl, segs, 'l', lo); renderLoose(pr, segs, 'r', hi); applyFolds();
+    const pane = st.cur === lo ? pl : pr, other = pane === pl ? pr : pl;
+    if (anchor) restoreAnchor(pane, mapLine(anchor.version, st.cur, anchor.line), anchor.offset);
+    lock = false; follow(pane, other);
+  }
+  function clearGhost() { st.ghost = null; st.sticky = false; $('banner').classList.remove('show', 'is-sticky'); }
+  function select(i) {
+    i = Math.max(0, Math.min(N - 1, i)); if (i === st.cur && st.ghost === null) return;
+    const pane = curPane(), a = anchorOf(pane), prev = st.cur, wasGhost = st.ghost !== null; clearGhost(); st.cur = i;
+    if (!split() && st.pinned !== i) { if (wasGhost || pane !== pl) showSingle(i, mapLine(prev, i, a.line), a.offset); else morphTo(pl, i); }
+    else if (st.pinned === i) showSingle(i, mapLine(prev, i, a.line), a.offset);
+    else renderSplit({ version: prev, line: a.line, offset: a.offset });
+    paint();
+  }
+  function pin(i) {
+    const pane = curPane(), a = anchorOf(pane); clearGhost();
+    if (st.pinned === i || i === undefined && st.pinned !== null) { st.pinned = null; showSingle(st.cur, a.line, a.offset); paint(); return; }
+    st.pinned = i ?? st.cur;
+    if (split()) renderSplit({ version: st.cur, line: a.line, offset: a.offset }); else if (pl.dataset.mode !== 'single') showSingle(st.cur, a.line, a.offset);
+    paint();
+  }
+  // ---- ghost, with sticky mode (2) ----
+  function onHover(i) {
+    if (st.pinned !== null || i === st.cur || st.sticky) return;
+    st.ghost = i; renderGhost(pl, st.cur, i); applyFolds(); mml.draw();
+    const s = stats(Math.min(st.cur, i), Math.max(st.cur, i)), fwd = i > st.cur;
+    $('banner').innerHTML = `<span class="sticky">sticky</span><span>${fwd ? 'Forward to' : 'Back to'} <b>${short(commits[i].sha)}</b> · <span class="stat-add">+${fwd ? s.add : s.del}</span> <span class="stat-del">−${fwd ? s.del : s.add}</span> · <kbd>space</kbd> ${st.sticky ? 'releases' : 'keeps it'}</span><button class="btn" id="cmp">Side by side <kbd>⏎</kbd></button>`;
+    $('cmp').onclick = compareGhost; $('banner').classList.add('show'); paint();
+  }
+  function onLeave() { if (st.ghost === null || st.sticky) return; const a = anchorOf(pl); clearGhost(); showSingle(st.cur, a.line, a.offset); mml.draw(); paint(); }
+  function toggleSticky() {
+    if (st.ghost === null) return;
+    st.sticky = !st.sticky; $('banner').classList.toggle('is-sticky', st.sticky);
+    const k = $('banner').querySelector('kbd'); if (k && k.nextSibling) k.nextSibling.textContent = st.sticky ? ' releases' : ' keeps it';
+    if (!st.sticky && !$('clist').matches(':hover')) onLeave(); else paint();
+  }
+  function compareGhost() { if (st.ghost === null) return; const t = st.ghost; st.pinned = st.cur; const a = anchorOf(pl); clearGhost(); st.cur = t; renderSplit({ version: st.pinned, line: a.line, offset: a.offset }); paint(); }
+  function leaveHistory(where) { const had = st.ghost !== null; if (had) { const a = anchorOf(pl); clearGhost(); showSingle(st.cur, a.line, a.offset); paint(); } FH.toast(`<b>${where}</b> <span class="muted">mock: leaving file history${had ? ' released the sticky ghost' : ''}</span>`, 2500); }
+  $('back').onclick = () => leaveHistory('Back to the file list');
+  $('modes').querySelectorAll('button:not(.on)').forEach(b => b.onclick = () => leaveHistory(`${b.dataset.tip.split(':')[0]} view`));
+
+  // ---- toggles (4, 5, 6, 8) ----
+  const setToggle = (id, on) => $(id).classList.toggle('on', on);
+  const toggleSync = () => { st.sync = !st.sync; settings.set('sync', st.sync); setToggle('sync', st.sync); $('lock').classList.toggle('on', st.sync); if (st.sync) follow(curPane(), curPane() === pl ? pr : pl); };
+  $('sync').onclick = toggleSync; $('lock').onclick = toggleSync;
+  $('foldall').onclick = () => { st.folded = !st.folded; foldAllRuns(board, st.folded); setToggle('foldall', st.folded); };
+  const applyRibbons = () => { board.classList.toggle('noribbons', !st.ribbons); setToggle('ribbonsbtn', st.ribbons); setTimeout(redraw, 480); };
+  $('ribbonsbtn').onclick = () => { st.ribbons = !st.ribbons; settings.set('ribbons', st.ribbons); applyRibbons(); };
+  const applyWrap = () => { app.classList.toggle('wrap', st.wrap); setToggle('wrapbtn', st.wrap); redraw(); };
+  $('wrapbtn').onclick = () => { st.wrap = !st.wrap; settings.set('wrap', st.wrap); applyWrap(); };
+  const applySide = () => { side.style.setProperty('--sw', st.sideWidth + 'px'); side.classList.toggle('hidden', !st.sideShown); setToggle('sidebtn', st.sideShown); setTimeout(redraw, 400); };
+  $('sidebtn').onclick = () => { st.sideShown = !st.sideShown; settings.set('sideShown', st.sideShown); applySide(); };
+  $('resize').addEventListener('pointerdown', (e) => {
+    e.preventDefault(); $('resize').setPointerCapture(e.pointerId); side.classList.add('resizing');
+    const x0 = e.clientX, w0 = st.sideWidth;
+    const mv = (ev) => { st.sideWidth = Math.max(150, Math.min(460, w0 + ev.clientX - x0)); side.style.setProperty('--sw', st.sideWidth + 'px'); };
+    const up = () => { side.classList.remove('resizing'); settings.set('sideWidth', st.sideWidth); $('resize').removeEventListener('pointermove', mv); redraw(); };
+    $('resize').addEventListener('pointermove', mv); $('resize').addEventListener('pointerup', up, { once: true });
+  });
+  // ---- blame tips over the gutter, every pane and mode (3) ----
+  blameTips(board, (pane) => pane.dataset.mode === 'ghost' ? st.cur : +pane.dataset.version, (origin, text) => {
+    select(origin);
+    setTimeout(() => { const pane = curPane(), t = Array.from(pane.querySelectorAll('.row')).find(x => x.querySelector('.src')?.textContent === text); if (t) { t.classList.add('focus'); t.scrollIntoView({ block: 'center' }); setTimeout(() => t.classList.remove('focus'), 1400); } }, 650);
+  }, (b) => {   // line under the mouse, bottom right of the status bar (2)
+    $('blamenow').innerHTML = b ? `<span class="ln">L${b.line}</span><b>${short(b.commit.sha)}${b.own ? ' <span class="this">(this commit)</span>' : ''}</b>${b.commit.author} · ${rel(b.commit.date)}` : '';
+  });
+  window.addEventListener('resize', redraw);
+  document.addEventListener('keydown', (e) => {
+    if (e.target.matches?.('input, textarea')) return;
+    if (e.key === ' ') { e.preventDefault(); toggleSticky(); }
+    if (e.key === 'Escape' && !$('popover').hidden) { $('popover').hidden = true; $('gear').classList.remove('on'); }
+    if (e.key === 'h') $('sidebtn').click(); if (e.key === 'r') $('ribbonsbtn').click(); if (e.key === 'w') $('wrapbtn').click();
+  });
+  keys({ newer: () => select(st.cur + 1), older: () => select(st.cur - 1), pin: () => pin(st.cur), enter: compareGhost, checkout: () => FH.checkoutMenu(null, st.cur), sync: toggleSync, fold: () => $('foldall').click(), escape: () => st.ghost !== null ? (st.sticky = false, onLeave()) : st.pinned !== null ? pin(st.pinned) : null, first: () => select(0), last: () => select(N - 1) });
+  applySide(); applyRibbons(); applyWrap(); setToggle('sync', st.sync); $('lock').classList.toggle('on', st.sync);
+  renderSingle(pl, st.cur); paint();
+})();
+</script>

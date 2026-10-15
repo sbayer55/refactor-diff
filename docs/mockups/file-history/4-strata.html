@@ -1,0 +1,174 @@
+<meta charset="utf-8">
+<title>Strata Rail</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="shared/theme.css">
+<style>
+/* Layout: the normal file viewer with a strata rail beside the code. Commits stack like rock layers,
+   newest on top, each layer as thick as the change it made. Hovering a layer ghosts the diff over the
+   code; clicking wipes the new version in from the top. The gutter is the same strata colouring per line. */
+.main { display: flex; flex: 1; min-height: 0; }
+.rail { width: 236px; flex: none; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+.rail-head { padding: 10px 12px; border-bottom: 1px solid var(--border); display: grid; gap: 8px; }
+.rail-head h4 { margin: 0; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.layers { flex: 1; overflow: auto; padding: 8px 10px 8px 24px; position: relative; display: flex; flex-direction: column; gap: 3px; }
+.layer { position: relative; border-radius: 3px; padding: 5px 8px; display: grid; grid-template-columns: 1fr auto; gap: 1px 6px; align-content: center; cursor: pointer; border: 1px solid transparent; background: color-mix(in oklab, var(--stratum) 55%, var(--panel)); transition: background .25s, border-color .2s, opacity .3s, transform .2s; min-height: 34px; }
+.layer::before { content: ''; position: absolute; left: -14px; top: 0; bottom: 0; width: 6px; border-radius: 3px; background: var(--stratum); }
+.layer:hover { border-color: var(--text); transform: translateX(2px); }
+.layer.future { opacity: .45; background: repeating-linear-gradient(135deg, transparent 0 4px, color-mix(in oklab, var(--text) 8%, transparent) 4px 6px), var(--panel-2); }
+.layer.future::before { background: var(--panel-3); }
+.layer.cur { border-color: var(--accent); box-shadow: inset 2px 0 0 var(--accent); }
+.layer.cur::after { content: 'viewing'; position: absolute; right: 8px; bottom: 4px; font: 700 9px var(--mono); color: var(--accent); letter-spacing: .06em; }
+.layer.a::after { content: 'A'; position: absolute; right: 8px; bottom: 4px; font: 700 10px var(--mono); color: var(--accent); border: 1.5px solid var(--accent); border-radius: 3px; padding: 0 4px; }
+.layer.between { border-color: color-mix(in oklab, var(--accent) 50%, transparent); }
+.layer .msg { font-size: 11.5px; font-weight: 500; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.layer .meta { font: 10px var(--mono); color: var(--muted); }
+.layer .delta { font: 10px var(--mono); text-align: right; grid-row: span 2; align-self: start; }
+.layer .flag { position: absolute; left: -24px; top: 50%; transform: translateY(-50%); font: 700 8px var(--mono); writing-mode: vertical-rl; color: var(--accent); letter-spacing: .1em; }
+.code-wrap { flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column; }
+.code-pane { --row-h: 21px; }
+.row { grid-template-columns: 10px 44px 1fr; }
+.row .age { cursor: pointer; transition: width .15s; }
+.row.ghost-del { background: var(--del-bg); opacity: .55; }
+.row.ghost-del .src { text-decoration: line-through; text-decoration-color: var(--del-fg); }
+.row.ghost-add { background: transparent; outline: 1px dashed color-mix(in oklab, var(--add-fg) 60%, transparent); outline-offset: -2px; opacity: .75; }
+.row.ghost-add .src { color: var(--add-fg); }
+.row.ghost-add .num { color: var(--add-fg); }
+.ghosting .code-pane { filter: saturate(.8); }
+.wipe { position: absolute; inset: 0; overflow: hidden; background: var(--bg); clip-path: inset(0 0 100% 0); z-index: 5; transition: clip-path .55s cubic-bezier(.4,0,.2,1); }
+.wipe.go { clip-path: inset(0 0 0 0); }
+.wipe-line { position: absolute; left: 0; right: 0; top: 0; height: 2px; background: var(--accent); box-shadow: 0 0 14px 3px color-mix(in oklab, var(--accent) 60%, transparent); z-index: 6; opacity: 0; pointer-events: none; transition: top .55s cubic-bezier(.4,0,.2,1), opacity .15s; }
+.wipe-line.go { opacity: 1; }
+.ghost-banner { position: absolute; top: 8px; right: 12px; z-index: 7; background: var(--panel-2); border: 1px solid var(--border); border-radius: 5px; padding: 6px 10px; font-size: 11.5px; box-shadow: var(--shadow); opacity: 0; transition: opacity .15s; pointer-events: none; }
+.ghost-banner.show { opacity: 1; }
+.ghost-banner b { font-family: var(--mono); color: var(--accent); }
+.rail-actions { display: grid; gap: 6px; }
+.rail-actions .btn { justify-content: center; }
+.row.focus { background: var(--accent-soft); }
+@media (max-width: 760px) { .rail { width: 180px; } .layer .delta { display: none; } }
+</style>
+
+<div class="app">
+  <div id="topbar"></div>
+  <div class="toolbar">
+    <button class="btn">← Back</button>
+    <span class="path">server/users.py <span>file history</span></span>
+    <span class="seg"><button>Diff</button><button>Original</button><button>New</button><button class="on">History</button></span>
+    <span style="margin-left:auto" class="legend">strata: oldest <span class="ramp"></span> newest</span>
+    <button class="btn">Open in editor</button>
+  </div>
+  <div class="hint"><span>hover a layer to <b>ghost</b> its diff over the code</span><span>click to <b>wipe</b> it in</span><span><kbd>⇧</kbd>-click a layer to set <b>A</b></span><span>click a gutter stripe to jump to the commit that wrote that line</span><span><kbd>↑</kbd><kbd>↓</kbd> step</span></div>
+  <div class="main">
+    <aside class="rail">
+      <div class="rail-head">
+        <h4>9 commits · newest first</h4>
+        <div class="commit-card" id="card"></div>
+        <div class="rail-actions">
+          <button class="btn primary" id="checkout">Checkout</button>
+          <button class="btn" id="clear-a" hidden>Clear A</button>
+        </div>
+      </div>
+      <div class="layers" id="layers"></div>
+    </aside>
+    <div class="code-wrap" id="wrap">
+      <div class="ghost-banner" id="banner"></div>
+      <div class="code-pane" id="code"></div>
+    </div>
+  </div>
+  <div class="statusbar"><span class="dot">●</span><span id="status"></span></div>
+</div>
+
+<script src="shared/history.js"></script>
+<script>
+(() => {
+  const { commits, lines, stats, blame, diff, short, initials, fmtDate, rel, heat, rowEl } = FH;
+  FH.topbar(document.getElementById('topbar'), 'mockup 4 · strata');
+  const $ = (id) => document.getElementById(id);
+  const N = commits.length, code = $('code'), wrap = $('wrap');
+  let cur = N - 1, a = null, ghost = null;
+  const layers = [];
+
+  const sizes = commits.map((_, i) => i ? stats(i - 1, i).add + stats(i - 1, i).del : lines(0).length);
+  const maxSize = Math.max(...sizes);
+  for (let i = N - 1; i >= 0; i--) {
+    const c = commits[i], s = i ? stats(i - 1, i) : { add: lines(0).length, del: 0 };
+    const L = document.createElement('div'); L.className = 'layer'; L.dataset.i = i;
+    L.style.minHeight = (34 + sizes[i] / maxSize * 46) + 'px';
+    L.innerHTML = `${c.tag ? `<span class="flag">${c.tag}</span>` : ''}<span class="msg">${c.message}</span><span class="delta"><span class="stat-add">+${s.add}</span> <span class="stat-del">−${s.del}</span></span><span class="meta">${short(c.sha)} · ${initials(c.author)} · ${rel(c.date)}</span>`;
+    L.addEventListener('mouseenter', () => showGhost(i));
+    L.addEventListener('mouseleave', () => hideGhost());
+    L.addEventListener('click', (e) => { if (e.shiftKey) { a = a === i ? null : i; ghost = null; wrap.classList.remove('ghosting'); $('banner').classList.remove('show'); paint(); render(true); } else go(i); });
+    $('layers').appendChild(L); layers[i] = L;
+  }
+
+  function paint() {
+    layers.forEach((L, i) => {
+      L.style.setProperty('--stratum', heat(i, cur));
+      L.classList.toggle('cur', i === cur); L.classList.toggle('future', i > cur && (a === null || i > Math.max(a, cur)));
+      L.classList.toggle('a', i === a); L.classList.toggle('between', a !== null && i > Math.min(a, cur) && i < Math.max(a, cur));
+    });
+    const c = commits[cur];
+    $('card').innerHTML = `<div><span class="sha">${short(c.sha)}</span> ${c.tag ? `<span class="chip ${c.tag}">${c.tag}</span>` : ''} ${c.pr ? '<span class="chip pr">in this PR</span>' : ''}</div><div class="msg">${c.message}</div><div class="who"><span class="avatar">${initials(c.author)}</span> ${c.author} · ${fmtDate(c.date)}</div>`;
+    $('checkout').textContent = `Checkout ${short(c.sha)}`;
+    $('clear-a').hidden = a === null;
+    $('status').textContent = `${FH.file} @ ${short(c.sha)} · ${lines(cur).length} lines` + (a !== null ? ` · showing A ${short(commits[a].sha)} → ${short(c.sha)} (+${stats(Math.min(a, cur), Math.max(a, cur)).add} −${stats(Math.min(a, cur), Math.max(a, cur)).del})` : '');
+  }
+  function render(instant) {
+    if (a !== null && a !== cur) { FH.renderUnified(code, Math.min(a, cur), Math.max(a, cur)); FH.scrollToChange(code); }
+    else FH.morph(code, cur, { instant: true });
+  }
+  // Ghost: overlay what the hovered layer would do to the code you are reading, without committing to it.
+  function showGhost(i) {
+    if (i === cur || a !== null) return;
+    ghost = i; wrap.classList.add('ghosting');
+    const lo = Math.min(cur, i), hi = Math.max(cur, i), forward = i > cur;
+    const ops = diff(lo, hi), bl = blame(cur);
+    code.replaceChildren(...ops.map(o => {
+      if (o.t === 'eq') return rowEl(o.text, (forward ? o.a : o.b) + 1, bl[forward ? o.a : o.b], cur);
+      const leaving = forward ? o.t === 'del' : o.t === 'add';
+      return rowEl(o.text, leaving ? (forward ? o.a : o.b) + 1 : '', null, cur, leaving ? 'ghost-del' : 'ghost-add');
+    }));
+    code.dataset.version = '';
+    const s = stats(lo, hi);
+    $('banner').innerHTML = `${forward ? 'Forward to' : 'Back to'} <b>${short(commits[i].sha)}</b> · ${commits[i].message} · <span class="stat-add">+${forward ? s.add : s.del}</span> <span class="stat-del">−${forward ? s.del : s.add}</span>`;
+    $('banner').classList.add('show'); FH.scrollToChange(code);
+  }
+  function hideGhost() {
+    if (ghost === null) return;
+    ghost = null; wrap.classList.remove('ghosting'); $('banner').classList.remove('show');
+    render(true);
+  }
+  // Wipe: the new version slides in from the top under a bright line.
+  function go(i) {
+    i = Math.max(0, Math.min(N - 1, i)); if (i === cur) return;
+    ghost = null; wrap.classList.remove('ghosting'); $('banner').classList.remove('show');
+    cur = i;
+    if (a !== null) { paint(); render(true); return; }
+    const over = document.createElement('div'); over.className = 'wipe';
+    const pane = document.createElement('div'); pane.className = 'code-pane'; pane.style.height = '100%';
+    FH.morph(pane, cur, { instant: true }); pane.scrollTop = code.scrollTop;
+    const line = document.createElement('div'); line.className = 'wipe-line';
+    over.appendChild(pane); wrap.appendChild(over); wrap.appendChild(line);
+    paint();
+    void over.offsetHeight; void line.offsetHeight;   // commit the starting state before transitioning
+    requestAnimationFrame(() => { over.classList.add('go'); line.classList.add('go'); line.style.top = 'calc(100% - 2px)'; });
+    setTimeout(() => { FH.morph(code, cur, { instant: true }); code.scrollTop = pane.scrollTop; over.remove(); line.remove(); }, 600);
+  }
+  // Blame hop from the gutter.
+  code.addEventListener('click', (e) => {
+    if (!e.target.classList.contains('age') || code.dataset.version === '') return;
+    const row = e.target.parentElement, k = Array.from(code.children).indexOf(row), origin = blame(cur)[k];
+    if (origin == null || origin === cur) { row.classList.add('focus'); setTimeout(() => row.classList.remove('focus'), 900); return; }
+    const text = row.querySelector('.src').textContent;
+    go(origin);
+    setTimeout(() => { const r = Array.from(code.children).find(r => r.querySelector('.src').textContent === text); if (r) { r.classList.add('focus'); r.scrollIntoView({ block: 'center' }); setTimeout(() => r.classList.remove('focus'), 1400); } }, 620);
+  });
+  code.addEventListener('mouseover', (e) => { if (e.target.classList.contains('age') && code.dataset.version !== '') { const k = Array.from(code.children).indexOf(e.target.parentElement), o = blame(cur)[k]; e.target.title = `${short(commits[o].sha)} · ${commits[o].author} · ${rel(commits[o].date)} — click to jump`; } });
+  $('checkout').onclick = () => FH.checkoutMenu(null, cur);
+  $('clear-a').onclick = () => { a = null; paint(); render(true); };
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); go(cur - 1); } if (e.key === 'ArrowUp') { e.preventDefault(); go(cur + 1); }
+    if (e.key === 'c') $('checkout').click(); if (e.key === 'Escape') $('clear-a').click();
+  });
+  paint(); render(true);
+})();
+</script>

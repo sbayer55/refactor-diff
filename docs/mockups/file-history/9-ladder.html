@@ -1,0 +1,146 @@
+<meta charset="utf-8">
+<title>Hunk Ladder</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="shared/theme.css">
+<link rel="stylesheet" href="shared/engine2.css">
+<style>
+/* Layout: history starts from the code, not the commit list. Every block of lines carries a chip saying how
+   many earlier versions it had; open the chip and those versions unfold in place as a ladder, newest at the
+   top, each labelled with its commit. The list and pin-to-split are still there for whole-file comparison. */
+.main { display: flex; flex: 1; min-height: 0; }
+.row { grid-template-columns: 8px 44px 1fr; }
+.row.blockhead { position: relative; }
+.chip-hist { position: absolute; right: 12px; top: 2px; height: 17px; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; border-radius: 9px; border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); font: 10.5px var(--mono); cursor: pointer; opacity: .55; transition: opacity .15s; z-index: 2; }
+.row:hover .chip-hist, .chip-hist.open { opacity: 1; color: var(--text); }
+.chip-hist.open { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.ladder { margin: 2px 0 6px 52px; border-left: 2px solid var(--accent); background: color-mix(in oklab, var(--panel) 70%, var(--bg)); animation: drop .3s ease; overflow: hidden; }
+@keyframes drop { from { opacity: 0; transform: translateY(-6px); } }
+.ladder .rung { border-bottom: 1px dashed var(--border); }
+.ladder .rung-head { display: flex; gap: 8px; align-items: center; height: 24px; padding: 0 10px; font-size: 11.5px; cursor: pointer; background: var(--panel); }
+.ladder .rung-head:hover { background: var(--panel-2); }
+.ladder .rung-head .sha { font-family: var(--mono); color: var(--accent); }
+.ladder .rung-head .msg { font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ladder .rung-head .who { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.ladder .rung-head .jump { font-size: 10.5px; color: var(--muted); }
+.ladder .row { grid-template-columns: 8px 40px 1fr; --row-h: 20px; height: 20px; line-height: 20px; }
+.ladder .rung.gone .row .src { color: var(--muted); }
+.ladder .empty { padding: 4px 12px; color: var(--muted); font-style: italic; font-size: 11.5px; }
+.row .age { cursor: pointer; }
+</style>
+
+<div class="app">
+  <div id="topbar"></div>
+  <div class="toolbar">
+    <button class="btn">← Back</button>
+    <span class="path">server/users.py <span>file history</span></span>
+    <span class="seg"><button>Diff</button><button>Original</button><button>New</button><button class="on">History</button></span>
+    <span class="spacer"></span>
+    <button class="btn" id="openall" title="Open every block's ladder (f)">open all ladders <kbd>f</kbd></button>
+    <button class="btn toggle on" id="sync" title="Scroll both sides together (s)">sync scroll <kbd>s</kbd></button>
+    <button class="btn">Open in editor</button>
+  </div>
+  <div class="hint"><span>each function, class or import group shows <b>↻ n</b>, its number of earlier versions; click to unfold them in place</span><span>click a rung's header to go to that commit</span><span><kbd>↑</kbd><kbd>↓</kbd> newer / older</span><span><kbd>p</kbd> pin A for a whole-file side by side</span></div>
+  <div class="main">
+    <div class="side" id="side"><div class="clist" id="clist"><div class="side-head">9 commits · newest first</div></div></div>
+    <div class="board" id="board">
+      <div class="pane"><div class="pane-head" id="hl"></div><div class="code-pane" id="pl"></div></div>
+      <div class="pane"><div class="pane-head" id="hr"></div><div class="code-pane" id="pr"></div></div>
+      <div class="ghost-banner" id="banner"></div>
+    </div>
+  </div>
+  <div class="statusbar"><span class="dot">●</span><span id="status"></span></div>
+</div>
+
+<script src="shared/history.js"></script>
+<script src="shared/engine2.js"></script>
+<script>
+(() => {
+  const { commits, lines, stats, blame, diff, short, initials, rel, fmtDate, heat, highlight } = FH;
+  const { N, mapLine, anchorOf, restoreAnchor, renderSingle, aligned, renderSide, row, wireFolds, syncScroll, commitList, header, keys } = FH2;
+  FH.topbar(document.getElementById('topbar'), 'mockup 9 · ladder');
+  const $ = (id) => document.getElementById(id);
+  const pl = $('pl'), pr = $('pr'), board = $('board'), side = $('side');
+  const st = { cur: N - 1, pinned: null, sync: true, open: new Set() };
+  const list = commitList($('clist'), { select, pin });
+  wireFolds(board); syncScroll(pl, pr); pl.dataset.sync = '1';
+
+  // Blocks: paragraphs separated by blank lines (an import group, a class, a function).
+  function blocks(v) {
+    const L = lines(v), out = []; let s = null;
+    for (let i = 0; i <= L.length; i++) {
+      const blank = i === L.length || L[i].trim() === '';
+      if (!blank && s === null) s = i;
+      if (blank && s !== null) { out.push({ s, e: i }); s = null; }
+    }
+    return out;
+  }
+  // The same region of the file at an earlier version: whatever lies between the block's surrounding anchors.
+  function regionAt(fromV, toV, s, e) {
+    const ops = diff(toV, fromV);                    // a = toV lines, b = fromV lines
+    let start = 0, end = lines(toV).length, seenStart = false;
+    for (const o of ops) { if (o.t !== 'eq') continue; if (o.b < s) start = o.a + 1; else if (o.b >= e && !seenStart) { end = o.a; seenStart = true; break; } }
+    return [start, Math.max(start, end)];
+  }
+  function history(v, s, e) {
+    const rungs = []; let prevText = lines(v).slice(s, e).join('\n'), cs = s, ce = e, cv = v;
+    for (let k = v - 1; k >= 0; k--) {
+      const [a, b] = regionAt(cv, k, cs, ce), text = lines(k).slice(a, b).join('\n');
+      if (text !== prevText) rungs.push({ k, a, b, text });
+      prevText = text; cs = a; ce = b; cv = k;
+    }
+    return rungs;
+  }
+  function renderBrowse(v) {
+    renderSingle(pl, v);
+    for (const b of blocks(v)) {
+      const h = history(v, b.s, b.e); if (!h.length) continue;
+      const r = pl.querySelector(`.row[data-line="${b.s}"]`); if (!r) continue;
+      r.classList.add('blockhead');
+      const chip = document.createElement('button'); chip.className = 'chip-hist'; chip.dataset.block = `${b.s}-${b.e}`;
+      chip.innerHTML = `↻ ${h.length}`; chip.title = `${h.length} earlier version${h.length === 1 ? '' : 's'} of this block`;
+      chip.onclick = (e) => { e.stopPropagation(); toggleLadder(b, h, r, chip); };
+      r.appendChild(chip);
+      if (st.open.has(chip.dataset.block)) toggleLadder(b, h, r, chip, true);
+    }
+  }
+  function toggleLadder(b, h, headRow, chip, force) {
+    const key = chip.dataset.block, lastRow = pl.querySelector(`.row[data-line="${b.e - 1}"]`);
+    const existing = lastRow.nextElementSibling?.classList.contains('ladder') ? lastRow.nextElementSibling : null;
+    if (existing && !force) { existing.remove(); chip.classList.remove('open'); st.open.delete(key); return; }
+    if (existing) return;
+    st.open.add(key); chip.classList.add('open');
+    const L = document.createElement('div'); L.className = 'ladder';
+    if (!h.length) L.innerHTML = `<div class="empty">unchanged since the file was created</div>`;
+    for (const rung of h) {
+      const c = commits[rung.k], d = document.createElement('div'); d.className = 'rung' + (rung.a === rung.b ? ' gone' : '');
+      d.innerHTML = `<div class="rung-head" data-k="${rung.k}"><span class="sha">${short(c.sha)}</span><span class="msg">${c.message}</span><span class="who"><span class="avatar">${initials(c.author)}</span> ${c.author} · ${rel(c.date)}</span><span class="jump">go to ›</span></div>`;
+      d.querySelector('.rung-head').onclick = () => { select(rung.k); setTimeout(() => { const t = pl.querySelector(`.row[data-line="${rung.a}"]`); if (t) { t.classList.add('focus'); t.scrollIntoView({ block: 'center' }); setTimeout(() => t.classList.remove('focus'), 1400); } }, 60); };
+      if (rung.a === rung.b) d.insertAdjacentHTML('beforeend', '<div class="empty">this block did not exist yet</div>');
+      else lines(rung.k).slice(rung.a, rung.b).forEach((t, i) => d.appendChild(row(t, rung.a + i + 1, blame(rung.k)[rung.a + i], rung.k)));
+      L.appendChild(d);
+    }
+    lastRow.after(L);
+  }
+  const curPane = () => st.pinned === null || st.pinned === st.cur ? pl : (st.cur < st.pinned ? pl : pr);
+  function paint() {
+    const split = st.pinned !== null && st.pinned !== st.cur;
+    board.classList.toggle('split', split); side.classList.toggle('compact', split);
+    if (split) { const lo = Math.min(st.pinned, st.cur), hi = Math.max(st.pinned, st.cur); header($('hl'), lo, st, { pin }); header($('hr'), hi, st, { pin }); } else header($('hl'), st.cur, st, { pin });
+    list.paint(st);
+    const c = commits[st.cur], s = split ? stats(Math.min(st.pinned, st.cur), Math.max(st.pinned, st.cur)) : null;
+    $('status').textContent = `${FH.file} @ ${short(c.sha)} · ${lines(st.cur).length} lines · ${blocks(st.cur).length} blocks · ${rel(c.date)}` + (s ? ` · vs A ${short(commits[st.pinned].sha)}: +${s.add} −${s.del}` : '');
+  }
+  function show(anchor) {
+    if (st.pinned === null || st.pinned === st.cur) { renderBrowse(st.cur); if (anchor) restoreAnchor(pl, mapLine(anchor.version, st.cur, anchor.line), anchor.offset); return; }
+    const lo = Math.min(st.pinned, st.cur), hi = Math.max(st.pinned, st.cur), segs = aligned(lo, hi);
+    renderSide(pl, segs, 'l', lo, hi); renderSide(pr, segs, 'r', hi, lo);
+    if (anchor) { const pane = st.cur === lo ? pl : pr; restoreAnchor(pane, mapLine(anchor.version, st.cur, anchor.line), anchor.offset); (pane === pl ? pr : pl).scrollTop = pane.scrollTop; }
+  }
+  function select(i) { i = Math.max(0, Math.min(N - 1, i)); if (i === st.cur) return; const pane = curPane(), a = anchorOf(pane), prev = st.cur; st.cur = i; show({ version: prev, line: a.line, offset: a.offset }); paint(); }
+  function pin(i) { const pane = curPane(), a = anchorOf(pane); st.pinned = (st.pinned === i || i === undefined && st.pinned !== null) ? null : (i ?? st.cur); show({ version: st.cur, line: a.line, offset: a.offset }); paint(); }
+  $('openall').onclick = () => { const all = pl.querySelectorAll('.chip-hist'); const anyClosed = Array.from(all).some(c => !c.classList.contains('open')); all.forEach(c => { if (c.classList.contains('open') !== anyClosed) c.click(); }); };
+  $('sync').onclick = () => { st.sync = !st.sync; pl.dataset.sync = st.sync ? '1' : ''; $('sync').classList.toggle('on', st.sync); };
+  keys({ newer: () => select(st.cur + 1), older: () => select(st.cur - 1), pin: () => pin(st.cur), checkout: () => FH.checkoutMenu(null, st.cur), fold: () => $('openall').click(), sync: () => $('sync').click(), escape: () => st.pinned !== null ? pin(st.pinned) : null, first: () => select(0), last: () => select(N - 1) });
+  show(); paint();
+})();
+</script>

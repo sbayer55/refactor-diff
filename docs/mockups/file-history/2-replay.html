@@ -1,0 +1,181 @@
+<meta charset="utf-8">
+<title>History Replay</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="shared/theme.css">
+<style>
+/* Layout: a full-screen theater. Filmstrip of commits on the left, the file as the picture,
+   a transport bar underneath. Playback replays history; recently written lines glow and cool off. */
+.theater { display: flex; flex: 1; min-height: 0; }
+.film { width: 252px; flex: none; background: var(--panel); border-right: 1px solid var(--border); overflow: auto; display: flex; flex-direction: column; }
+.film h4 { margin: 0; padding: 10px 14px 6px; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.frame { display: grid; grid-template-columns: 22px 1fr; gap: 2px 8px; padding: 8px 12px 8px 10px; border-left: 3px solid transparent; cursor: pointer; transition: background .2s, opacity .3s, border-color .2s; position: relative; }
+.frame:hover { background: var(--panel-2); }
+.frame.cur { background: var(--panel-2); border-left-color: var(--accent); }
+.frame.outside { opacity: .35; }
+.frame .idx { grid-row: span 3; font-family: var(--mono); color: var(--faint); font-size: 11px; padding-top: 2px; text-align: right; }
+.frame .msg { padding-right: 36px; font-weight: 500; font-size: 12px; line-height: 1.3; }
+.frame .meta { color: var(--muted); font-size: 11px; display: flex; gap: 6px; align-items: center; font-family: var(--mono); }
+.frame .bar { height: 4px; display: flex; gap: 1px; border-radius: 2px; overflow: hidden; width: 120px; margin-top: 2px; }
+.frame .bar i { display: block; height: 100%; }
+.frame .bar .d { background: var(--del-fg); } .frame .bar .a { background: var(--add-fg); }
+.frame .mark { position: absolute; right: 8px; top: 8px; font: 700 9px var(--mono); padding: 1px 5px; border-radius: 3px; }
+.frame .mark.in { border: 1.5px solid var(--accent); color: var(--accent); } .frame .mark.out { background: var(--accent); color: var(--accent-ink); }
+.picture { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
+.picture .code-pane { font-size: 13px; --row-h: 23px; padding-top: 10px; padding-bottom: 80px; }
+.row.glow { background: color-mix(in oklab, var(--heat-new) var(--g, 0%), transparent); }
+.caption { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); background: color-mix(in oklab, var(--panel) 88%, transparent); backdrop-filter: blur(6px); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; display: flex; align-items: center; gap: 14px; max-width: calc(100% - 32px); box-shadow: var(--shadow); animation: cap .35s ease; }
+@keyframes cap { from { opacity: 0; transform: translate(-50%, 8px); } }
+.caption .sha { font-family: var(--mono); color: var(--accent); font-size: 12px; }
+.caption .msg { font-weight: 600; font-size: 13px; }
+.caption .who { color: var(--muted); font-size: 11.5px; }
+.transport { flex: none; border-top: 1px solid var(--border); background: var(--panel); padding: 8px 14px 10px; display: grid; gap: 8px; }
+.transport .ctl { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.transport .ctl .spacer { flex: 1; }
+.tbtn { width: 34px; height: 28px; justify-content: center; padding: 0; font-size: 14px; }
+.tbtn.play { width: 44px; background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.progress { position: relative; height: 26px; }
+.progress .bar { position: absolute; left: 0; right: 0; top: 11px; height: 4px; border-radius: 2px; background: var(--panel-3); }
+.progress .done { position: absolute; left: 0; top: 11px; height: 4px; border-radius: 2px; background: var(--accent); transition: width .25s; }
+.progress .inout { position: absolute; top: 8px; height: 10px; background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 5px; opacity: 0; transition: opacity .2s; }
+.progress .inout.on { opacity: 1; }
+.progress .ch { position: absolute; top: 7px; width: 2px; height: 12px; margin-left: -1px; background: var(--faint); cursor: pointer; }
+.progress .ch.pr { background: var(--info); }
+.progress .ch:hover { background: var(--text); }
+.progress .ph { position: absolute; top: 4px; width: 18px; height: 18px; margin-left: -9px; border-radius: 50%; background: var(--accent); border: 3px solid var(--panel); box-shadow: 0 0 0 1.5px var(--accent); transition: left .25s; cursor: grab; z-index: 2; touch-action: none; }
+.counter { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; }
+.counter b { color: var(--text); }
+.diffmode .caption .msg::before { content: 'in → out · '; color: var(--accent); }
+@media (max-width: 760px) { .film { width: 170px; } .frame .bar { width: 80px; } }
+</style>
+
+<div class="app">
+  <div id="topbar"></div>
+  <div class="theater">
+    <aside class="film">
+      <h4>server/users.py · 9 commits</h4>
+      <div id="frames"></div>
+    </aside>
+    <div class="picture" id="picture">
+      <div class="code-pane" id="code"></div>
+      <div class="caption" id="caption"></div>
+    </div>
+  </div>
+  <div class="transport">
+    <div class="progress" id="progress"><div class="bar"></div><div class="inout" id="inout"></div><div class="done" id="done"></div><div class="ph" id="ph"></div></div>
+    <div class="ctl">
+      <button class="btn tbtn" id="first" title="First commit (Home)">⏮</button>
+      <button class="btn tbtn" id="prev" title="Previous commit (←)">◀</button>
+      <button class="btn tbtn play" id="play" title="Play / pause (space)">▶</button>
+      <button class="btn tbtn" id="next" title="Next commit (→)">▶|</button>
+      <button class="btn tbtn" id="last" title="Latest commit (End)">⏭</button>
+      <span class="counter">frame <b id="fr"></b> / 9 · <span id="date"></span></span>
+      <span class="seg" id="speed"><button data-s="1600">0.5×</button><button data-s="800" class="on">1×</button><button data-s="400">2×</button></span>
+      <button class="btn" id="loop">Loop</button>
+      <span class="spacer"></span>
+      <span class="legend">afterglow <span class="ramp"></span> just written</span>
+      <button class="btn" id="in" title="Mark in point (i)">⟦ In</button>
+      <button class="btn" id="out" title="Mark out point (o)">Out ⟧</button>
+      <button class="btn" id="show" disabled title="Show the diff between in and out (enter)">Show in → out</button>
+      <button class="btn primary" id="checkout" title="Checkout this frame (c)">Checkout</button>
+    </div>
+  </div>
+</div>
+
+<script src="shared/history.js"></script>
+<script>
+(() => {
+  const { commits, lines, stats, blame, short, initials, fmtDate, rel } = FH;
+  FH.topbar(document.getElementById('topbar'), 'mockup 2 · replay');
+  const $ = (id) => document.getElementById(id);
+  const N = commits.length, code = $('code');
+  let cur = 0, timer = null, speed = 800, loop = false, inP = null, outP = null, diffMode = false;
+
+  // Filmstrip
+  const maxChange = Math.max(...commits.map((_, i) => i ? stats(i - 1, i).add + stats(i - 1, i).del : lines(0).length));
+  commits.forEach((c, i) => {
+    const s = i ? stats(i - 1, i) : { add: lines(0).length, del: 0 };
+    const f = document.createElement('div');
+    f.className = 'frame'; f.dataset.i = i;
+    f.innerHTML = `<span class="idx">${i + 1}</span><span class="msg">${c.message}</span>
+      <span class="meta"><span class="avatar">${initials(c.author)}</span>${short(c.sha)} · ${fmtDate(c.date)} ${c.tag ? `<span class="chip ${c.tag}">${c.tag}</span>` : ''}</span>
+      <span class="bar"><i class="d" style="width:${s.del / maxChange * 100}%"></i><i class="a" style="width:${s.add / maxChange * 100}%"></i></span>`;
+    f.addEventListener('click', () => { stop(); go(i); });
+    $('frames').appendChild(f);
+    const ch = document.createElement('div'); ch.className = 'ch' + (c.pr ? ' pr' : ''); ch.style.left = (i / (N - 1) * 100) + '%'; ch.title = `${short(c.sha)} ${c.message}`;
+    ch.addEventListener('click', () => { stop(); go(i); });
+    $('progress').appendChild(ch);
+  });
+
+  function afterglow() {
+    if (diffMode) return;
+    const bl = blame(cur);
+    Array.from(code.children).forEach((r, i) => {
+      const dist = cur - bl[i];
+      const g = Math.max(0, 1 - dist / 4);              // written this frame = 1, four frames ago = 0
+      r.classList.toggle('glow', g > 0); r.style.setProperty('--g', Math.round(g * 26) + '%');
+    });
+  }
+  function go(i, instant) {
+    i = Math.max(0, Math.min(N - 1, i));
+    cur = i; diffMode = false; $('picture').classList.remove('diffmode');
+    FH.morph(code, cur, { instant, hold: Math.min(260, speed / 3) });
+    setTimeout(afterglow, instant ? 0 : 50);
+    paint();
+  }
+  function paint() {
+    const c = commits[cur];
+    document.querySelectorAll('.frame').forEach(f => {
+      const i = +f.dataset.i; f.classList.toggle('cur', i === cur);
+      f.classList.toggle('outside', diffMode && (i < Math.min(inP, outP) || i > Math.max(inP, outP)));
+      f.querySelector('.mark')?.remove();
+      if (i === inP) f.insertAdjacentHTML('beforeend', '<span class="mark in">IN</span>');
+      if (i === outP) f.insertAdjacentHTML('beforeend', '<span class="mark out">OUT</span>');
+    });
+    document.querySelector('.frame.cur')?.scrollIntoView({ block: 'nearest' });
+    $('done').style.width = (cur / (N - 1) * 100) + '%'; $('ph').style.left = (cur / (N - 1) * 100) + '%';
+    $('fr').textContent = cur + 1; $('date').textContent = `${fmtDate(c.date)} · ${rel(c.date)}`;
+    const s = cur ? stats(cur - 1, cur) : { add: lines(0).length, del: 0 };
+    $('caption').innerHTML = diffMode
+      ? `<span class="sha">${short(commits[inP].sha)} → ${short(commits[outP].sha)}</span><span class="msg">${Math.abs(outP - inP)} commits</span><span class="who"><span class="stat-add">+${stats(inP, outP).add}</span> <span class="stat-del">−${stats(inP, outP).del}</span> · ${lines(inP).length} → ${lines(outP).length} lines</span>`
+      : `<span class="sha">${short(c.sha)}</span><span class="msg">${c.message}</span><span class="who"><span class="avatar">${initials(c.author)}</span> ${c.author} · ${fmtDate(c.date)} · <span class="stat-add">+${s.add}</span> <span class="stat-del">−${s.del}</span></span>`;
+    $('caption').style.animation = 'none'; void $('caption').offsetWidth; $('caption').style.animation = '';
+    $('checkout').textContent = `Checkout ${short(c.sha)}`;
+    const haveRange = inP !== null && outP !== null && inP !== outP;
+    $('show').disabled = !haveRange;
+    $('inout').classList.toggle('on', haveRange);
+    if (haveRange) { const lo = Math.min(inP, outP), hi = Math.max(inP, outP); $('inout').style.left = (lo / (N - 1) * 100) + '%'; $('inout').style.width = ((hi - lo) / (N - 1) * 100) + '%'; }
+    $('play').textContent = timer ? '❚❚' : '▶';
+  }
+  function play() {
+    if (timer) return stop();
+    if (cur === N - 1) go(0);
+    timer = setInterval(() => { if (cur < N - 1) go(cur + 1); else if (loop) go(0); else stop(); }, speed);
+    paint();
+  }
+  function stop() { clearInterval(timer); timer = null; paint(); }
+
+  $('play').onclick = play;
+  $('prev').onclick = () => { stop(); go(cur - 1); }; $('next').onclick = () => { stop(); go(cur + 1); };
+  $('first').onclick = () => { stop(); go(0); }; $('last').onclick = () => { stop(); go(N - 1); };
+  $('loop').onclick = () => { loop = !loop; $('loop').classList.toggle('on', loop); };
+  $('speed').querySelectorAll('button').forEach(b => b.onclick = () => { speed = +b.dataset.s; $('speed').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); if (timer) { stop(); play(); } });
+  $('in').onclick = () => { inP = cur; paint(); }; $('out').onclick = () => { outP = cur; paint(); };
+  $('show').onclick = () => { stop(); diffMode = true; $('picture').classList.add('diffmode'); FH.renderUnified(code, Math.min(inP, outP), Math.max(inP, outP)); FH.scrollToChange(code); code.querySelectorAll('.row').forEach(r => r.classList.remove('glow')); paint(); };
+  $('checkout').onclick = () => FH.checkoutMenu($('checkout'), cur);
+  $('ph').addEventListener('pointerdown', (e) => {
+    stop(); $('ph').setPointerCapture(e.pointerId); $('ph').style.transition = 'none';
+    const move = (ev) => { const r = $('progress').getBoundingClientRect(); go(Math.round(Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)) * (N - 1))); };
+    const up = () => { $('ph').style.transition = ''; $('ph').removeEventListener('pointermove', move); };
+    $('ph').addEventListener('pointermove', move); $('ph').addEventListener('pointerup', up, { once: true });
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === ' ') { e.preventDefault(); play(); }
+    if (e.key === 'ArrowLeft') { stop(); go(cur - 1); } if (e.key === 'ArrowRight') { stop(); go(cur + 1); }
+    if (e.key === 'Home') { stop(); go(0); } if (e.key === 'End') { stop(); go(N - 1); }
+    if (e.key === 'i') $('in').click(); if (e.key === 'o') $('out').click();
+    if (e.key === 'Enter' && !$('show').disabled) $('show').click();
+    if (e.key === 'c') $('checkout').click();
+  });
+  go(N - 1, true);
+})();
+</script>

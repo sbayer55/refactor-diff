@@ -1,0 +1,129 @@
+<meta charset="utf-8">
+<title>Hybrid Inline Split</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="shared/theme.css">
+<link rel="stylesheet" href="shared/engine2.css">
+<style>
+/* Layout: one pane, always. Unchanged code stays full width; only the blocks that differ open into
+   two columns, older on the left. Hovering a commit previews exactly this; p makes it stick. */
+.main { display: flex; flex: 1; min-height: 0; }
+.hunk.hybrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); box-shadow: none; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.hunk.hybrid .col.r { animation: open .35s cubic-bezier(.2,.8,.2,1); }
+@keyframes open { from { transform: translateX(-12px); opacity: 0; } }
+.hunk.hybrid .col { min-width: 0; overflow: hidden; }
+.hunk.hybrid .col.l { border-right: 1px solid var(--border); background: color-mix(in oklab, var(--del-bg) 55%, var(--bg)); }
+.hunk.hybrid .col.r { background: color-mix(in oklab, var(--add-bg) 55%, var(--bg)); }
+.hunk.hybrid .col-head { display: flex; gap: 6px; align-items: center; height: 18px; padding: 0 10px 0 22px; font: 10px var(--mono); color: var(--muted); background: var(--panel); border-bottom: 1px solid var(--border); }
+.hunk.hybrid .col-head b { color: var(--accent); font-weight: 600; }
+.hunk.hybrid > .hunk-btn { top: 1px; left: 6px; }
+.hunk.hybrid.folded { display: block; }
+.hunk.hybrid.folded > .col { display: none; }
+.row.del { background: transparent; } .row.add { background: transparent; }
+.row.del .src { background: color-mix(in oklab, var(--del-bg) 100%, transparent); } .row.add .src { background: var(--add-bg); }
+.ghost-banner { top: 44px; }
+.row .age { cursor: pointer; }
+</style>
+
+<div class="app">
+  <div id="topbar"></div>
+  <div class="toolbar">
+    <button class="btn">← Back</button>
+    <span class="path">server/users.py <span>file history</span></span>
+    <span class="seg"><button>Diff</button><button>Original</button><button>New</button><button class="on">History</button></span>
+    <span class="spacer"></span>
+    <button class="btn" id="foldall" title="Fold or unfold every unchanged region (f)">fold unchanged <kbd>f</kbd></button>
+    <button class="btn">Open in editor</button>
+  </div>
+  <div class="hint"><span><kbd>↑</kbd><kbd>↓</kbd> newer / older</span><span>hover a commit: changed blocks open into two columns where you are</span><span><kbd>p</kbd> pin A so every commit compares to it</span><span><kbd>⏎</kbd> while hovering pins and jumps</span><span>unchanged code never leaves full width</span></div>
+  <div class="main">
+    <div class="side" id="side"><div class="clist" id="clist"><div class="side-head">9 commits · newest first</div></div></div>
+    <div class="board" id="board">
+      <div class="pane"><div class="pane-head" id="hl"></div><div class="code-pane" id="pl"></div></div>
+      <div class="pane" hidden></div>
+      <div class="ghost-banner" id="banner"></div>
+    </div>
+  </div>
+  <div class="statusbar"><span class="dot">●</span><span id="status"></span></div>
+</div>
+
+<script src="shared/history.js"></script>
+<script src="shared/engine2.js"></script>
+<script>
+(() => {
+  const { commits, lines, stats, blame, short, rel } = FH;
+  const { N, mapLine, anchorOf, restoreAnchor, morphTo, renderSingle, aligned, row, wireFolds, foldAllRuns, commitList, header, keys } = FH2;
+  FH.topbar(document.getElementById('topbar'), 'mockup 7 · hybrid');
+  const $ = (id) => document.getElementById(id);
+  const pl = $('pl'), board = $('board');
+  const st = { cur: N - 1, pinned: null, ghost: null, folded: false };
+  const list = commitList($('clist'), { hover: onHover, leave: onLeave, select, pin });
+  wireFolds(board);
+
+  // Unchanged runs full width; each hunk becomes a two-column block. Rows carry the line numbers of `cur`.
+  function renderHybrid(pane, other) {
+    const lo = Math.min(st.cur, other), hi = Math.max(st.cur, other), curSide = st.cur === lo ? 'l' : 'r';
+    const segs = aligned(lo, hi);
+    pane.replaceChildren(); pane.dataset.mode = 'hybrid'; pane.dataset.version = st.cur;
+    for (const s of segs) {
+      const w = document.createElement('div'); w.dataset.id = s.id;
+      if (s.type === 'run') {
+        w.className = 'run' + (s.items.length < 4 ? ' short' : '');
+        w.innerHTML = `<button class="fold-btn" data-fold="${s.id}">⌃ fold ${s.items.length} unchanged</button><div class="fold-row" data-unfold="${s.id}"><span class="age"></span><span class="num">⋯</span><span class="src">${s.items.length} unchanged lines · click to expand</span></div>`;
+        for (const it of s.items) { const c = it[curSide]; w.appendChild(row(c.text, c.line + 1, c.origin, st.cur, '', { line: c.line })); }
+      } else {
+        w.className = 'hunk hybrid';
+        w.innerHTML = `<button class="hunk-btn" data-fold="${s.id}">▾</button><div class="fold-row hunk-row" data-unfold="${s.id}"><span class="age"></span><span class="num">▸</span><span class="src">collapsed change · <span class="stat-add">+${s.add}</span> <span class="stat-del">−${s.del}</span> · click to expand</span></div>
+          <div class="col l"><div class="col-head"><b>${short(commits[lo].sha)}</b> older · <span class="stat-del">−${s.del}</span></div></div><div class="col r"><div class="col-head"><b>${short(commits[hi].sha)}</b> newer · <span class="stat-add">+${s.add}</span></div></div>`;
+        const L = w.querySelector('.col.l'), R = w.querySelector('.col.r');
+        for (const it of s.items) {
+          L.appendChild(it.l ? row(it.l.text, it.l.line + 1, it.l.origin, lo, 'del', curSide === 'l' ? { line: it.l.line } : {}) : row('', '', null, lo, 'pad'));
+          R.appendChild(it.r ? row(it.r.text, it.r.line + 1, it.r.origin, hi, 'add', curSide === 'r' ? { line: it.r.line } : {}) : row('', '', null, hi, 'pad'));
+        }
+      }
+      pane.appendChild(w);
+    }
+    if (st.folded) foldAllRuns(board, true);
+  }
+  function paint() {
+    header($('hl'), st.cur, st, { pin });
+    list.paint(st);
+    const c = commits[st.cur], other = st.ghost ?? (st.pinned !== null && st.pinned !== st.cur ? st.pinned : null);
+    const s = other !== null ? stats(Math.min(st.cur, other), Math.max(st.cur, other)) : null;
+    $('status').textContent = `${FH.file} @ ${short(c.sha)} · ${lines(st.cur).length} lines · ${rel(c.date)}` + (s ? ` · ${st.ghost !== null ? 'previewing' : 'vs A'} ${short(commits[other].sha)}: +${s.add} −${s.del}` : '');
+  }
+  function show(anchor) {
+    const other = st.ghost ?? (st.pinned !== null && st.pinned !== st.cur ? st.pinned : null);
+    if (other === null) { renderSingle(pl, st.cur); } else renderHybrid(pl, other);
+    if (anchor) restoreAnchor(pl, mapLine(anchor.version, st.cur, anchor.line), anchor.offset);
+  }
+  function select(i) {
+    i = Math.max(0, Math.min(N - 1, i)); if (i === st.cur && st.ghost === null) return;
+    const a = anchorOf(pl), prev = st.cur; st.ghost = null; $('banner').classList.remove('show'); st.cur = i;
+    if (st.pinned === null && pl.dataset.mode === 'single') morphTo(pl, i); else show({ version: prev, line: a.line, offset: a.offset });
+    paint();
+  }
+  function pin(i) {
+    const a = anchorOf(pl);
+    if (st.pinned === i || i === undefined && st.pinned !== null) st.pinned = null; else st.pinned = i ?? st.cur;
+    st.ghost = null; $('banner').classList.remove('show'); show({ version: st.cur, line: a.line, offset: a.offset }); paint();
+  }
+  function onHover(i) {
+    if (st.pinned !== null || i === st.cur) return;
+    const a = anchorOf(pl); st.ghost = i; show({ version: st.cur, line: a.line, offset: a.offset });
+    const fwd = i > st.cur;
+    $('banner').innerHTML = `<span>${fwd ? 'Newer:' : 'Older:'} <b>${short(commits[i].sha)}</b> · ${commits[i].message}</span><button class="btn" id="cmp">Pin and jump <kbd>⏎</kbd></button>`;
+    $('cmp').onclick = enter; $('banner').classList.add('show'); paint();
+  }
+  function onLeave() { if (st.ghost === null) return; const a = anchorOf(pl); st.ghost = null; show({ version: st.cur, line: a.line, offset: a.offset }); $('banner').classList.remove('show'); paint(); }
+  function enter() { if (st.ghost === null) return; const t = st.ghost; st.pinned = st.cur; select(t); }
+  $('foldall').onclick = () => { st.folded = !st.folded; foldAllRuns(board, st.folded); $('foldall').classList.toggle('on', st.folded); };
+  pl.addEventListener('click', (e) => {
+    if (!e.target.classList.contains('age') || pl.dataset.mode !== 'single') return;
+    const r = e.target.parentElement, origin = blame(st.cur)[+r.dataset.line], text = r.querySelector('.src').textContent;
+    if (origin === st.cur) { r.classList.add('focus'); setTimeout(() => r.classList.remove('focus'), 900); return; }
+    select(origin); setTimeout(() => { const t = Array.from(pl.querySelectorAll('.row')).find(x => x.querySelector('.src').textContent === text); if (t) { t.classList.add('focus'); t.scrollIntoView({ block: 'center' }); setTimeout(() => t.classList.remove('focus'), 1400); } }, 650);
+  });
+  keys({ newer: () => select(st.cur + 1), older: () => select(st.cur - 1), pin: () => pin(st.cur), enter, checkout: () => FH.checkoutMenu(null, st.cur), fold: () => $('foldall').click(), escape: () => st.ghost !== null ? onLeave() : st.pinned !== null ? pin(st.pinned) : null, first: () => select(0), last: () => select(N - 1) });
+  renderSingle(pl, st.cur); paint();
+})();
+</script>

@@ -4,6 +4,7 @@ pub mod ai;
 pub mod analyze;
 pub mod config;
 pub mod files;
+pub mod history;
 pub mod jev;
 pub mod navigate;
 pub mod pr;

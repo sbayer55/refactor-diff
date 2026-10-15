@@ -1,0 +1,116 @@
+<meta charset="utf-8">
+<title>Spine History</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="shared/theme.css">
+<link rel="stylesheet" href="shared/engine2.css">
+<style>
+/* Layout: the file viewer with a commit list on the left. Browse one version; hover a commit to ghost its
+   diff in place; press p to pin A and the pane splits, older on the left, while the list shrinks to a spine. */
+.main { display: flex; flex: 1; min-height: 0; }
+.row .age { cursor: pointer; }
+.pin-hint { font-size: 11.5px; color: var(--muted); padding: 4px 12px; background: var(--accent-soft); border-bottom: 1px solid var(--border); display: none; }
+.pin-hint.show { display: block; }
+.pin-hint b { color: var(--accent); font-family: var(--mono); }
+</style>
+
+<div class="app">
+  <div id="topbar"></div>
+  <div class="toolbar">
+    <button class="btn">← Back</button>
+    <span class="path">server/users.py <span>file history</span></span>
+    <span class="seg"><button>Diff</button><button>Original</button><button>New</button><button class="on">History</button></span>
+    <span class="spacer"></span>
+    <button class="btn toggle on" id="sync" title="Scroll both sides together (s)">sync scroll <kbd>s</kbd></button>
+    <button class="btn" id="foldall" title="Fold or unfold every unchanged region (f)">fold unchanged <kbd>f</kbd></button>
+    <button class="btn">Open in editor</button>
+  </div>
+  <div class="hint"><span><kbd>↑</kbd><kbd>↓</kbd> newer / older</span><span>hover a commit to <b>ghost</b> its diff where you are</span><span><kbd>⏎</kbd> while ghosting opens it side by side</span><span><kbd>p</kbd> pin / unpin A</span><span>click a gutter stripe to jump to the commit that wrote the line</span></div>
+  <div class="pin-hint" id="pinhint"></div>
+  <div class="main">
+    <div class="side" id="side"><div class="clist" id="clist"><div class="side-head">9 commits · newest first</div></div></div>
+    <div class="board" id="board">
+      <div class="pane"><div class="pane-head" id="hl"></div><div class="code-pane" id="pl"></div></div>
+      <div class="pane"><div class="pane-head" id="hr"></div><div class="code-pane" id="pr"></div></div>
+      <div class="ghost-banner" id="banner"></div>
+    </div>
+  </div>
+  <div class="statusbar"><span class="dot">●</span><span id="status"></span></div>
+</div>
+
+<script src="shared/history.js"></script>
+<script src="shared/engine2.js"></script>
+<script>
+(() => {
+  const { commits, lines, stats, blame, short, rel } = FH;
+  const { N, mapLine, anchorOf, restoreAnchor, morphTo, renderSingle, aligned, renderSide, renderGhost, wireFolds, foldAllRuns, syncScroll, commitList, header, keys } = FH2;
+  FH.topbar(document.getElementById('topbar'), 'mockup 6 · spine');
+  const $ = (id) => document.getElementById(id);
+  const pl = $('pl'), pr = $('pr'), board = $('board'), side = $('side');
+  const st = { cur: N - 1, pinned: null, ghost: null, sync: true, folded: false };
+  const list = commitList($('clist'), { hover: onHover, leave: onLeave, select, pin });
+  wireFolds(board); syncScroll(pl, pr); pl.dataset.sync = '1';
+
+  const curPane = () => st.pinned === null || st.pinned === st.cur ? pl : (st.cur < st.pinned ? pl : pr);
+  function paint() {
+    const split = st.pinned !== null && st.pinned !== st.cur;
+    board.classList.toggle('split', split); side.classList.toggle('compact', split);
+    if (split) { const lo = Math.min(st.pinned, st.cur), hi = Math.max(st.pinned, st.cur); header($('hl'), lo, st, { pin }); header($('hr'), hi, st, { pin }); }
+    else header($('hl'), st.cur, st, { pin });
+    list.paint(st);
+    $('pinhint').classList.toggle('show', st.pinned !== null && st.pinned === st.cur);
+    $('pinhint').innerHTML = `<b>${short(commits[st.cur].sha)}</b> pinned as A. Move to any other commit to compare against it; older is always on the left.`;
+    const c = commits[st.cur], s = st.pinned !== null && st.pinned !== st.cur ? stats(Math.min(st.pinned, st.cur), Math.max(st.pinned, st.cur)) : null;
+    $('status').textContent = `${FH.file} @ ${short(c.sha)} · ${lines(st.cur).length} lines · ${rel(c.date)}` + (s ? ` · vs A ${short(commits[st.pinned].sha)}: +${s.add} −${s.del}` : '') + (st.ghost !== null ? ` · ghosting ${short(commits[st.ghost].sha)}` : '');
+  }
+  function renderSplit(anchor) {
+    const lo = Math.min(st.pinned, st.cur), hi = Math.max(st.pinned, st.cur), segs = aligned(lo, hi);
+    renderSide(pl, segs, 'l', lo, hi); renderSide(pr, segs, 'r', hi, lo);
+    if (st.folded) foldAllRuns(board, true);
+    if (anchor) { const side = st.cur === lo ? 'l' : 'r', pane = side === 'l' ? pl : pr; restoreAnchor(pane, mapLine(anchor.version, st.cur, anchor.line), anchor.offset); (side === 'l' ? pr : pl).scrollTop = pane.scrollTop; }
+  }
+  function select(i) {
+    i = Math.max(0, Math.min(N - 1, i)); if (i === st.cur && st.ghost === null) return;
+    const wasGhost = st.ghost !== null; st.ghost = null; $('banner').classList.remove('show');
+    const pane = curPane(), a = anchorOf(pane), prev = st.cur; st.cur = i;
+    if (st.pinned === null || st.pinned === i) {
+      if (st.pinned === i && pane !== pl) { renderSingle(pl, i); restoreAnchor(pl, mapLine(prev, i, a.line), a.offset); }
+      else if (wasGhost || pane !== pl) { renderSingle(pl, i); restoreAnchor(pl, mapLine(prev, i, a.line), a.offset); }
+      else morphTo(pl, i);
+    } else renderSplit({ version: prev, line: a.line, offset: a.offset });
+    paint();
+  }
+  function pin(i) {
+    const pane = curPane(), a = anchorOf(pane);
+    if (st.pinned === i || i === undefined && st.pinned !== null) {   // unpin
+      st.pinned = null; renderSingle(pl, st.cur); restoreAnchor(pl, a.line, a.offset); paint(); return;
+    }
+    st.pinned = i ?? st.cur; st.ghost = null; $('banner').classList.remove('show');
+    if (st.pinned !== st.cur) renderSplit({ version: st.cur, line: a.line, offset: a.offset });
+    else if (pl.dataset.mode !== 'single') { renderSingle(pl, st.cur); restoreAnchor(pl, a.line, a.offset); }
+    paint();
+  }
+  function onHover(i) {
+    if (st.pinned !== null || i === st.cur) return;
+    st.ghost = i; renderGhost(pl, st.cur, i);
+    const s = stats(Math.min(st.cur, i), Math.max(st.cur, i)), fwd = i > st.cur;
+    $('banner').innerHTML = `<span>${fwd ? 'Forward to' : 'Back to'} <b>${short(commits[i].sha)}</b> · <span class="stat-add">+${fwd ? s.add : s.del}</span> <span class="stat-del">−${fwd ? s.del : s.add}</span></span><button class="btn" id="cmp">Side by side <kbd>⏎</kbd></button>`;
+    $('cmp').onclick = () => compareGhost(); $('banner').classList.add('show'); paint();
+  }
+  function onLeave() { if (st.ghost === null) return; const a = anchorOf(pl); st.ghost = null; renderSingle(pl, st.cur); restoreAnchor(pl, a.line, a.offset); $('banner').classList.remove('show'); paint(); }
+  function compareGhost() { if (st.ghost === null) return; const target = st.ghost; st.ghost = null; st.pinned = st.cur; const a = anchorOf(pl); st.cur = target; renderSplit({ version: st.pinned, line: a.line, offset: a.offset }); $('banner').classList.remove('show'); paint(); }
+
+  $('sync').onclick = () => { st.sync = !st.sync; pl.dataset.sync = st.sync ? '1' : ''; $('sync').classList.toggle('on', st.sync); if (st.sync) pr.scrollTop = pl.scrollTop; };
+  $('foldall').onclick = () => { st.folded = !st.folded; foldAllRuns(board, st.folded); $('foldall').classList.toggle('on', st.folded); };
+  // Blame hop from the gutter (single mode).
+  pl.addEventListener('click', (e) => {
+    if (!e.target.classList.contains('age') || pl.dataset.mode !== 'single') return;
+    const r = e.target.parentElement, line = +r.dataset.line, origin = blame(st.cur)[line];
+    if (origin === st.cur) { r.classList.add('focus'); setTimeout(() => r.classList.remove('focus'), 900); return; }
+    const text = r.querySelector('.src').textContent; select(origin);
+    setTimeout(() => { const t = Array.from(pl.querySelectorAll('.row')).find(x => x.querySelector('.src').textContent === text); if (t) { t.classList.add('focus'); t.scrollIntoView({ block: 'center' }); setTimeout(() => t.classList.remove('focus'), 1400); } }, 650);
+  });
+  pl.addEventListener('mouseover', (e) => { if (e.target.classList.contains('age') && pl.dataset.mode === 'single') { const o = blame(st.cur)[+e.target.parentElement.dataset.line]; if (o != null) e.target.title = `${short(commits[o].sha)} · ${commits[o].author} · ${rel(commits[o].date)} — click to jump`; } });
+  keys({ newer: () => select(st.cur + 1), older: () => select(st.cur - 1), pin: () => pin(st.cur), enter: compareGhost, checkout: () => FH.checkoutMenu(null, st.cur), sync: () => $('sync').click(), fold: () => $('foldall').click(), escape: () => st.ghost !== null ? onLeave() : st.pinned !== null ? pin(st.pinned) : null, first: () => select(0), last: () => select(N - 1) });
+  renderSingle(pl, st.cur); paint();
+})();
+</script>
