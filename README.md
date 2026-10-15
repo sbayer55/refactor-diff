@@ -48,6 +48,16 @@ with the command that installs each one.
   review UI, the AI chip and the Ask menu's Settings link open the same window.
 - View ▸ Command Palette (⌘⇧P) and Help ▸ Keyboard Shortcuts reach the review UI's palette
   and shortcut list from the menu bar.
+- **Open from GitHub.** The Chrome extension in [`browser-extension/`](browser-extension/)
+  adds an *Open in Refactor Diff* button to pull request and compare pages. To install it,
+  go to `chrome://extensions`, turn on Developer mode, click *Load unpacked* and pick that
+  folder. The button opens a link such as
+  `refactor-diff://open?repo=OWNER/NAME&pr=123` (or `&base=main&head=topic`). The app then
+  looks for a checkout of that repository: the folder used last time, the open and recent
+  repositories, and `<repositories folder>/NAME` or `<repositories folder>/OWNER/NAME`. If it
+  finds none, it asks you to pick the folder or clone the repository with `gh`. The
+  repositories folder is set in Settings and defaults to `~/code/`. It is also where the
+  Open Repository picker starts.
 
 Building it requires Rust, Node (for the Tauri CLI only), the Xcode command line tools and
 [just](https://just.systems). The run and build recipes install the Tauri CLI first when it's

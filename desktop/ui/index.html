@@ -63,6 +63,17 @@
   .tools-ok { color: var(--muted); font-size: 12px; }
   .tools-head { display: flex; align-items: baseline; }
   .tools-head .spacer { flex: 1; }
+  .locate { display: none; margin-top: 20px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); }
+  .locate.show { display: block; }
+  .locate p { margin: 0 0 12px; }
+  .locate .repo { font-weight: 600; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .locate .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .locate .spacer { flex: 1; }
+  .locate .target { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; -webkit-user-select: text; user-select: text; }
+  .locate .hint { color: var(--muted); font-size: 12px; margin: 10px 0 0; }
+  button.secondary { font: inherit; color: var(--fg); background: none; border: 1px solid var(--border); border-radius: 8px; padding: 9px 14px; cursor: pointer; }
+  button.secondary:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  button.secondary:disabled { opacity: 0.6; cursor: default; }
 </style>
 </head>
 <body>
@@ -71,6 +82,17 @@
   <p class="lead">Review a refactor-heavy diff or pull request with the repeated edits collapsed.</p>
 
   <button class="primary" id="open">Open Repository…<kbd>⌘O</kbd></button>
+
+  <div class="locate" id="locate">
+    <p>Where is <span class="repo" id="locate-repo"></span> on this Mac?</p>
+    <div class="actions">
+      <button class="primary" id="locate-choose">Choose Folder…</button>
+      <button class="secondary" id="locate-clone">Clone</button>
+      <span class="spacer"></span>
+      <button class="link" id="locate-cancel">Cancel</button>
+    </div>
+    <p class="hint">Refactor Diff remembers the folder for next time. Clone puts it in <span class="target" id="locate-target"></span> (the repositories folder is set in Settings).</p>
+  </div>
 
   <div class="status" id="status"></div>
   <div class="error" id="error"><div id="error-title"></div><pre id="error-detail"></pre></div>
@@ -113,6 +135,7 @@
 
   function setBusy(busy, message) {
     $("open").disabled = busy || gitMissing;
+    for (const id of ["locate-choose", "locate-clone"]) $(id).disabled = busy;
     $("status").textContent = message || "";
     $("status").classList.toggle("show", busy);
   }
@@ -192,11 +215,43 @@
   });
   $("settings").addEventListener("click", () => invoke("open_settings"));
 
+  // An open link (browser extension) for a GitHub repository with no known checkout.
+  let locating = null;
+  function showLocate(locate) {
+    locating = locate;
+    $("locate").classList.toggle("show", Boolean(locate));
+    if (!locate) return;
+    $("locate-repo").textContent = locate.repo;
+    $("locate-target").textContent = locate.cloneTarget;
+  }
+  async function locateStep(busyMessage, run) {
+    clearError();
+    setBusy(true, busyMessage);
+    try {
+      await run();
+      // On success the window navigates to the review UI.
+    } catch (e) {
+      showError(`Couldn't open ${locating.repo}`, String(e));
+    }
+  }
+  $("locate-choose").addEventListener("click", () =>
+    locateStep(`Opening ${locating.repo}…`, async () => {
+      if (!(await invoke("locate_choose"))) setBusy(false);
+    }));
+  $("locate-clone").addEventListener("click", () =>
+    locateStep(`Cloning ${locating.repo} into ${locating.cloneTarget}…`, () => invoke("locate_clone")));
+  // The repositories folder may have changed in Settings meanwhile.
+  window.addEventListener("focus", async () => {
+    if (locating) showLocate((await invoke("get_status")).locate);
+  });
+  $("locate-cancel").addEventListener("click", () => { showLocate(null); clearError(); invoke("locate_cancel"); });
+
   (async () => {
     renderTools();
     await renderRecents();
     const status = await invoke("get_status");
     if (status.lastError) showError(status.lastError.title, status.lastError.detail);
+    showLocate(status.locate);
     if (location.hash === "#loading" && status.repo) setBusy(true, `Starting ${basename(status.repo)}…`);
   })();
 </script>

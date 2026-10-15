@@ -504,6 +504,19 @@ function setMode(mode) {
   $("[name=pr]").required = mode === "pr";
 }
 
+// Show a pull request or a range and analyze it, as if picked in the source form. The
+// desktop app calls this for an open link when this repository is already showing.
+function openSource({ mode, pr, base, head }) {
+  const form = $("#source-form");
+  setMode(mode);
+  if (mode === "pr") form.pr.value = pr;
+  else {
+    form.base.value = base || state.sources?.default_base || form.base.value;
+    form.head.value = head || "HEAD";
+  }
+  runAnalysis();
+}
+
 async function loadSources(defaults) {
   try {
     const src = await api("/api/sources");
@@ -3611,8 +3624,9 @@ async function init() {
   if (defaults.pr) form.pr.value = defaults.pr;
   loadFilters(defaults.filters);
   loadAiSettings();
-  // Called by the desktop app's native menu (webview eval) and its Settings window.
-  window.refactorDiff = { openPalette, showHelp: () => showHelp(true), showSettings, reloadSettings: loadAiSettings };
+  // Called by the desktop app's native menu (webview eval), its Settings window, and open
+  // links from the browser extension (openSource).
+  window.refactorDiff = { openPalette, showHelp: () => showHelp(true), showSettings, reloadSettings: loadAiSettings, openSource };
   await loadSources(defaults);
   if (defaults.mode) runAnalysis();
 }

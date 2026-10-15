@@ -137,3 +137,17 @@ desktop-clean-bundle:
 desktop-clean:
     cargo clean -p refactor-diff-desktop
     rm -rf "{{ desktop }}/src-tauri/gen"
+
+# ------------------------------------------------------ Browser extension ---
+
+# Run the browser extension's tests
+[group('extension')]
+extension-test:
+    node --test browser-extension/*.test.js
+
+# Zip the browser extension into target/ (for sharing; load it unpacked for development)
+[group('extension')]
+extension-zip:
+    mkdir -p "{{ justfile_directory() }}/target"
+    rm -f "{{ justfile_directory() }}/target/refactor-diff-extension.zip"
+    cd "{{ justfile_directory() }}/browser-extension" && zip -r -X "{{ justfile_directory() }}/target/refactor-diff-extension.zip" . -x '*.test.js' -x 'README.md' -x '.*' -x '*/.*'
