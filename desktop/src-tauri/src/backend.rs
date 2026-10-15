@@ -11,7 +11,7 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-use refactor_diff_server::{App, ServerConfig, ServerHandle, bind_local};
+use refactor_diff_server::{App, Defaults, ServerConfig, ServerHandle, bind_local};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{oneshot, watch};
@@ -113,8 +113,11 @@ pub struct Backend {
     path: watch::Sender<Option<String>>,
     /// Repository currently being started, if any.
     pub opening: Mutex<Option<PathBuf>>,
-    /// Repository asked for while another was still starting; opened next (newest wins).
-    pub pending: Mutex<Option<PathBuf>>,
+    /// Repository asked for while another was still starting, with what to pre-select;
+    /// opened next (newest wins).
+    pub pending: Mutex<Option<(PathBuf, Defaults)>>,
+    /// An open link whose repository wasn't found: the landing page asks where it is.
+    pub locate: Mutex<Option<crate::deep_link::OpenRequest>>,
     /// Something at launch (a Dock drop, a command-line argument) chose the repository, so
     /// the last one shouldn't be reopened.
     pub launch_claimed: AtomicBool,
@@ -130,6 +133,7 @@ impl Default for Backend {
             path,
             opening: Mutex::new(None),
             pending: Mutex::new(None),
+            locate: Mutex::new(None),
             launch_claimed: AtomicBool::new(false),
             last_error: Mutex::new(None),
         }
@@ -143,6 +147,20 @@ impl Backend {
             .unwrap()
             .as_ref()
             .map(|r| r.repo.clone())
+    }
+
+    /// The review UI's URL, while a server is running.
+    pub fn url(&self) -> Option<Url> {
+        self.running
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|r| r.server.url.clone())
+    }
+
+    /// Tools for child processes, with the login shell's PATH.
+    pub async fn tools(&self) -> refactor_diff_server::exec::Tools {
+        refactor_diff_server::exec::Tools::new(self.path().await)
     }
 
     pub fn set_path(&self, path: String) {
@@ -190,12 +208,13 @@ pub async fn recapture_shell_path(app: &AppHandle) -> String {
 }
 
 /// Start the review server for `repo`, replacing any running instance, and return the URL
-/// of the review UI.
-pub async fn start(app: &AppHandle, repo: &Path) -> Result<Url, String> {
+/// of the review UI. `defaults` pre-selects a source (from an open link) and runs it.
+pub async fn start(app: &AppHandle, repo: &Path, defaults: Defaults) -> Result<Url, String> {
     stop(app).await;
     let backend = app.state::<Backend>();
     let config = ServerConfig {
         repo: repo.to_path_buf(),
+        defaults,
         path: backend.path().await,
         desktop: true,
         ..ServerConfig::default()

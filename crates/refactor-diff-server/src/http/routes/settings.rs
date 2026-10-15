@@ -20,7 +20,7 @@ pub async fn get_settings(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(public_view(&state.settings.load()))
 }
 
-/// Merge `{"ai": {...}}` and/or `{"jev": {...}}` over the stored settings (masked secrets keep
+/// Merge `{"ai": {...}, "jev": {...}, "reposDir": "..."}` over the stored settings (masked secrets keep
 /// their stored value).
 pub async fn save_settings(
     State(state): State<Arc<AppState>>,

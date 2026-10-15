@@ -1,0 +1,55 @@
+/* "Open in Refactor Diff" button. It also carries GitHub's own .btn .btn-sm classes. */
+.refactor-diff-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 8px;
+  white-space: nowrap;
+}
+
+.refactor-diff-btn .octicon {
+  flex: none;
+}
+
+.range-editor .refactor-diff-btn {
+  margin: 4px 0 4px 8px;
+}
+
+.refactor-diff-btn:disabled,
+.refactor-diff-btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* Fallback when no header spot is found. */
+.refactor-diff-btn.refactor-diff-floating {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 100;
+  margin: 0;
+  padding: 3px 12px;
+  font-size: 12px;
+  line-height: 20px;
+  border-radius: 6px;
+  border: 1px solid var(--borderColor-default, var(--color-border-default, #d0d7de));
+  background: var(--bgColor-default, var(--color-canvas-default, #ffffff));
+  color: var(--fgColor-default, var(--color-fg-default, #1f2328));
+  box-shadow: var(--shadow-floating-small, 0 1px 3px rgba(31, 35, 40, 0.15));
+  cursor: pointer;
+}
+
+.refactor-diff-btn.refactor-diff-floating:hover:not(:disabled) {
+  background: var(--bgColor-muted, var(--color-canvas-subtle, #f6f8fa));
+}
+
+@media (prefers-color-scheme: dark) {
+  .refactor-diff-btn.refactor-diff-floating {
+    border-color: var(--borderColor-default, var(--color-border-default, #30363d));
+    background: var(--bgColor-default, var(--color-canvas-default, #0d1117));
+    color: var(--fgColor-default, var(--color-fg-default, #e6edf3));
+  }
+  .refactor-diff-btn.refactor-diff-floating:hover:not(:disabled) {
+    background: var(--bgColor-muted, var(--color-canvas-subtle, #161b22));
+  }
+}

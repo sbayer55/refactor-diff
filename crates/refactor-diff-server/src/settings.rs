@@ -3,17 +3,23 @@
 //! Stored as `settings.json` in the same directory as the review marks, written with mode
 //! 0600 because it holds API keys. The web API never returns a key: [`public_view`] masks
 //! them, and a masked value sent back on save means "keep the stored key".
+//!
+//! Besides the `ai` section there is one top-level key, `reposDir`: the folder the desktop
+//! app clones GitHub repositories into and looks in for checkouts. It is only stored when it
+//! differs from [`DEFAULT_REPOS_DIR`].
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde_json::{Map, Value, json};
 
-use crate::paths::{atomic_write, canonical_json, config_dir};
+use crate::paths::{atomic_write, canonical_json, config_dir, home_dir};
 
 pub const PROVIDERS: &[&str] = &["claude", "openai", "ollama"];
 pub const MASK: &str = "••••";
 const SECRET_KEYS: &[&str] = &["api_key"];
+pub const REPOS_DIR_KEY: &str = "reposDir";
+pub const DEFAULT_REPOS_DIR: &str = "~/code/";
 
 pub fn defaults() -> Value {
     json!({
@@ -85,6 +91,28 @@ impl Settings {
             auto: truthy(&j["auto"]),
             zero_data_retention: truthy(&j["zero_data_retention"]),
         }
+    }
+
+    /// The repositories folder as the user typed it (`~/code/` when unset).
+    pub fn repos_dir_setting(&self) -> &str {
+        self.0[REPOS_DIR_KEY]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(DEFAULT_REPOS_DIR)
+    }
+
+    /// The repositories folder with a leading `~` expanded.
+    pub fn repos_dir(&self) -> PathBuf {
+        expand_home(self.repos_dir_setting(), &home_dir())
+    }
+}
+
+/// `path` with a leading `~` (alone or followed by `/`) replaced by `home`.
+pub fn expand_home(path: &str, home: &Path) -> PathBuf {
+    match path.strip_prefix('~') {
+        Some("") => home.to_path_buf(),
+        Some(rest) if rest.starts_with('/') => home.join(rest.trim_start_matches('/')),
+        _ => PathBuf::from(path),
     }
 }
 
@@ -243,6 +271,7 @@ pub fn public_view(settings: &Settings) -> Value {
     jev_view["api_key"] = Value::String(mask(&jev.api_key));
     jev_view["configured"] = Value::Bool(jev.configured());
     out["jev"] = jev_view;
+    out[REPOS_DIR_KEY] = Value::String(settings.repos_dir_setting().to_string());
     out
 }
 
@@ -267,12 +296,13 @@ fn py_repr(v: &Value) -> String {
     }
 }
 
-/// `current` with the `ai` and/or `jev` sections of `update` applied; masked secrets keep the
-/// stored value, so the UI can round-trip the public view.
+/// `current` with the `ai` and/or `jev` sections and `reposDir` of `update` applied; masked
+/// secrets keep the stored value, so the UI can round-trip the public view.
 pub fn apply_update(current: &Settings, update: &Value) -> Result<Settings, SettingsError> {
     let ai = update.get("ai").filter(|a| a.is_object());
     let jev = update.get("jev").filter(|j| j.is_object());
-    if ai.is_none() && jev.is_none() {
+    let repos_dir = update.get(REPOS_DIR_KEY);
+    if ai.is_none() && jev.is_none() && repos_dir.is_none() {
         return Err(SettingsError(
             "Expected an object with an 'ai' or 'jev' section.".into(),
         ));
@@ -295,6 +325,26 @@ pub fn apply_update(current: &Settings, update: &Value) -> Result<Settings, Sett
             }
         }
         merged["jev"] = next;
+    }
+    if let Some(dir) = repos_dir {
+        let Some(dir) = dir.as_str() else {
+            return Err(SettingsError(
+                "The repositories folder must be text.".into(),
+            ));
+        };
+        let dir = dir.trim();
+        let is_default =
+            dir.is_empty() || dir.trim_end_matches('/') == DEFAULT_REPOS_DIR.trim_end_matches('/');
+        let obj = merged.as_object_mut().expect("settings are an object");
+        if is_default {
+            obj.remove(REPOS_DIR_KEY);
+        } else if dir.starts_with('/') || dir == "~" || dir.starts_with("~/") {
+            obj.insert(REPOS_DIR_KEY.into(), Value::String(dir.to_string()));
+        } else {
+            return Err(SettingsError(
+                "The repositories folder must be an absolute path or start with ~/.".into(),
+            ));
+        }
     }
     let Some(ai) = ai else {
         return Ok(Settings(merged));
@@ -425,7 +475,10 @@ mod tests {
                 0o600
             );
         }
-        let public = public_view(&store.load());
+        let mut public = public_view(&store.load());
+        // `reposDir` postdates the Python tool's golden; unset, it shows the default.
+        let repos_dir = public.as_object_mut().unwrap().remove(REPOS_DIR_KEY);
+        assert_eq!(repos_dir, Some(json!(DEFAULT_REPOS_DIR)));
         let golden: Value = serde_json::from_str(
             &std::fs::read_to_string(format!("{GOLDENS}/settings.public.json")).unwrap(),
         )
@@ -559,6 +612,48 @@ mod tests {
         .unwrap();
         assert_eq!(probe.jev().api_key, "vck_abcd1234");
         assert_eq!(probe.jev().model, "m2");
+    }
+
+    #[test]
+    fn repos_dir_setting() {
+        let home = Path::new("/Users/me");
+        assert_eq!(
+            expand_home("~/code/", home),
+            PathBuf::from("/Users/me/code/")
+        );
+        assert_eq!(expand_home("~", home), PathBuf::from("/Users/me"));
+        assert_eq!(expand_home("/src", home), PathBuf::from("/src"));
+        assert_eq!(expand_home("~bob/x", home), PathBuf::from("~bob/x"));
+
+        let current = Settings(defaults());
+        assert_eq!(current.repos_dir_setting(), DEFAULT_REPOS_DIR);
+        let set = apply_update(&current, &json!({"reposDir": " ~/src "})).unwrap();
+        assert_eq!(set.repos_dir_setting(), "~/src");
+        assert_eq!(set.0["ai"], defaults()["ai"]);
+        let abs = apply_update(&set, &json!({"reposDir": "/work"})).unwrap();
+        assert_eq!(abs.repos_dir(), PathBuf::from("/work"));
+        // The default (or nothing) is not stored, so settings.json stays as it was.
+        for reset in ["", "~/code", "~/code/"] {
+            let reset = apply_update(&set, &json!({"reposDir": reset})).unwrap();
+            assert!(reset.0.get(REPOS_DIR_KEY).is_none());
+            assert_eq!(reset.0, defaults());
+        }
+        assert_eq!(
+            apply_update(&current, &json!({"reposDir": "code"}))
+                .unwrap_err()
+                .0,
+            "The repositories folder must be an absolute path or start with ~/."
+        );
+        assert_eq!(
+            apply_update(&current, &json!({"reposDir": 3}))
+                .unwrap_err()
+                .0,
+            "The repositories folder must be text."
+        );
+        // Saving the AI settings keeps a stored folder.
+        let both = apply_update(&set, &json!({"ai": {"provider": "ollama"}})).unwrap();
+        assert_eq!(both.repos_dir_setting(), "~/src");
+        assert_eq!(public_view(&both)[REPOS_DIR_KEY], "~/src");
     }
 
     #[test]

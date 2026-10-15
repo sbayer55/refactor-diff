@@ -3,7 +3,20 @@
 <plist version="1.0">
 <dict>
   <!-- Merged into the generated Info.plist by Tauri. Declaring folders as a document type
-       lets a repository be opened by dropping it on the Dock icon or with `open -a`. -->
+       lets a repository be opened by dropping it on the Dock icon or with `open -a`; the
+       refactor-diff:// URL scheme is how the browser extension opens a pull request or a
+       branch comparison (`refactor-diff://open?repo=OWNER/NAME&pr=N`, see deep_link.rs). -->
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>com.stevenbayer.refactor-diff</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>refactor-diff</string>
+      </array>
+    </dict>
+  </array>
   <key>CFBundleDocumentTypes</key>
   <array>
     <dict>
