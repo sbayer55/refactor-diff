@@ -29,6 +29,22 @@ pub enum SignatureKind {
     Args,
     /// An import changed module path or gained/lost a name.
     Import,
+    /// Like a rename, but the new name already existed in the base: one concept stands in for
+    /// another, so the data that flows through changes. Never mechanical.
+    Substitution,
+    /// Elements added to or removed from one bracketed list (deps arrays, destructuring,
+    /// object literals, unions), including the formatter reflow that follows.
+    List,
+    /// An early-return/throw guard was removed or added. Never mechanical.
+    Guard,
+    /// An import or local deleted because its last use was deleted in the same file.
+    Cascade,
+    /// A whole test block (`it`/`test`/`describe`) was deleted or added.
+    Test,
+    /// An i18n key and the `t("key")` calls that used it.
+    I18n,
+    /// The same JSON/object field path dropped across fixture records.
+    Fixture,
 }
 
 impl SignatureKind {
@@ -42,6 +58,13 @@ impl SignatureKind {
             SignatureKind::Move => "move",
             SignatureKind::Args => "args",
             SignatureKind::Import => "import",
+            SignatureKind::Substitution => "substitution",
+            SignatureKind::List => "list",
+            SignatureKind::Guard => "guard",
+            SignatureKind::Cascade => "cascade",
+            SignatureKind::Test => "test",
+            SignatureKind::I18n => "i18n",
+            SignatureKind::Fixture => "fixture",
         }
     }
 
@@ -50,8 +73,19 @@ impl SignatureKind {
     pub const fn always_mechanical(self) -> bool {
         matches!(
             self,
-            SignatureKind::Formatting | SignatureKind::Docs | SignatureKind::Move
+            SignatureKind::Formatting
+                | SignatureKind::Docs
+                | SignatureKind::Move
+                | SignatureKind::List
+                | SignatureKind::Cascade
+                | SignatureKind::Fixture
         )
+    }
+
+    /// Kinds that change what the code does even when they repeat: they group for display
+    /// but always stay in the needs-review list.
+    pub const fn never_mechanical(self) -> bool {
+        matches!(self, SignatureKind::Substitution | SignatureKind::Guard)
     }
 }
 
@@ -65,6 +99,10 @@ pub enum UnitTag {
     FileMove,
     /// Half of a certain move of whole functions/classes.
     Moved,
+    /// Deletes an early-return/throw guard: the code now runs where it used to stop.
+    PreconditionRemoved,
+    /// Deletes a whole test block.
+    TestRemoved,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -154,8 +192,16 @@ impl Signature {
                 };
                 format!("moved {}: {where_}", self.detail)
             }
-            Replace | Import if self.old.is_empty() => format!("insert {}", self.new),
-            Replace | Import if self.new.is_empty() => format!("delete {}", self.old),
+            Replace | Import | List | Guard | Cascade | Test | I18n | Fixture
+                if self.old.is_empty() =>
+            {
+                format!("insert {}", self.new)
+            }
+            Replace | Import | List | Guard | Cascade | Test | I18n | Fixture
+                if self.new.is_empty() =>
+            {
+                format!("delete {}", self.old)
+            }
             _ => format!("{} → {}", self.old, self.new),
         }
     }
@@ -327,6 +373,55 @@ pub struct Stats {
     pub verified_units: usize,
 }
 
+/// Where a concept pattern sits in the code, for bucketing the concept supergroup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConceptRole {
+    Field,
+    Import,
+    Fixture,
+    I18n,
+    Prop,
+    Deps,
+    Type,
+    Test,
+    Other,
+}
+
+/// Mechanical groups that are the same edit of a concept once literals are normalized
+/// (`programId: "p1"` and `programId: "prog-001"` share `programId: <str>`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ConceptPattern {
+    pub norm_key: String,
+    pub label: String,
+    pub role: ConceptRole,
+    pub group_ids: Vec<String>,
+}
+
+/// Changed lines per file, split by whether removing the concept explains them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConceptFile {
+    pub concept_lines: u32,
+    pub collateral_lines: u32,
+}
+
+/// An identifier stem the change set adds or removes everywhere (`program`), and which units
+/// that explains. An overlay: it never changes `Unit::explained` or the stats.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Concept {
+    pub stem: String,
+    /// Detected by the engine (`false`: asked for with `--concept` / the UI).
+    pub auto: bool,
+    /// Share of changed identifier tokens that contain the stem, 0..1.
+    pub score: f64,
+    /// Units whose diff is empty once the concept's tokens are stripped.
+    pub explained_unit_ids: Vec<String>,
+    /// Units that mention the concept but still differ after stripping it.
+    pub touched_unit_ids: Vec<String>,
+    pub patterns: Vec<ConceptPattern>,
+    pub files: IndexMap<String, ConceptFile>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Report {
     pub id: String,
@@ -337,6 +432,8 @@ pub struct Report {
     pub hunks: IndexMap<String, Hunk>,
     pub residual_hunk_ids: Vec<String>,
     pub warnings: Vec<Warning>,
+    /// Concept overlay, strongest first; serialized only when non-empty.
+    pub concepts: Vec<Concept>,
     /// `(old_text, new_text)` per path, exactly as analyzed. Kept for the file viewer so it
     /// always lines up with the units; not serialized.
     pub texts: BTreeMap<String, (String, String)>,
@@ -378,7 +475,8 @@ impl Report {
 
 impl Serialize for Report {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut st = s.serialize_struct("Report", 9)?;
+        let fields = if self.concepts.is_empty() { 9 } else { 10 };
+        let mut st = s.serialize_struct("Report", fields)?;
         st.serialize_field("id", &self.id)?;
         st.serialize_field("source", &self.source)?;
         st.serialize_field("stats", &self.stats())?;
@@ -388,6 +486,9 @@ impl Serialize for Report {
         st.serialize_field("hunks", &self.hunks)?;
         st.serialize_field("residual_hunk_ids", &self.residual_hunk_ids)?;
         st.serialize_field("warnings", &self.warnings)?;
+        if !self.concepts.is_empty() {
+            st.serialize_field("concepts", &self.concepts)?;
+        }
         st.end()
     }
 }
@@ -437,6 +538,28 @@ mod tests {
             "\"R\""
         );
         assert_eq!(serde_json::to_string(&LineType::Context).unwrap(), "\" \"");
+        for kind in [
+            SignatureKind::Substitution,
+            SignatureKind::List,
+            SignatureKind::Guard,
+            SignatureKind::Cascade,
+            SignatureKind::Test,
+            SignatureKind::I18n,
+            SignatureKind::Fixture,
+        ] {
+            assert_eq!(
+                serde_json::to_string(&kind).unwrap(),
+                format!("\"{}\"", kind.as_str())
+            );
+        }
+        assert_eq!(
+            serde_json::to_string(&UnitTag::PreconditionRemoved).unwrap(),
+            "\"precondition-removed\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ConceptRole::I18n).unwrap(),
+            "\"i18n\""
+        );
     }
 
     #[test]
@@ -478,6 +601,7 @@ mod tests {
             hunks: IndexMap::new(),
             residual_hunk_ids: vec![],
             warnings: vec![],
+            concepts: vec![],
             texts: BTreeMap::new(),
         };
         // 100 * 1 / 8 = 12.5 -> 12 (banker's rounding), like Python's round().
