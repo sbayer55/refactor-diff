@@ -318,8 +318,9 @@ repository.
   matches are highlighted. `/` focuses the box, `Esc` clears it.
 
 To pre-set filters from the command line, use `--hide` (any of `source`, `tests`, `docs`,
-`config`, `other`, `comments`, `imports`, `file-moves`, `moves`) and `--exclude GLOB`
-(repeatable).
+`config`, `other`, `comments`, `imports`, `file-moves`, `moves`, `collateral-explained`) and
+`--exclude GLOB` (repeatable). `--concept NAME` pre-selects a concept for the concept lens
+(e.g. `program`); otherwise one is auto-detected.
 
 ### Keyboard
 

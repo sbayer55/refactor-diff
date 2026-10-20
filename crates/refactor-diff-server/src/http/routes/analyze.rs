@@ -4,17 +4,19 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Path, State};
-use refactor_diff_core::{Report, analyze};
+use refactor_diff_core::{AnalyzeOptions, Report, analyze_with};
 use serde::Deserialize;
 use serde_json::Value;
 
 use super::{hunks_of, with_review};
 use crate::app::{AppState, run_blocking};
+use crate::config::normalize_concept;
 use crate::git::HeadLookup;
 use crate::http::error::ApiError;
 use crate::http::extract::{ApiJson, int_or_empty, py_int, truthy};
 
-/// `{"base", "head", "pr", "min_count"}`; every field optional, numbers may be strings.
+/// `{"base", "head", "pr", "min_count", "concept"}`; every field optional, numbers may be
+/// strings. `concept` is a stem for the concept lens; blank means none.
 #[derive(Debug, Default, Deserialize)]
 pub struct AnalyzeBody {
     #[serde(default)]
@@ -25,6 +27,8 @@ pub struct AnalyzeBody {
     pub pr: Value,
     #[serde(default)]
     pub min_count: Value,
+    #[serde(default)]
+    pub concept: Value,
 }
 
 /// Resolve the source, load the diff, analyze it and remember the report; the response is
@@ -44,6 +48,9 @@ pub async fn run_analysis(
     let min_count = usize::try_from(min_count.max(1)).unwrap_or(1);
     let base = body.base.as_str().map(str::to_string);
     let head = body.head.as_str().map(str::to_string);
+    let options = AnalyzeOptions {
+        concept: body.concept.as_str().and_then(normalize_concept),
+    };
 
     let st = state.clone();
     let report = run_blocking(move || -> Result<Report, ApiError> {
@@ -55,7 +62,7 @@ pub async fn run_analysis(
             git: &st.git,
             head_sha: source.head_sha.as_deref(),
         };
-        let report = analyze(source.to_core(), changes, min_count, &head);
+        let report = analyze_with(source.to_core(), changes, min_count, &head, &options);
         st.reviews.record_analysis(
             &report.source.identity,
             report.source.head_sha.as_deref(),
