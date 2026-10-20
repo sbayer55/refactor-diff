@@ -57,6 +57,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tree-sitter = "0.27"
 tree-sitter-javascript = "0.25"
+tree-sitter-json = "0.24"
 tree-sitter-python = "0.25"
 tree-sitter-typescript = "0.23"
 unicode-general-category = "1"
