@@ -7,7 +7,7 @@ use common::*;
 use pretty_assertions::assert_eq;
 use refactor_diff_core::json::members;
 use refactor_diff_core::{
-    FileAnalysis, Report, SignatureKind, StmtSpan, TokenKind, Unit, analyzer_for,
+    FileAnalysis, Report, SignatureKind, StmtSpan, TokenKind, Unit, UnitTag, analyzer_for,
 };
 
 fn analyze_json(text: &str) -> FileAnalysis {
@@ -368,4 +368,40 @@ fn locale_unit_mixing_a_deletion_and_a_value_edit_keeps_its_replace() {
     assert!(kinds.contains(&SignatureKind::Replace));
     assert!(units.iter().all(|u| !u.explained));
     assert!(report.groups.iter().any(|g| g.key == "i18n\0a.gone"));
+}
+
+#[test]
+fn a_removed_guard_keeps_its_signature_when_its_message_keys_go() {
+    let before = r#"export function save(id: string | null) {
+  if (!id) {
+    toast(t("setup.stepPrograms"));
+    return;
+  }
+  send(id);
+}
+"#;
+    let after = r#"export function save(id: string | null) {
+  send(id);
+}
+"#;
+    let report = analyze_files(
+        &[
+            ("src/i18n/locales/en/common.json", LOCALE_BEFORE),
+            ("src/save.ts", before),
+        ],
+        &[
+            ("src/i18n/locales/en/common.json", LOCALE_AFTER),
+            ("src/save.ts", after),
+        ],
+    );
+    let units = units_in(&report, "src/save.ts");
+    assert_eq!(units.len(), 1);
+    assert!(units[0].has_tag(UnitTag::PreconditionRemoved));
+    assert!(!units[0].explained);
+    assert!(
+        units[0]
+            .signatures
+            .iter()
+            .all(|s| s.kind == SignatureKind::Guard)
+    );
 }

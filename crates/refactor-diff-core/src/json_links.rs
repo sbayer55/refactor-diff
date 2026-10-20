@@ -22,7 +22,7 @@ use tree_sitter::Node;
 use crate::classify::tokens_in_range;
 use crate::lang::json::{Member, members};
 use crate::lang::{FileAnalysis, Lang, TokenKind, analyzer_for, pos_of};
-use crate::model::{FileSummary, Signature, SignatureKind, Unit};
+use crate::model::{FileSummary, Signature, SignatureKind, Unit, UnitTag};
 use crate::moves::Analyses;
 use crate::text::Pos;
 
@@ -189,6 +189,12 @@ fn link_calls(
     let mut trees: BTreeMap<String, Option<tree_sitter::Tree>> = BTreeMap::new();
     for u in units.values_mut() {
         if u.partner.is_some() || !u.new.is_empty() || u.old.is_empty() {
+            continue;
+        }
+        // A removed guard changes what runs even when its message keys go too: keep it in review.
+        if u.has_tag(UnitTag::PreconditionRemoved)
+            || u.signature_kinds().any(|k| k.never_mechanical())
+        {
             continue;
         }
         let Some(lang) = Lang::for_path(&u.path).filter(|l| !l.is_python()) else {
