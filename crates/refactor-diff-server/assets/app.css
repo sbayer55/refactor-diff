@@ -149,7 +149,10 @@ kbd {
 }
 .brand { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-weight: 600; }
 .brand .mark { color: var(--accent); }
-.repo { color: var(--muted); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 28ch; }
+/* rtl so the ellipsis eats the start of a long path; the inner ltr span keeps it readable */
+.repo { color: var(--muted); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 28ch; direction: rtl; }
+.copy-btn { align-self: center; display: inline-flex; border: 0; background: none; padding: 2px; margin-left: -4px; color: var(--faint); cursor: pointer; border-radius: 3px; }
+.copy-btn:hover { color: var(--text); background: var(--panel-2); }
 .source-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; min-width: 0; }
 .cmdline {
   display: flex; align-items: center; flex-wrap: wrap; min-height: 26px; min-width: 0;
@@ -167,6 +170,7 @@ kbd {
   font-family: var(--mono); font-size: 12px; outline: 0;
 }
 .field.wide input { width: 24ch; }
+.field.short input { width: 12ch; }
 .field.narrow { padding: 0; }
 .field.narrow input {
   width: 5ch; padding: 2px 6px; border: 1px solid var(--border); border-radius: 3px; background: var(--panel-2); text-align: center;
@@ -773,6 +777,25 @@ mark.search { background: var(--warn-bg); color: var(--warn-fg); outline: 1px so
 .ai-chip { display: inline-flex; align-items: center; gap: 5px; margin-left: 10px; text-decoration: none; white-space: nowrap; }
 .ai-chip:hover { text-decoration: none; background: var(--accent-soft); color: var(--accent); }
 .ai-chip .spark { color: var(--accent); }
+.cmd.ai-compact .ai-chip b { display: none; }
+.ai-info { position: relative; display: inline-flex; align-self: center; }
+.ai-pop {
+  display: none; position: absolute; top: 100%; left: 10px; z-index: 30; margin-top: 6px;
+  min-width: 260px; max-width: min(420px, 90vw); padding: 10px 12px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow);
+  font: 400 12px var(--sans); color: var(--text); white-space: normal;
+}
+/* a transparent bridge over the gap so moving the pointer down doesn't close the panel */
+.ai-pop::before { content: ""; position: absolute; left: 0; right: 0; top: -8px; height: 8px; }
+.ai-info:hover .ai-pop, .ai-info:focus-within .ai-pop { display: block; }
+.ai-pop header { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; font-weight: 600; }
+.ai-pop header .spark { color: var(--accent); }
+.ai-pop dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+.ai-pop dt { color: var(--muted); }
+.ai-pop dd { margin: 0; font-family: var(--mono); font-size: 11.5px; overflow-wrap: anywhere; }
+.ai-pop .dim { color: var(--muted); }
+.ai-pop .warn { color: var(--warn-fg); }
+.ai-pop footer { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border); font-size: 11px; }
 .kind.ai { color: var(--accent); }
 .pill.ai-provider { color: var(--accent); background: var(--accent-soft); font-size: 11px; white-space: nowrap; }
 button.pill.ai-provider { border: 0; cursor: pointer; font-family: inherit; }
