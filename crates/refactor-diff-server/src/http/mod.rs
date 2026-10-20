@@ -55,6 +55,43 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(routes::pr::post_review_comment),
         )
         .route(
+            "/api/report/{report_id}/pr/conversation",
+            get(routes::pr::get_conversation),
+        )
+        .route("/api/report/{report_id}/pr/reply", post(routes::pr::reply))
+        .route(
+            "/api/report/{report_id}/pr/resolve",
+            post(routes::pr::resolve),
+        )
+        .route(
+            "/api/report/{report_id}/pr/comment/edit",
+            post(routes::pr::edit_comment),
+        )
+        .route(
+            "/api/report/{report_id}/pr/comment/delete",
+            post(routes::pr::delete_comment),
+        )
+        .route(
+            "/api/report/{report_id}/pr/draft",
+            get(routes::pr::get_draft),
+        )
+        .route(
+            "/api/report/{report_id}/pr/draft/comment",
+            post(routes::pr::draft_comment),
+        )
+        .route(
+            "/api/report/{report_id}/pr/draft/comment/delete",
+            post(routes::pr::draft_delete),
+        )
+        .route(
+            "/api/report/{report_id}/pr/draft/discard",
+            post(routes::pr::draft_discard),
+        )
+        .route(
+            "/api/report/{report_id}/pr/review",
+            post(routes::pr::submit_review),
+        )
+        .route(
             "/api/report/{report_id}/navigate",
             post(routes::navigate::navigate),
         )

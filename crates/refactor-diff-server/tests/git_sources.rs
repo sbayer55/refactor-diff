@@ -6,7 +6,10 @@ use std::sync::Arc;
 
 use refactor_diff_core::FileStatus;
 use refactor_diff_server::exec::Tools;
-use refactor_diff_server::git::{Git, GitHub, PrInfo, ReviewCommentPayload, SourceError};
+use refactor_diff_server::git::{
+    CommentKind, Conversation, Git, GitHub, PrInfo, ReviewCommentPayload, ReviewPayload,
+    SourceError,
+};
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures");
 
@@ -76,6 +79,24 @@ impl GitHub for NoGitHub {
         Err(SourceError::GhMissing)
     }
     fn post_review_comment(&self, _: i64, _: &ReviewCommentPayload) -> Result<String, SourceError> {
+        Err(SourceError::GhMissing)
+    }
+    fn pr_conversation(&self, _: i64) -> Result<Conversation, SourceError> {
+        Err(SourceError::GhMissing)
+    }
+    fn reply_to_comment(&self, _: i64, _: i64, _: &str) -> Result<String, SourceError> {
+        Err(SourceError::GhMissing)
+    }
+    fn set_thread_resolved(&self, _: &str, _: bool) -> Result<(), SourceError> {
+        Err(SourceError::GhMissing)
+    }
+    fn edit_comment(&self, _: CommentKind, _: i64, _: &str) -> Result<(), SourceError> {
+        Err(SourceError::GhMissing)
+    }
+    fn delete_comment(&self, _: CommentKind, _: i64) -> Result<(), SourceError> {
+        Err(SourceError::GhMissing)
+    }
+    fn submit_review(&self, _: i64, _: &ReviewPayload) -> Result<String, SourceError> {
         Err(SourceError::GhMissing)
     }
 }

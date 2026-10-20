@@ -6,6 +6,7 @@
   <title>refactor-diff</title>
   <link rel="stylesheet" href="/static/app.css">
   <link rel="stylesheet" href="/static/history.css">
+  <link rel="stylesheet" href="/static/pr.css">
 </head>
 <body>
   <header class="cmd" id="topbar">
@@ -64,6 +65,7 @@
         <button type="button" role="tab" data-tab="files" aria-selected="true">Files</button>
         <button type="button" role="tab" data-tab="patterns" aria-selected="false">Patterns</button>
         <button type="button" role="tab" data-tab="warnings" aria-selected="false">Warnings</button>
+        <button type="button" role="tab" data-tab="comments" aria-selected="false" hidden>Comments</button>
       </div>
       <div id="explorer-list" class="tree"></div>
       <div id="explorer-foot" class="foot" hidden></div>
@@ -108,6 +110,7 @@
   <script src="/static/syntax.js"></script>
   <script src="/static/settings.js"></script>
   <script src="/static/app.js"></script>
+  <script src="/static/pr.js"></script>
   <script src="/static/history.js"></script>
 </body>
 </html>

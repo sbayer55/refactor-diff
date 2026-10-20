@@ -13,7 +13,9 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use refactor_diff_server::ai::ProviderFactory;
 use refactor_diff_server::ai::jev::JevFactory;
-use refactor_diff_server::git::{GitHub, PrInfo, ReviewCommentPayload, SourceError};
+use refactor_diff_server::git::{
+    CommentKind, Conversation, GitHub, PrInfo, ReviewCommentPayload, ReviewPayload, SourceError,
+};
 use refactor_diff_server::{App, ServerConfig};
 use serde_json::Value;
 use tower::ServiceExt;
@@ -110,6 +112,13 @@ pub struct FakeGitHub {
     pub pr: Mutex<Option<PrInfo>>,
     pub comments: Mutex<Vec<(i64, String)>>,
     pub review_comments: Mutex<Vec<(i64, ReviewCommentPayload)>>,
+    /// What `pr_conversation` answers.
+    pub conversation: Mutex<Conversation>,
+    pub replies: Mutex<Vec<(i64, i64, String)>>,
+    pub resolved: Mutex<Vec<(String, bool)>>,
+    pub edits: Mutex<Vec<(CommentKind, i64, String)>>,
+    pub deletes: Mutex<Vec<(CommentKind, i64)>>,
+    pub reviews: Mutex<Vec<(i64, ReviewPayload)>>,
 }
 
 impl FakeGitHub {
@@ -166,6 +175,51 @@ impl GitHub for FakeGitHub {
             .push((number, payload.clone()));
         Ok(format!("https://example.test/pr/{number}#discussion_r1"))
     }
+
+    fn pr_conversation(&self, _number: i64) -> Result<Conversation, SourceError> {
+        Ok(self.conversation.lock().unwrap().clone())
+    }
+
+    fn reply_to_comment(
+        &self,
+        number: i64,
+        comment_id: i64,
+        body: &str,
+    ) -> Result<String, SourceError> {
+        self.replies
+            .lock()
+            .unwrap()
+            .push((number, comment_id, body.to_string()));
+        Ok(format!("https://example.test/pr/{number}#discussion_r2"))
+    }
+
+    fn set_thread_resolved(&self, thread_id: &str, resolved: bool) -> Result<(), SourceError> {
+        self.resolved
+            .lock()
+            .unwrap()
+            .push((thread_id.to_string(), resolved));
+        Ok(())
+    }
+
+    fn edit_comment(&self, kind: CommentKind, id: i64, body: &str) -> Result<(), SourceError> {
+        self.edits
+            .lock()
+            .unwrap()
+            .push((kind, id, body.to_string()));
+        Ok(())
+    }
+
+    fn delete_comment(&self, kind: CommentKind, id: i64) -> Result<(), SourceError> {
+        self.deletes.lock().unwrap().push((kind, id));
+        Ok(())
+    }
+
+    fn submit_review(&self, number: i64, payload: &ReviewPayload) -> Result<String, SourceError> {
+        self.reviews.lock().unwrap().push((number, payload.clone()));
+        Ok(format!(
+            "https://example.test/pr/{number}#pullrequestreview-1"
+        ))
+    }
 }
 
 /// A response, decoded.
@@ -210,6 +264,11 @@ impl TestServer {
 
     pub fn with_github(repo: &Path, github: Arc<FakeGitHub>) -> Self {
         Self::build(repo, github, None, None)
+    }
+
+    /// A GitHub plus a `state_dir` shared with another server.
+    pub fn with_github_state(repo: &Path, github: Arc<FakeGitHub>, state_dir: &Path) -> Self {
+        Self::build(repo, github, Some(state_dir.to_path_buf()), None)
     }
 
     /// Share `state_dir` with another server ("another process reads the same state").

@@ -20,6 +20,7 @@ use crate::git::{GhCli, Git, GitHub, SourceError};
 use crate::history::HistoryCache;
 use crate::http::error::ApiError;
 use crate::nav::Navigator;
+use crate::pr_draft::DraftStore;
 use crate::prefs::PrefsStore;
 use crate::review::ReviewStore;
 use crate::settings::SettingsStore;
@@ -49,6 +50,8 @@ pub struct AppState {
     pub reports: RwLock<HashMap<String, Arc<Report>>>,
     pub snapshots: Arc<Snapshots>,
     pub reviews: ReviewStore,
+    /// Pending PR reviews (inline comments not yet submitted), per PR.
+    pub drafts: DraftStore,
     pub settings: SettingsStore,
     /// Configured interpreter / tsserver for code navigation.
     pub python: Option<PathBuf>,
@@ -166,6 +169,7 @@ impl App {
             .unwrap_or_else(|| Arc::new(DefaultJevFactory::new()));
         let state = AppState {
             reviews: ReviewStore::new(&repo, config.state_dir.as_deref()),
+            drafts: DraftStore::new(&repo, config.state_dir.as_deref()),
             jev_store: JevStore::new(&repo, config.state_dir.as_deref()),
             settings: SettingsStore::new(config.state_dir.as_deref()),
             prefs: PrefsStore::new(config.state_dir.as_deref()),
