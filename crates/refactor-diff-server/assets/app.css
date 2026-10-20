@@ -149,7 +149,10 @@ kbd {
 }
 .brand { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-weight: 600; }
 .brand .mark { color: var(--accent); }
-.repo { color: var(--muted); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 28ch; }
+/* rtl so the ellipsis eats the start of a long path; the inner ltr span keeps it readable */
+.repo { color: var(--muted); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 28ch; direction: rtl; }
+.copy-btn { align-self: center; display: inline-flex; border: 0; background: none; padding: 2px; margin-left: -4px; color: var(--faint); cursor: pointer; border-radius: 3px; }
+.copy-btn:hover { color: var(--text); background: var(--panel-2); }
 .source-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; min-width: 0; }
 .cmdline {
   display: flex; align-items: center; flex-wrap: wrap; min-height: 26px; min-width: 0;
@@ -167,6 +170,7 @@ kbd {
   font-family: var(--mono); font-size: 12px; outline: 0;
 }
 .field.wide input { width: 24ch; }
+.field.short input { width: 12ch; }
 .field.narrow { padding: 0; }
 .field.narrow input {
   width: 5ch; padding: 2px 6px; border: 1px solid var(--border); border-radius: 3px; background: var(--panel-2); text-align: center;
@@ -248,6 +252,8 @@ body.resizing * { cursor: col-resize !important; }
 .tree { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 0; font-family: var(--mono); font-size: 12px; }
 .tree .dir { color: var(--muted); padding: 6px 10px 2px; font-size: 11px; overflow-wrap: anywhere; }
 .tree .hd { display: flex; justify-content: space-between; color: var(--muted); padding: 6px 10px 3px; font-size: 11px; }
+.tree .hd .link { font-size: 11px; color: var(--muted); }
+.tree .hd .link:hover { color: var(--accent); }
 .node {
   display: flex; align-items: center; gap: 7px; min-height: 23px; padding: 1px 10px 1px 22px;
   color: var(--text); text-decoration: none; cursor: pointer;
@@ -643,6 +649,31 @@ table.files td .meta { color: var(--muted); font-size: 11px; }
 .status .dot { width: 6px; height: 6px; border-radius: 3px; background: var(--ok-fg); display: inline-block; margin-right: 5px; }
 .status .link { font: 11px var(--mono); color: var(--muted); }
 .status .link:hover { color: var(--accent); }
+.status .stats { display: inline-flex; align-items: center; gap: 14px; align-self: stretch; padding: 0 8px; margin-left: -8px; cursor: default; outline: 0; }
+.status .stats:hover, .status .stats:focus-visible { background: var(--panel-2); color: var(--text); }
+.status .stats-label { color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; font-size: 10px; }
+.stats-pop, .stats-menu {
+  position: fixed; z-index: 30; background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: var(--shadow); font: 12px var(--sans); color: var(--text);
+}
+.stats-pop[hidden], .stats-menu[hidden] { display: none; }
+.stats-pop { width: max-content; max-width: min(460px, calc(100vw - 16px)); padding: 10px 12px; pointer-events: none; }
+.stats-pop header { margin-bottom: 8px; font-weight: 600; }
+.stats-pop dl { display: grid; grid-template-columns: max-content 1fr; gap: 5px 14px; margin: 0; }
+.stats-pop dt { color: var(--muted); }
+.stats-pop dd { margin: 0; font: 11.5px var(--mono); }
+.stats-pop .dim { color: var(--muted); }
+.stats-pop .ok { color: var(--ok-fg); } .stats-pop .warn { color: var(--warn-fg); }
+.stats-pop .meter { margin-top: 4px; }
+.stats-pop footer { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border); font-size: 11px; }
+.stats-menu { display: flex; flex-direction: column; min-width: 200px; padding: 4px; }
+.stats-menu-head { padding: 4px 8px 6px; color: var(--muted); font-size: 11px; }
+.stats-menu button {
+  display: flex; align-items: center; gap: 8px; padding: 5px 8px; border: 0; border-radius: 3px;
+  background: none; color: var(--text); font: 12px var(--sans); text-align: left; cursor: pointer;
+}
+.stats-menu button:hover, .stats-menu button:focus-visible { background: var(--panel-2); outline: 0; }
+.stats-menu .check { width: 12px; color: var(--accent); font-weight: 700; }
 
 /* ---- code navigation ---- */
 body.nav-armed [data-l] { cursor: pointer; }
@@ -771,6 +802,25 @@ mark.search { background: var(--warn-bg); color: var(--warn-fg); outline: 1px so
 .ai-chip { display: inline-flex; align-items: center; gap: 5px; margin-left: 10px; text-decoration: none; white-space: nowrap; }
 .ai-chip:hover { text-decoration: none; background: var(--accent-soft); color: var(--accent); }
 .ai-chip .spark { color: var(--accent); }
+.cmd.ai-compact .ai-chip b { display: none; }
+.ai-info { position: relative; display: inline-flex; align-self: center; }
+.ai-pop {
+  display: none; position: absolute; top: 100%; left: 10px; z-index: 30; margin-top: 6px;
+  min-width: 260px; max-width: min(420px, 90vw); padding: 10px 12px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow);
+  font: 400 12px var(--sans); color: var(--text); white-space: normal;
+}
+/* a transparent bridge over the gap so moving the pointer down doesn't close the panel */
+.ai-pop::before { content: ""; position: absolute; left: 0; right: 0; top: -8px; height: 8px; }
+.ai-info:hover .ai-pop, .ai-info:focus-within .ai-pop { display: block; }
+.ai-pop header { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; font-weight: 600; }
+.ai-pop header .spark { color: var(--accent); }
+.ai-pop dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+.ai-pop dt { color: var(--muted); }
+.ai-pop dd { margin: 0; font-family: var(--mono); font-size: 11.5px; overflow-wrap: anywhere; }
+.ai-pop .dim { color: var(--muted); }
+.ai-pop .warn { color: var(--warn-fg); }
+.ai-pop footer { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border); font-size: 11px; }
 .kind.ai { color: var(--accent); }
 .pill.ai-provider { color: var(--accent); background: var(--accent-soft); font-size: 11px; white-space: nowrap; }
 button.pill.ai-provider { border: 0; cursor: pointer; font-family: inherit; }

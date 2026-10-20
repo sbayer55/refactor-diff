@@ -28,7 +28,7 @@ const state = {
   commits: [], // commits between base and head (see /api/report/{id}/commits)
   parent: null, // {id, label} of the whole-range report while viewing one of its commits
   postingOk: false, // the user confirmed posting to the PR in this session
-  explorerTab: "files", // "files" | "patterns" | "warnings"
+  explorerTab: "files", // "files" | "patterns" | "warnings" | "comments"
   panes: { explorer: true, inspector: true }, // which side panes are shown (preference)
   analyzeMs: 0, // how long the last analysis took, for the status bar
   pendingScroll: null, // a selector to scroll to once the next route has rendered
@@ -591,6 +591,7 @@ function loadReport(report) {
   clearTimeout(state.jev.timer);
   state.jev = { ...emptyJev(), configured: state.jev.configured, auto: state.jev.auto };
   setReview(report.review);
+  PR.clear();
   applyFilters();
   renderStatus();
   renderFilters();
@@ -600,6 +601,7 @@ function loadReport(report) {
     route();
   }
   loadJev();
+  PR.load();
 }
 
 // A report the server already has (e.g. the whole range, after looking at one commit).
@@ -687,22 +689,18 @@ function showError(msg) {
 
 // ---------- status bar ----------
 
-// The status bar: the report's numbers in one line at the bottom of the window.
+// The status bar: the report's numbers in one line at the bottom of the window. The stats
+// share a group: hovering it shows all of them, right-clicking picks which stay in the bar.
 function renderStatus() {
   const v = state.view;
   const { stats } = v;
   const el = $("#status");
   el.hidden = false;
-  const ms = state.analyzeMs;
-  const took = ms ? `analyzed in ${ms >= 1000 ? (ms / 1000).toFixed(1) + "s" : Math.round(ms) + "ms"}` : "report loaded";
-  const left = stats.hunks - stats.hunks_done;
+  const pinned = pinnedStats();
+  const items = STATUS_STATS.filter((s) => pinned.has(s.id)).map((s) => s.html(v)).join("");
   el.innerHTML = `
-    <span><span class="dot"></span>${took}</span>
-    <span>${stats.collapsed_pct}% collapsed</span>
-    ${stats.verified_units ? `<span class="ok" title="${esc(VERIFIED_TITLE)}">${stats.verified_units} ✓ verified</span>` : ""}
-    <span class="${stats.hunks && !left ? "ok" : ""}">${stats.hunks_done}/${stats.hunks} hunks</span>
-    <span>${plural(stats.residual_units, "change")} to review</span>
-    <span class="${v.warnings.length ? "warn" : ""}">${plural(v.warnings.length, "warning")}</span>
+    <span class="stats" id="status-stats" tabindex="0" aria-describedby="stats-pop"
+      aria-haspopup="menu"><span class="stats-label">stats</span>${items}</span>
     ${jevStatusHtml()}
     <span class="spacer"></span>
     <span>${plural(stats.mechanical_groups, "pattern")} · ${stats.files_analyzed}/${stats.files_changed} files</span>
@@ -710,6 +708,134 @@ function renderStatus() {
     <button type="button" class="link" id="status-help"><kbd>?</kbd> help</button>`;
   $("#status-help").addEventListener("click", () => showHelp(true));
   $("#status-jev")?.addEventListener("click", () => scoreWithJev());
+  const group = $("#status-stats");
+  group.addEventListener("mouseenter", () => showStatsPop(group));
+  group.addEventListener("mouseleave", hideStatsPop);
+  group.addEventListener("focus", () => showStatsPop(group));
+  group.addEventListener("blur", hideStatsPop);
+  group.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    const r = group.getBoundingClientRect();
+    // The context-menu key fires with no pointer position; open above the group then.
+    openStatsMenu(e.clientX || r.left, e.clientY || r.top);
+  });
+  if (!$("#stats-pop").hidden) renderStatsPop();
+}
+
+function analyzeTook() {
+  const ms = state.analyzeMs;
+  return ms ? `analyzed in ${ms >= 1000 ? (ms / 1000).toFixed(1) + "s" : Math.round(ms) + "ms"}` : "report loaded";
+}
+
+// The stats the status bar can show inline, in bar order. `optional` ones render nothing
+// when there's nothing to say (no verified units).
+const STATUS_STATS = [
+  { id: "time", label: "Analysis time", html: () => `<span><span class="dot"></span>${analyzeTook()}</span>` },
+  { id: "collapsed", label: "Lines collapsed", html: (v) => `<span>${v.stats.collapsed_pct}% collapsed</span>` },
+  { id: "verified", label: "Verified units", html: (v) => v.stats.verified_units
+    ? `<span class="ok">${v.stats.verified_units} ✓ verified</span>` : "" },
+  { id: "hunks", label: "Hunks reviewed", html: (v) => {
+    const s = v.stats;
+    return `<span class="${s.hunks && s.hunks === s.hunks_done ? "ok" : ""}">${s.hunks_done}/${s.hunks} hunks</span>`;
+  } },
+  { id: "changes", label: "Changes to review", html: (v) => `<span>${plural(v.stats.residual_units, "change")} to review</span>` },
+  { id: "warnings", label: "Warnings", html: (v) =>
+    `<span class="${v.warnings.length ? "warn" : ""}">${plural(v.warnings.length, "warning")}</span>` },
+];
+const STATS_PREF = "refactor-diff:status-stats";
+
+function pinnedStats() {
+  try {
+    const saved = JSON.parse(prefGet(STATS_PREF));
+    if (Array.isArray(saved)) return new Set(saved);
+  } catch {}
+  return new Set(STATUS_STATS.map((s) => s.id));
+}
+
+function setStatPinned(id, on) {
+  const pinned = pinnedStats();
+  if (on) pinned.add(id); else pinned.delete(id);
+  prefSet(STATS_PREF, JSON.stringify(STATUS_STATS.map((s) => s.id).filter((x) => pinned.has(x))));
+  renderStatus();
+}
+
+// The floating panel over the stats group: every number, pinned or not, with context.
+function renderStatsPop() {
+  const v = state.view, s = v.stats, r = state.report;
+  const pct = (a, b) => (b ? Math.round((100 * a) / b) : 0);
+  const row = (k, val) => `<dt>${esc(k)}</dt><dd>${val}</dd>`;
+  const dim = (t) => `<span class="dim">${t}</span>`;
+  const left = s.hunks - s.hunks_done;
+  const allWarnings = r.warnings.length;
+  $("#stats-pop").innerHTML = `<header>Stats</header><dl>
+    ${row("Analysis", esc(analyzeTook()) + (r.source.label ? ` ${dim(`· ${esc(r.source.label)}`)}` : ""))}
+    ${row("Collapsed", `${s.collapsed_pct}% ${dim(`· ${s.units - s.residual_units} of ${plural(s.units, "changed line")} explained by patterns`)}`)}
+    ${row("Verified", s.verified_units ? `<span class="ok">${s.verified_units}</span> ${dim("units checked by the analyzers")}` : dim("none"))}
+    ${row("Hunks", `${s.hunks_done} / ${s.hunks} reviewed ${dim(`· ${left} left`)}<div class="meter"><div style="width:${pct(s.hunks_done, s.hunks)}%"></div></div>`)}
+    ${row("To review", `${plural(s.residual_units, "change")} ${dim("not covered by a pattern")}`)}
+    ${row("Warnings", `<span class="${v.warnings.length ? "warn" : ""}">${v.warnings.length}</span>${
+      allWarnings !== v.warnings.length ? ` ${dim(`· ${allWarnings} in the report`)}` : ""}`)}
+    ${row("Patterns", `${s.mechanical_groups} mechanical ${dim(`· ${v.groups.length} total · ${plural(s.moves, "move")}`)}`)}
+    ${row("Files", `${s.files_analyzed} / ${s.files_changed} analyzed`)}
+    ${v.hiddenUnits ? row("Filtered out", `${plural(v.hiddenUnits, "change")} ${dim("hidden by filters")}`) : ""}
+  </dl><footer class="dim">Right-click to choose which stats stay in the bar</footer>`;
+}
+
+function showStatsPop(group) {
+  if (!$("#stats-menu").hidden) return;
+  const pop = $("#stats-pop");
+  renderStatsPop();
+  pop.hidden = false;
+  const r = group.getBoundingClientRect();
+  pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 8))}px`;
+  pop.style.bottom = `${window.innerHeight - r.top + 6}px`;
+}
+
+function hideStatsPop() {
+  $("#stats-pop").hidden = true;
+}
+
+function openStatsMenu(x, y) {
+  hideStatsPop();
+  const menu = $("#stats-menu");
+  const pinned = pinnedStats();
+  menu.innerHTML = `<div class="stats-menu-head">Show in status bar</div>` + STATUS_STATS.map((s) =>
+    `<button type="button" role="menuitemcheckbox" data-stat="${s.id}" aria-checked="${pinned.has(s.id)}">
+      <span class="check" aria-hidden="true">${pinned.has(s.id) ? "✓" : ""}</span>${esc(s.label)}</button>`).join("");
+  menu.hidden = false;
+  menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - menu.offsetWidth - 8))}px`;
+  menu.style.top = `${Math.max(8, y - menu.offsetHeight - 4)}px`;
+  menu.querySelector("[data-stat]").focus();
+}
+
+function closeStatsMenu() {
+  const menu = $("#stats-menu");
+  if (menu.hidden) return;
+  menu.hidden = true;
+  $("#status-stats")?.focus({ preventScroll: true });
+}
+
+function initStatsMenu() {
+  const menu = $("#stats-menu");
+  menu.addEventListener("click", (e) => {
+    const item = e.target.closest("[data-stat]");
+    if (!item) return;
+    const on = item.getAttribute("aria-checked") !== "true";
+    item.setAttribute("aria-checked", on);
+    item.querySelector(".check").textContent = on ? "✓" : "";
+    setStatPinned(item.dataset.stat, on);
+  });
+  menu.addEventListener("keydown", (e) => {
+    const items = [...menu.querySelectorAll("[data-stat]")];
+    const i = items.indexOf(document.activeElement);
+    if (e.key === "Escape" || e.key === "Tab") { e.preventDefault(); e.stopPropagation(); closeStatsMenu(); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); items[(i + 1) % items.length].focus(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+  });
+  document.addEventListener("mousedown", (e) => {
+    if (!menu.hidden && !menu.contains(e.target)) menu.hidden = true;
+  });
+  window.addEventListener("blur", () => { menu.hidden = true; });
 }
 
 // ---------- outputs: Markdown summary and PR comments ----------
@@ -818,15 +944,31 @@ function openCommentBox(el) {
   box.className = "comment-box";
   box.innerHTML = `<textarea placeholder="Comment on this hunk…" spellcheck="true"></textarea>
     <div class="comment-actions"><span class="meta">Review comment on ${esc(where)} of PR #${prNumber()}</span>
+      <span class="meta" data-pending>${PR.pendingSummary()}</span>
       <span class="spacer"></span>
       <button type="button" class="toggle" data-comment-cancel>Cancel</button>
-      <button type="button" class="primary" data-comment-post>Post</button></div>`;
+      <button type="button" class="toggle" data-comment-post title="Post this comment on its own, right away">Post now</button>
+      <button type="button" class="primary" data-comment-add title="Keep it with your pending review, submitted later (${MOD_KEY}↩)">Add to review</button></div>`;
   el.querySelector(".hunk-bar").after(box);
   const ta = box.querySelector("textarea");
   ta.focus();
   box.querySelector("[data-comment-cancel]").addEventListener("click", () => box.remove());
   ta.addEventListener("keydown", (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") box.querySelector("[data-comment-post]").click();
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") box.querySelector("[data-comment-add]").click();
+  });
+  box.querySelector("[data-comment-add]").addEventListener("click", async () => {
+    const body = ta.value.trim();
+    if (!body) { ta.focus(); return; }
+    const btn = box.querySelector("[data-comment-add]");
+    btn.disabled = true;
+    try {
+      const draft = await PR.addToReview(h.id, body);
+      toast(`Added to your pending review (${plural(draft.comments.length, "comment")}). Submit it from the Conversation view (g d).`);
+      box.remove();
+    } catch (e) {
+      toast(e.message, { error: true });
+      btn.disabled = false;
+    }
   });
   box.querySelector("[data-comment-post]").addEventListener("click", async () => {
     const body = ta.value.trim();
@@ -838,6 +980,7 @@ function openCommentBox(el) {
       const res = await api(`/api/report/${state.report.id}/pr/review-comment`, { body, hunk_id: h.id });
       toast(`Posted: ${res.url}`);
       box.remove();
+      PR.load();
     } catch (e) {
       toast(e.message, { error: true });
       btn.disabled = false;
@@ -868,12 +1011,16 @@ function renderExplorer() {
   tabs.querySelector("[data-tab=files]").innerHTML = `Files <span class="n">${v.files.length}</span>`;
   tabs.querySelector("[data-tab=patterns]").innerHTML = `Patterns <span class="n">${mech.length}</span>`;
   tabs.querySelector("[data-tab=warnings]").innerHTML = `Warnings <span class="n">${v.warnings.length}</span>`;
+  const commentsTab = tabs.querySelector("[data-tab=comments]");
+  commentsTab.hidden = !PR.active();
+  commentsTab.innerHTML = `Comments <span class="n">${PR.count()}</span>`;
 
   const here = location.hash;
   const active = (h) => (here === h ? " sel" : "");
   const list = $("#explorer-list");
   list.innerHTML = tab === "patterns" ? explorerPatterns(mech, active)
     : tab === "warnings" ? explorerWarnings(active)
+    : tab === "comments" ? PR.explorer(active)
     : explorerFiles(active);
   for (const cb of list.querySelectorAll("[data-review]")) {
     cb.addEventListener("click", (e) => {
@@ -917,8 +1064,16 @@ function explorerFiles(active) {
     if (!state.reviewedHunks.has(h.fingerprint)) e.left++;
     residual.set(h.path, e);
   }
+  // Files whose hunks are all reviewed can be hidden, leaving only what is still to read.
+  const hideReviewed = prefGet("refactor-diff:hide-reviewed") === "on";
+  const isReviewed = (f) => { const res = residual.get(f.path); return Boolean(res) && !res.left && v.fileVisible(f.path); };
+  const nReviewed = r.files.filter(isReviewed).length;
+  html += `<div class="hd"><span>${hideReviewed && nReviewed ? `${nReviewed} reviewed hidden` : "files"}</span>
+    <button type="button" class="link" data-hide-reviewed aria-pressed="${hideReviewed}"
+      title="${hideReviewed ? "Show" : "Hide"} files whose hunks are all reviewed">${hideReviewed ? "Show" : "Hide"} reviewed</button></div>`;
   let dir = null;
   for (const f of r.files) {
+    if (hideReviewed && isReviewed(f)) continue;
     const i = f.path.lastIndexOf("/");
     const d = i >= 0 ? f.path.slice(0, i + 1) : "";
     if (d !== dir) { dir = d; html += `<div class="dir">${esc(d || "./")}</div>`; }
@@ -987,6 +1142,11 @@ function markExplorerFile() {
 }
 
 function onExplorerClick(e) {
+  if (e.target.closest("[data-hide-reviewed]")) {
+    prefSet("refactor-diff:hide-reviewed", prefGet("refactor-diff:hide-reviewed") === "on" ? "off" : "on");
+    renderExplorer();
+    return;
+  }
   const file = e.target.closest("[data-scroll-file]");
   if (file) {
     e.preventDefault();
@@ -997,6 +1157,12 @@ function onExplorerClick(e) {
   if (w) {
     e.preventDefault();
     goTo("#warnings", `#warning-${Number(w.dataset.warningIndex)}`);
+    return;
+  }
+  const t = e.target.closest("[data-thread-scroll]");
+  if (t) {
+    e.preventDefault();
+    goTo("#conversation", `#thread-${CSS.escape(t.dataset.threadScroll)}`);
   }
 }
 
@@ -1104,6 +1270,8 @@ function inspectorHunk() {
       ${near.length ? row("≈ almost", near.map(label).join("<br>"), "warn") : ""}
       ${verified ? row("verified", `${verified} of ${units.length} by AST`, "ok") : ""}
       ${hunkIsNew(h) ? row("since last time", "new") : ""}
+      ${PR.threadsForHunk(h.id).length ? row("PR threads", `${PR.threadsForHunk(h.id).filter((t) => !t.resolved).length} open of ${PR.threadsForHunk(h.id).length}`,
+        PR.threadsForHunk(h.id).some((t) => !t.resolved) ? "warn" : "ok") : ""}
       ${done ? row("status", "reviewed", "ok") : ""}
       <div class="actions">
         <button type="button" class="go" data-act="reviewed">${done ? "Unmark" : "Reviewed"} <kbd>x</kbd></button>
@@ -1274,7 +1442,8 @@ function route(opts) {
     state.currentFile = null;
     // The explorer follows the view: patterns while reading a pattern, warnings on the
     // warnings page, files everywhere else.
-    state.explorerTab = view === "group" ? "patterns" : view === "warnings" ? "warnings" : "files";
+    state.explorerTab = view === "group" ? "patterns" : view === "warnings" ? "warnings"
+      : view === "conversation" ? "comments" : "files";
   }
   lastRoute = key;
   setViewTitle(view, id, rest);
@@ -1293,6 +1462,12 @@ function route(opts) {
   if (view === "lib") {
     renderLibraryView(decodeURIComponent(id || ""), Number(rest[0]) || 0);
     renderInspector();
+    return;
+  }
+  if (view === "conversation") {
+    PR.render();
+    renderInspector();
+    if (!opts?.keepScroll && !state.pendingScroll) scrollMainTo(0);
     return;
   }
   if (view === "group") renderGroup(id);
@@ -1328,6 +1503,9 @@ function setViewTitle(view, id, rest) {
     html = `Files ${meta(v.files.length)}`;
   } else if (view === "commits") {
     html = `Commits ${meta(state.commits.length)}`;
+  } else if (view === "conversation") {
+    const pending = PR.state.draft?.comments?.length || 0;
+    html = `Conversation ${meta(`PR #${prNumber() ?? ""}${pending ? ` · ${plural(pending, "pending comment")}` : ""}`)}`;
   } else if (view === "file") {
     const mode = { diff: "full diff", old: "original", new: "new", history: "history" }[rest[0] || "diff"];
     html = `<span class="transform">${esc(decodeURIComponent(id || ""))}</span>${meta(mode)}`;
@@ -2185,7 +2363,7 @@ function watchIssues() {
   let timer = 0;
   new MutationObserver(() => {
     clearTimeout(timer);
-    timer = setTimeout(applyIssues, 30);
+    timer = setTimeout(() => { applyIssues(); PR.applyThreads(); }, 30);
   }).observe($("#content"), { childList: true, subtree: true });
 }
 
@@ -2825,7 +3003,7 @@ const KEY_HELP = [
     ["x", "", "mark the focused hunk reviewed (the pattern, on a pattern page)"],
     ["e", "", "show context for the focused hunk; again to reveal more"],
     ["o", "", "open the focused hunk in your editor"],
-    ["c", "", "comment on the focused hunk (pull requests)"],
+    ["c", "", "comment on the focused hunk: add it to your pending review, or post it now (pull requests)"],
     ["a", "", "ask the AI about the focused hunk"],
     ["g s", "", "score the needs-review hunks with Jev (rank by risk)"],
   ]],
@@ -2835,6 +3013,7 @@ const KEY_HELP = [
     ["}", "{", "next / previous commit of the range"],
     ["g r", "g w", "go to Needs review / Warnings"],
     ["g f", "g c", "go to Files / Commits"],
+    ["g d", "", "go to the pull request's conversation (threads, reviews, submit your review)"],
     ["n", "p", "next / previous change in the file viewer"],
     ["z", "", "fold unchanged blocks; again to unfold all (file viewer, expanded context)"],
     ["i", "", "show / hide inline messages (code issues, pattern tags, AI answers)"],
@@ -3082,6 +3261,17 @@ function paletteCommands() {
     { id: "summary.post", group: "Summary", title: "Post summary to the pull request",
       when: () => hasReport() && Boolean(prNumber()), run: postSummary },
 
+    { id: "pr.conversation", group: "Pull request", title: "Show the conversation", keys: "g d",
+      when: () => hasReport() && Boolean(prNumber()), run: go("#conversation") },
+    { id: "pr.submit", group: "Pull request", title: "Submit review…",
+      when: () => hasReport() && Boolean(prNumber()), run: () => PR.startReview("COMMENT") },
+    { id: "pr.approve", group: "Pull request", title: "Approve pull request…",
+      when: () => hasReport() && Boolean(prNumber()) && !PR.state.conv?.viewer_is_author, run: () => PR.startReview("APPROVE") },
+    { id: "pr.request", group: "Pull request", title: "Request changes…",
+      when: () => hasReport() && Boolean(prNumber()) && !PR.state.conv?.viewer_is_author, run: () => PR.startReview("REQUEST_CHANGES") },
+    { id: "pr.refresh", group: "Pull request", title: "Refresh pull request comments",
+      when: () => hasReport() && Boolean(prNumber()), run: () => PR.load() },
+
     { id: "help.settings", group: "Help", title: "Assistant settings", run: showSettings },
     { id: "help.keys", group: "Help", title: "Keyboard shortcuts", keys: "?", run: () => showHelp(true) },
   ];
@@ -3227,7 +3417,7 @@ function onKey(e) {
   if (pendingG) {
     clearTimeout(pendingG);
     pendingG = 0;
-    const go = { r: "#review", w: "#warnings", f: "#files", c: "#commits" }[e.key];
+    const go = { r: "#review", w: "#warnings", f: "#files", c: "#commits", d: "#conversation" }[e.key];
     if (go) { location.hash = go; e.preventDefault(); }
     else if (e.key === "s") { scoreWithJev(); e.preventDefault(); }
     return;
@@ -3528,6 +3718,14 @@ function hideNavPanel() {
 // ---- toast ----
 
 let toastTimer = 0;
+// `path` with a leading home directory shown as `~`.
+function tildePath(path, home) {
+  if (!home || home === "/") return path;
+  const h = home.replace(/\/+$/, "");
+  if (path === h) return "~";
+  return path.startsWith(`${h}/`) ? `~${path.slice(h.length)}` : path;
+}
+
 function toast(message, { busy = false, error = false, sticky = false } = {}) {
   const el = $("#toast");
   el.innerHTML = `${busy ? '<span class="spinner"></span> ' : ""}${esc(message)}`;
@@ -3640,6 +3838,10 @@ function trackTopbarHeight() {
     root.setProperty("--status-h", `${height(status)}px`);
   };
   const ro = new ResizeObserver(update);
+  let fitBarWidth = 0;
+  new ResizeObserver(() => {
+    if (bar.clientWidth !== fitBarWidth) { fitBarWidth = bar.clientWidth; fitTopbar(); }
+  }).observe(bar);
   ro.observe(bar);
   ro.observe(toolbar);
   let fitWidth = 0;
@@ -3680,6 +3882,7 @@ async function init() {
   $("#explorer-list").addEventListener("click", onExplorerClick);
   $("#inspector").addEventListener("click", onInspectorClick);
   $("#content").addEventListener("click", onContentClick);
+  $("#content").addEventListener("click", (e) => PR.onClick(e)); // pr.js loads after app.js
   $("#content").addEventListener("change", onContentChange);
   $("#content").addEventListener("mousedown", (e) => {
     const el = e.target.closest(".hunk, .occurrence");
@@ -3719,6 +3922,11 @@ async function init() {
   loadPaneWidths();
   initPaneResizers();
   trackTopbarHeight();
+  initStatsMenu();
+  $("#copy-repo").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(state.repo); toast("Copied the repository path."); }
+    catch { toast("Couldn't copy to the clipboard.", { error: true }); }
+  });
   narrowQuery.addEventListener("change", () => { if (state.report) rerender(); });
   window.addEventListener("hashchange", route);
   document.addEventListener("change", (e) => {
@@ -3728,7 +3936,7 @@ async function init() {
   let defaults = {};
   try {
     const cfg = await api("/api/config");
-    $("#repo").textContent = cfg.repo;
+    $("#repo-path").textContent = tildePath(cfg.repo, cfg.home);
     $("#repo").title = cfg.repo;
     defaults = cfg.defaults || {};
     state.repo = cfg.repo;
@@ -3983,6 +4191,7 @@ async function loadAiSettings() {
     const data = await api("/api/settings");
     state.ai = data.ai.active;
     state.aiContext = data.ai.context;
+    state.aiSettings = data;
   } catch {
     state.ai = null;
   }
@@ -3996,7 +4205,59 @@ function renderAiChip() {
   chip.innerHTML = ai && ai.configured
     ? `${SPARK} AI <b>${esc(providerLabel(ai))}</b>`
     : `${SPARK} AI <b>not set up</b>`;
-  chip.title = ai && ai.configured ? "AI provider · open settings" : "Set up an AI provider";
+  renderAiPop();
+  fitTopbar();
+}
+
+// The hover panel under the AI chip: the active provider's config and the Ask/Jev options.
+// Keys are never shown, only whether one is set (the server masks them anyway).
+function renderAiPop() {
+  const pop = $("#ai-pop");
+  if (!pop) return;
+  const ai = state.ai, data = state.aiSettings;
+  const row = (k, v) => `<dt>${esc(k)}</dt><dd>${v}</dd>`;
+  const val = (v) => (v === "" || v == null ? `<span class="dim">—</span>` : esc(String(v)));
+  const yes = (on) => (on ? "on" : `<span class="dim">off</span>`);
+  if (!ai) { pop.innerHTML = `<p class="dim">Couldn't load the AI settings.</p>`; return; }
+  const cfg = data?.ai?.providers?.[ai.provider] || {};
+  let rows = row("Provider", val(PROVIDER_NAMES[ai.provider] || ai.provider))
+    + row("Model", val(ai.model))
+    + row("Status", ai.configured ? "ready" : `<span class="warn">needs setup</span>`);
+  if ("host" in cfg) rows += row("Host", val(cfg.host));
+  if ("base_url" in cfg) rows += row("Base URL", cfg.base_url ? val(cfg.base_url) : `<span class="dim">default</span>`);
+  if ("num_ctx" in cfg) rows += row("Context", val(cfg.num_ctx && `${cfg.num_ctx.toLocaleString()} tokens`));
+  if ("api_key" in cfg) rows += row("API key", cfg.api_key ? "set" : `<span class="dim">not set</span>`);
+  const ctx = data?.ai?.context;
+  if (ctx) {
+    const parts = [["function", "function"], ["references", "references"], ["pr", "PR"]]
+      .filter(([k]) => ctx[k]).map(([, label]) => label);
+    rows += row("Ask sends", parts.length ? esc(parts.join(", ")) : `<span class="dim">hunk only</span>`);
+  }
+  const jev = data?.jev;
+  if (jev) {
+    rows += row("Jev risk", jev.configured
+      ? `${esc(jev.model || "")}${jev.auto ? " · auto" : ""}${jev.zero_data_retention ? " · ZDR" : ""}`
+      : `<span class="dim">not set up</span>`);
+  }
+  pop.innerHTML = `<header>${SPARK} AI assistant</header><dl>${rows}</dl>
+    <footer class="dim">Click to open settings</footer>`;
+}
+
+// When the command strip can't fit on one line, collapse the AI chip to its icon and label.
+function fitTopbar() {
+  const bar = $("#topbar");
+  if (!bar) return;
+  bar.classList.remove("ai-compact");
+  if (topbarWrapped(bar)) bar.classList.add("ai-compact");
+}
+
+function topbarWrapped(bar) {
+  const items = [...bar.children, ...bar.querySelectorAll("#source-form > *, #source-form .cmdline > *")]
+    .filter((el) => el.id !== "source-form" && el.tagName !== "DATALIST" && el.offsetParent)
+    .map((el) => el.getBoundingClientRect());
+  if (!items.length) return false;
+  const lineBottom = Math.min(...items.map((r) => r.bottom));
+  return items.some((r) => r.top >= lineBottom - 1);
 }
 
 function answersOf(hunkId) {
@@ -4490,6 +4751,7 @@ async function showSettings() {
     onSaved: (saved) => {
       state.ai = saved.ai.active;
       state.aiContext = saved.ai.context;
+      state.aiSettings = saved;
       if (saved.jev) { state.jev.configured = !!saved.jev.configured; state.jev.auto = !!saved.jev.auto; renderInspector(); }
       renderAiChip();
       toast(state.ai.configured ? `Ask will use ${providerLabel()}.` : "Saved. That provider still needs its details before Ask works.");

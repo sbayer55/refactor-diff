@@ -37,9 +37,15 @@ struct Cli {
     /// pre-set filters: comma-separated file kinds to hide (source, tests, docs, config,
     /// other) and/or kinds of change: 'comments' (comment- and docstring-only edits),
     /// 'imports' (import-only edits), 'file-moves' (renamed files and the import updates they
-    /// cause), 'moves' (functions and classes moved verbatim)
+    /// cause), 'moves' (functions and classes moved verbatim), 'collateral-explained' (units
+    /// the active concept fully explains)
     #[arg(long, value_name = "KINDS")]
     hide: Option<String>,
+
+    /// pre-select a concept for the concept lens, e.g. 'program': units that only add or
+    /// remove it are set apart from collateral changes (default: auto-detected)
+    #[arg(long, value_name = "NAME")]
+    concept: Option<String>,
 
     /// pre-set filters: hide files matching GLOB (repeatable), e.g. 'migrations'
     #[arg(long, value_name = "GLOB")]
@@ -131,6 +137,7 @@ async fn run(cli: Cli) -> Result<(), Failure> {
         cli.hide.as_deref(),
         &cli.exclude,
         &cli.editor,
+        cli.concept.as_deref(),
     )
     .map_err(Failure::Config)?;
     let config = ServerConfig {
@@ -233,6 +240,7 @@ mod tests {
         assert_eq!(cli.port, 0);
         assert_eq!(cli.editor, "vscode");
         assert_eq!(cli.repo, PathBuf::from("."));
+        assert_eq!(cli.concept, None);
         let cli = Cli::parse_from([
             "refactor-diff",
             "main..feature",
@@ -243,11 +251,14 @@ mod tests {
             "--exit-with-parent",
             "--port",
             "8765",
+            "--concept",
+            "program",
         ]);
         assert_eq!(cli.range.as_deref(), Some("main..feature"));
         assert_eq!(cli.exclude, vec!["a", "b"]);
         assert!(cli.exit_with_parent);
         assert_eq!(cli.port, 8765);
+        assert_eq!(cli.concept.as_deref(), Some("program"));
     }
 
     #[test]
