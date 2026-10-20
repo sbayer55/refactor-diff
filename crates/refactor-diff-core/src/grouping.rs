@@ -42,7 +42,9 @@ pub fn build_groups(units: &mut IndexMap<String, Unit>, min_count: usize) -> Vec
         }
         let mut label = rep.label();
         if variants.len() > 1 {
-            label = format!("{label} (+{} variants)", variants.len() - 1);
+            let n = variants.len() - 1;
+            let s = if n == 1 { "" } else { "s" };
+            label = format!("{label} (+{n} variant{s})");
         }
         let mut unit_ids: Vec<String> = Vec::new();
         let mut seen = HashSet::new();

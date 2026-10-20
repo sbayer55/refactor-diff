@@ -194,7 +194,7 @@ fn group_label_ties_go_to_the_first_seen_and_uniform_groups_have_no_suffix() {
     .map(|u| (u.id.clone(), u))
     .collect();
     let groups = build_groups(&mut units, 2);
-    assert_eq!(groups[0].label, "a(…) → a(…, t=…) (+1 variants)");
+    assert_eq!(groups[0].label, "a(…) → a(…, t=…) (+1 variant)");
 
     let mut units: IndexMap<String, Unit> = [
         unit("1", vec![args("a(…)", "a(…, t=…)")]),

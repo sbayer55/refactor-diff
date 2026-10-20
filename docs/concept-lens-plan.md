@@ -22,7 +22,7 @@ review down to that collateral.
 | kind | meaning | mechanical |
 |---|---|---|
 | `substitution` | `a → b` where `b` already existed in the base | never |
-| `list` | elements added to or removed from one bracketed list, plus the formatter reflow | always |
+| `list` | elements added to or removed from one bracketed list, plus the formatter reflow | by count |
 | `guard` | an early `return`/`throw` guard removed or added | never |
 | `cascade` | an import or local dropped because its last use was dropped | always |
 | `test` | a whole `it`/`test`/`describe` block deleted or added | by count |

@@ -33,7 +33,8 @@ pub enum SignatureKind {
     /// another, so the data that flows through changes. Never mechanical.
     Substitution,
     /// Elements added to or removed from one bracketed list (deps arrays, destructuring,
-    /// object literals, unions), including the formatter reflow that follows.
+    /// object literals, unions), including the formatter reflow that follows. Mechanical only
+    /// when it repeats: a one-off removal (a deps array entry) can change behaviour.
     List,
     /// An early-return/throw guard was removed or added. Never mechanical.
     Guard,
@@ -76,7 +77,6 @@ impl SignatureKind {
             SignatureKind::Formatting
                 | SignatureKind::Docs
                 | SignatureKind::Move
-                | SignatureKind::List
                 | SignatureKind::Cascade
                 | SignatureKind::Fixture
         )

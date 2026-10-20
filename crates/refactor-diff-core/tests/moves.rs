@@ -391,7 +391,7 @@ fn added_parameter_groups_def_with_call_sites() {
     assert!(g.mechanical);
     assert_eq!(details(g), BTreeMap::from([("call", 2), ("definition", 1)]));
     // Two call sites outnumber the definition, so the call form labels the group.
-    assert_eq!(g.label, "fetch(…) → fetch(…, timeout=…) (+1 variants)");
+    assert_eq!(g.label, "fetch(…) → fetch(…, timeout=…) (+1 variant)");
     assert_eq!(report.stats().residual_units, 0);
 }
 
