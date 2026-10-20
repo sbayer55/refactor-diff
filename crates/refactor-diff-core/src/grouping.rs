@@ -41,7 +41,8 @@ pub fn build_groups(units: &mut IndexMap<String, Unit>, min_count: usize) -> Vec
         // Counter.most_common(): descending count, ties in first-seen order.
         let mut details: Vec<(String, usize)> = details.into_iter().collect();
         details.sort_by_key(|d| std::cmp::Reverse(d.1));
-        let mechanical = first.kind.always_mechanical() || unit_ids.len() >= min_count;
+        let mechanical = !first.kind.never_mechanical()
+            && (first.kind.always_mechanical() || unit_ids.len() >= min_count);
         groups.push(Group {
             id: short_hash([key]),
             key: key.to_string(),
