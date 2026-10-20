@@ -1086,3 +1086,32 @@ async fn serves_over_tcp_and_cleans_up_on_shutdown() {
     serving.await.unwrap().unwrap();
     assert!(!snapshot_dir.exists(), "snapshot dir survived shutdown");
 }
+
+#[tokio::test]
+async fn analyze_with_a_concept_is_a_separate_report() {
+    let tmp = tempfile::tempdir().unwrap();
+    let server = TestServer::new(&rename_repo(tmp.path()));
+    let plain = server.analyze(REFS()).await;
+    let blank = server
+        .analyze(json!({"base": "main", "head": "feature", "concept": "  "}))
+        .await;
+    assert_eq!(blank["id"], plain["id"]);
+    let foo = server
+        .analyze(json!({"base": "main", "head": "feature", "concept": "Foo"}))
+        .await;
+    assert_ne!(foo["id"], plain["id"]);
+    let lower = server
+        .analyze(json!({"base": "main", "head": "feature", "concept": " foo "}))
+        .await;
+    assert_eq!(lower["id"], foo["id"]);
+}
+
+#[tokio::test]
+async fn config_exposes_the_default_concept() {
+    let tmp = tempfile::tempdir().unwrap();
+    let server = TestServer::with_config(&rename_repo(tmp.path()), |c| {
+        c.defaults.concept = Some("program".into());
+    });
+    let cfg = server.get("/api/config").await.json();
+    assert_eq!(cfg["defaults"], json!({"concept": "program"}));
+}

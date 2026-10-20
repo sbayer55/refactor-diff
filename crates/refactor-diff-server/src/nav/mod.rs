@@ -133,7 +133,8 @@ impl Navigator {
 
     fn backend(&self, path: &str) -> Result<Backend<'_>, NavigationError> {
         match refactor_diff_core::analyzer_for(path).map(|a| a.name()) {
-            None => Err(NavigationError(format!(
+            // JSON is analyzed for diffs but has no definitions to navigate.
+            None | Some("json") => Err(NavigationError(format!(
                 "Code navigation isn't available for {path}."
             ))),
             Some("python") => Ok(Backend::Jedi(&self.jedi)),

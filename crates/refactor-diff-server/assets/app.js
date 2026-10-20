@@ -46,6 +46,8 @@ function emptyJev() {
   return {
     status: { state: "idle" }, // idle | running {done, total} | done {...} | error {message}
     byHunk: new Map(), // hunk id -> HunkRisk (see /api/report/{id}/jev)
+    groups: {}, // group id -> {same_edit, sampled} (Jev group checks)
+    verifiedUnits: 0, // units in groups Jev found to be one edit (same_edit >= 0.8)
     failures: [],
     configured: false, // a Vercel AI Gateway key is set
     auto: false, // scoring starts by itself after each analysis
@@ -224,6 +226,7 @@ function loadFilters(cliDefaults) {
     hideImports: Boolean(f.hideImports),
     hideFileMoves: Boolean(f.hideFileMoves),
     hideMoves: Boolean(f.hideMoves),
+    hideConceptExplained: Boolean(f.hideConceptExplained),
     exclude: f.exclude || [],
     nearOnly: false,
     newOnly: false,
@@ -235,13 +238,13 @@ function saveFilters() {
   const f = state.filters;
   prefSet(filtersKey(), JSON.stringify({
     hidden: [...f.hidden], hideDocs: f.hideDocs, hideImports: f.hideImports, hideFileMoves: f.hideFileMoves,
-    hideMoves: f.hideMoves, exclude: f.exclude, search: f.search, regex: f.regex,
+    hideMoves: f.hideMoves, hideConceptExplained: f.hideConceptExplained, exclude: f.exclude, search: f.search, regex: f.regex,
   }));
 }
 function filtersActive() {
   const f = state.filters;
   return f.hidden.size > 0 || f.hideDocs || f.hideImports || f.hideFileMoves || f.hideMoves
-    || f.exclude.length > 0 || f.nearOnly || f.newOnly || Boolean(f.search);
+    || (f.hideConceptExplained && Boolean(Concepts.active())) || f.exclude.length > 0 || f.nearOnly || f.newOnly || Boolean(f.search);
 }
 // One code path for the filter bar and the command palette. These read state.filters at call
 // time rather than a captured object, so they stay valid after resetFilters() replaces it.
@@ -265,7 +268,7 @@ function resetFilters() {
 function emptyFilters() {
   return {
     hidden: new Set(), hideDocs: false, hideImports: false, hideFileMoves: false, hideMoves: false,
-    exclude: [], nearOnly: false, newOnly: false, search: "", regex: false,
+    hideConceptExplained: false, exclude: [], nearOnly: false, newOnly: false, search: "", regex: false,
   };
 }
 
@@ -278,9 +281,15 @@ const CHANGE_FILTERS = [
   { key: "hideMoves", tag: "moved", id: "moves-toggle", label: "Moved functions",
     title: "Functions and classes moved verbatim. Only certain moves: an exact copy under the same name, "
       + "with no other candidate. Moves with any edit stay visible" },
+  // Not a unit tag: an overlay from the active concept lens (concepts.js). Units keep their
+  // `explained` flag; this only hides them.
+  { key: "hideConceptExplained", test: (u) => Concepts.explains(u.id), id: "concept-explained-toggle",
+    label: "Concept-only edits", count: () => Concepts.explainedCount(),
+    title: "Changes the active concept fully explains: once the concept is stripped, nothing else differs" },
 ];
+const changeFilterHit = (c, u) => (c.test ? c.test(u) : u.tags.includes(c.tag));
 function hiddenByTag(u) {
-  return CHANGE_FILTERS.some((c) => state.filters[c.key] && u.tags.includes(c.tag));
+  return CHANGE_FILTERS.some((c) => state.filters[c.key] && changeFilterHit(c, u));
 }
 
 // The search box as a RegExp (case-insensitive), null when empty, false when invalid.
@@ -377,7 +386,7 @@ function renderFilters() {
   const docsTotal = Object.values(r.units)
     .filter((u) => u.signatures.length && u.signatures.every((k) => k === "docs")).length;
   const changeChips = CHANGE_FILTERS.map((c) => {
-    let n = Object.values(r.units).filter((u) => u.tags.includes(c.tag)).length;
+    let n = c.count ? c.count() : Object.values(r.units).filter((u) => u.tags.includes(c.tag)).length;
     if (c.tag === "file-move") n += r.files.filter((x) => x.pure_rename).length;
     return `<button type="button" class="filter-chip" id="${c.id}" aria-pressed="${!f[c.key]}"
       title="${esc(c.title)}" ${n ? "" : "disabled"}>${c.label.toLowerCase()} <span class="n">${n}</span></button>`;
@@ -402,7 +411,8 @@ function renderFilters() {
     </div>` : ""}
     <label class="exclude"><span class="filter-label">exclude</span>
       <input id="exclude-input" type="text" spellcheck="false" value="${esc(f.exclude.join(", "))}"
-        placeholder="globs: migrations, *_pb2.py, src/legacy/**"></label>`;
+        placeholder="globs: migrations, *_pb2.py, src/legacy/**"></label>
+    ${Concepts.pickerHtml()}`;
 
   const bar = $("#toolbar");
   bar.hidden = false;
@@ -444,6 +454,7 @@ function renderFilters() {
     $(`#${c.id}`).addEventListener("click", () => toggleFilter(c.key));
   }
   $("#near-toggle")?.addEventListener("click", () => toggleFilter("nearOnly", { persist: false }));
+  Concepts.bindPicker(foot);
   $("#new-toggle")?.addEventListener("click", () => toggleFilter("newOnly", { persist: false }));
   const input = $("#exclude-input");
   input.addEventListener("change", () => {
@@ -560,6 +571,8 @@ async function runAnalysis(evt) {
   if (state.mode === "pr") body.pr = form.pr.value.replace(/^#/, "").trim();
   else if (state.mode === "worktree") Object.assign(body, { base: form.base.value, head: ":worktree:" });
   else Object.assign(body, { base: form.base.value, head: form.head.value || "HEAD" });
+  const concept = Concepts.requestStem();
+  if (concept) body.concept = concept;
 
   const btn = $("#analyze-btn");
   btn.disabled = true;
@@ -595,7 +608,11 @@ function loadReport(report) {
   applyFilters();
   renderStatus();
   renderFilters();
-  if (!location.hash || location.hash === "#" || location.hash.startsWith("#file/") || location.hash.startsWith("#lib/")) {
+  if (state.keepViewOnLoad) {
+    // Re-analyzed in place (another concept for the lens): stay on the page, at the same spot.
+    state.keepViewOnLoad = false;
+    route({ keepScroll: true });
+  } else if (!location.hash || location.hash === "#" || location.hash.startsWith("#file/") || location.hash.startsWith("#lib/")) {
     if (location.hash === "#review") route(); else location.hash = "#review";
   } else {
     route();
@@ -702,12 +719,16 @@ function renderStatus() {
     <span class="stats" id="status-stats" tabindex="0" aria-describedby="stats-pop"
       aria-haspopup="menu"><span class="stats-label">stats</span>${items}</span>
     ${jevStatusHtml()}
+    ${Concepts.statusHtml()}
+    ${Story.testsChipHtml()}
     <span class="spacer"></span>
     <span>${plural(stats.mechanical_groups, "pattern")} · ${stats.files_analyzed}/${stats.files_changed} files</span>
     <span>${splitActive() ? "split" : "unified"} · ${state.syntax ? "syntax" : "diff"} · min repeats ${state.report.source.min_count ?? 2}</span>
     <button type="button" class="link" id="status-help"><kbd>?</kbd> help</button>`;
   $("#status-help").addEventListener("click", () => showHelp(true));
   $("#status-jev")?.addEventListener("click", () => scoreWithJev());
+  $("#status-collateral")?.addEventListener("click", () => toggleFilter("hideConceptExplained"));
+  $("#status-tests")?.addEventListener("click", (e) => Story.toggleTestsPanel(e.currentTarget));
   const group = $("#status-stats");
   group.addEventListener("mouseenter", () => showStatsPop(group));
   group.addEventListener("mouseleave", hideStatsPop);
@@ -732,8 +753,9 @@ function analyzeTook() {
 const STATUS_STATS = [
   { id: "time", label: "Analysis time", html: () => `<span><span class="dot"></span>${analyzeTook()}</span>` },
   { id: "collapsed", label: "Lines collapsed", html: (v) => `<span>${v.stats.collapsed_pct}% collapsed</span>` },
-  { id: "verified", label: "Verified units", html: (v) => v.stats.verified_units
-    ? `<span class="ok">${v.stats.verified_units} ✓ verified</span>` : "" },
+  { id: "verified", label: "Verified units", html: (v) => v.stats.verified_units || state.jev.verifiedUnits
+    ? `<span class="ok">${v.stats.verified_units} ✓ verified${state.jev.verifiedUnits
+      ? ` <span class="jev-verified" title="Units in patterns Jev judged to be one mechanical edit (a hint, not an AST check)">· ${state.jev.verifiedUnits} by Jev</span>` : ""}</span>` : "" },
   { id: "hunks", label: "Hunks reviewed", html: (v) => {
     const s = v.stats;
     return `<span class="${s.hunks && s.hunks === s.hunks_done ? "ok" : ""}">${s.hunks_done}/${s.hunks} hunks</span>`;
@@ -771,6 +793,8 @@ function renderStatsPop() {
     ${row("Analysis", esc(analyzeTook()) + (r.source.label ? ` ${dim(`· ${esc(r.source.label)}`)}` : ""))}
     ${row("Collapsed", `${s.collapsed_pct}% ${dim(`· ${s.units - s.residual_units} of ${plural(s.units, "changed line")} explained by patterns`)}`)}
     ${row("Verified", s.verified_units ? `<span class="ok">${s.verified_units}</span> ${dim("units checked by the analyzers")}` : dim("none"))}
+    ${state.jev.verifiedUnits ? row("Jev", `<span class="jev-verified">${state.jev.verifiedUnits}</span> ${dim("units in patterns Jev judged to be one edit")}`) : ""}
+    ${Concepts.statsRows(row, dim)}
     ${row("Hunks", `${s.hunks_done} / ${s.hunks} reviewed ${dim(`· ${left} left`)}<div class="meter"><div style="width:${pct(s.hunks_done, s.hunks)}%"></div></div>`)}
     ${row("To review", `${plural(s.residual_units, "change")} ${dim("not covered by a pattern")}`)}
     ${row("Warnings", `<span class="${v.warnings.length ? "warn" : ""}">${v.warnings.length}</span>${
@@ -1053,6 +1077,7 @@ function explorerFiles(active) {
   let html = reviewNavRow(active) + `
     <a class="node nav${active("#files")}" href="#files"><span class="label sans">All files</span>
       <span class="count">${v.files.length}${skipped ? ` · ${skipped} not analyzed` : ""}</span></a>
+    ${Story.navRow(active)}
     ${state.commits.length > 1 || state.parent ? `<a class="node nav${active("#commits")}" href="#commits">
       <span class="label sans">Commits</span>
       <span class="count">${state.parent ? `${currentCommitIndex() + 1} of ${state.commits.length}` : state.commits.length}</span></a>` : ""}`;
@@ -1088,7 +1113,7 @@ function explorerFiles(active) {
     const inReview = res && visible;
     html += `<a class="node${cls}" href="${inReview ? "#review" : fileHref(f.path, "diff")}"${inReview ? ` data-scroll-file="${esc(f.path)}"` : ""}
       data-file-node="${esc(f.path)}" title="${esc(f.path)}">
-      <span class="st ${esc(f.status.toLowerCase())}">${esc(f.status)}</span><span class="label">${esc(f.path.slice(i + 1))}</span>${badge}</a>`;
+      <span class="st ${esc(f.status.toLowerCase())}">${esc(f.status)}</span><span class="label">${esc(f.path.slice(i + 1))}</span>${Concepts.heatHtml(f.path)}${badge}</a>`;
   }
   return html;
 }
@@ -1096,7 +1121,8 @@ function explorerFiles(active) {
 function explorerPatterns(mech, active) {
   const r = state.report;
   const done = mech.filter((g) => state.reviewed.has(g.id)).length;
-  let html = `<div class="hd"><span>mechanical</span><span>${done}/${mech.length} reviewed</span></div>`;
+  let html = Concepts.supergroupHtml(active)
+    + `<div class="hd"><span>mechanical</span><span>${done}/${mech.length} reviewed</span></div>`;
   if (!mech.length) {
     html += `<div class="node dim"><span class="label sans">${
       filtersActive() ? "No patterns in the visible files" : "No repeated patterns found"}</span></div>`;
@@ -1107,7 +1133,7 @@ function explorerPatterns(mech, active) {
     html += `
       <a class="node nav${active("#group/" + g.id)}${isDone && !fresh ? " done" : ""}" href="#group/${g.id}" title="${esc(g.label)}${isDone && fresh ? ` — reviewed, but ${fresh} new since` : ""}">
         <input type="checkbox" data-review="${g.id}" ${isDone ? "checked" : ""} aria-label="Mark reviewed">
-        <span class="kind ${g.kind}">${g.kind}</span>
+        ${kindChip(g.kind)}
         <span class="label">${esc(g.label)}</span>
         ${fresh ? `<span class="badge-new">+${fresh}</span>` : ""}
         <span class="count">×${g.visible.length}</span>
@@ -1142,6 +1168,7 @@ function markExplorerFile() {
 }
 
 function onExplorerClick(e) {
+  if (Concepts.onExplorerClick(e)) return;
   if (e.target.closest("[data-hide-reviewed]")) {
     prefSet("refactor-diff:hide-reviewed", prefGet("refactor-diff:hide-reviewed") === "on" ? "off" : "on");
     renderExplorer();
@@ -1222,8 +1249,8 @@ function renderInspector() {
   const [view, id] = location.hash.replace(/^#/, "").split("/");
   let html = "";
   if (view === "group" && id) html += inspectorPattern(id);
-  else if (!view || view === "review") html += inspectorHunk();
-  html += inspectorProgress() + inspectorRisk() + inspectorWarnings() + inspectorReport() + inspectorKeys();
+  else if (!view || view === "review" || view === "story") html += inspectorHunk();
+  html += inspectorProgress() + inspectorRisk() + Concepts.inspectorXref() + inspectorWarnings() + inspectorReport() + inspectorKeys();
   el.innerHTML = `<div class="insp">${html}</div>`;
 }
 
@@ -1442,7 +1469,7 @@ function route(opts) {
     state.currentFile = null;
     // The explorer follows the view: patterns while reading a pattern, warnings on the
     // warnings page, files everywhere else.
-    state.explorerTab = view === "group" ? "patterns" : view === "warnings" ? "warnings"
+    state.explorerTab = view === "group" || view === "concept" ? "patterns" : view === "warnings" ? "warnings"
       : view === "conversation" ? "comments" : "files";
   }
   lastRoute = key;
@@ -1471,6 +1498,8 @@ function route(opts) {
     return;
   }
   if (view === "group") renderGroup(id);
+  else if (view === "concept") Concepts.renderPage(decodeURIComponent(id || ""));
+  else if (view === "story") Story.render();
   else if (view === "warnings") renderWarnings();
   else if (view === "files") renderFiles();
   else if (view === "commits") renderCommits();
@@ -1496,7 +1525,11 @@ function setViewTitle(view, id, rest) {
   let html;
   if (view === "group") {
     const g = v.groupsById.get(id) || state.report.groups.find((x) => x.id === id);
-    html = g ? `<span class="kind ${g.kind}">${g.kind}</span>${groupTransform(g)}` : "Pattern";
+    html = g ? `${kindChip(g.kind)}${groupTransform(g)}` : "Pattern";
+  } else if (view === "concept") {
+    html = Concepts.title(decodeURIComponent(id || ""));
+  } else if (view === "story") {
+    html = Story.title();
   } else if (view === "warnings") {
     html = `Warnings ${meta(v.warnings.length)}`;
   } else if (view === "files") {
@@ -1517,6 +1550,22 @@ function setViewTitle(view, id, rest) {
   }
   el.innerHTML = html;
   fitToolbar();
+}
+
+// A pattern's kind as a small chip. A substitution looks like a rename but is not one: the new
+// name already existed in the base, so it is marked apart (⇄) and never collapsed.
+const KIND_TITLES = {
+  substitution: "Substitution: the new name already existed in the base, so this is not a rename and is never collapsed",
+  list: "Elements added to or removed from one bracketed list",
+  guard: "An early return/throw guard removed or added (never collapsed)",
+  cascade: "An import or local dropped because its last use was dropped",
+  test: "A whole it/test/describe block deleted",
+  i18n: "A translation key plus the t(\"key\") calls that used it",
+  fixture: "The same JSON/object field dropped across records",
+};
+function kindChip(kind) {
+  const title = KIND_TITLES[kind];
+  return `<span class="kind ${esc(kind)}"${title ? ` title="${esc(title)}"` : ""}>${kind === "substitution" ? "⇄ " : ""}${esc(kind)}</span>`;
 }
 
 function groupTransform(g) {
@@ -1581,8 +1630,17 @@ function unitTags(unit) {
     const g = state.groupsByKey.get(key);
     if (!g || !state.view.groupsById.has(g.id)) return "";
     if (g.mechanical) return patternTag(g);
-    return `<span class="tag unique">unique ${esc(g.kind)}: <span class="code">${esc(shortLabel(g.label))}</span></span>`;
+    const sub = g.kind === "substitution";
+    return `<span class="tag unique${sub ? " substitution" : ""}"${sub ? ` title="${esc(KIND_TITLES.substitution)}"` : ""}>${
+      sub ? "⇄ " : ""}unique ${esc(g.kind)}: <span class="code">${esc(shortLabel(g.label))}</span></span>`;
   });
+  if (unit.tags.includes("precondition-removed")) {
+    tags.push(`<span class="tag precondition" title="An early return/throw guard was removed: code below it now runs in cases it didn't before">precondition removed</span>`);
+  }
+  if (unit.tags.includes("test-removed")) {
+    tags.push(`<span class="tag test-removed" title="A whole it/test/describe block was deleted">test removed</span>`);
+  }
+  tags.push(Concepts.unitTagsHtml(unit));
   for (const n of unit.near || []) {
     const g = state.view.groupsById.get(n.group_id);
     if (g) tags.push(`<a class="tag near" href="#group/${g.id}" title="${esc(n.hint)}">≈ almost <span class="code">${esc(shortLabel(g.label))}</span></a>`);
@@ -1637,26 +1695,47 @@ function renderReview() {
     const risk = (h) => riskOf(h.id)?.risk ?? -1;
     for (const hunks of byFile.values()) hunks.sort((a, b) => risk(b) - risk(a));
     byFile = new Map([...byFile.entries()].sort((a, b) => Math.max(...b[1].map(risk)) - Math.max(...a[1].map(risk))));
+  } else if (Concepts.active()) {
+    // Collateral first: hunks that don't mention the concept, then the ones that touch it but
+    // differ beyond it, then the ones it explains; files by their most collateral hunk.
+    const rank = (h) => Concepts.hunkRank(h);
+    for (const hunks of byFile.values()) hunks.sort((a, b) => rank(a) - rank(b));
+    byFile = new Map([...byFile.entries()].sort((a, b) => Math.min(...a[1].map(rank)) - Math.min(...b[1].map(rank))));
   }
   let html = `<div class="page-head">
     <p>Changes that don't belong to a repeated pattern. Lines already explained by a pattern are dimmed.
     Tick a hunk when you've read it; ticked hunks fold up and stay ticked across restarts and new commits.</p>
-    ${riskSortToggle()}</div>
+    ${riskSortToggle()}${jevRolesToggle()}</div>
     ${deltaBanner()}
     ${navHint()}`;
-  for (const [path, hunks] of byFile) {
-    const residual = hunks.reduce((n, h) =>
-      n + h.unit_ids.filter((u) => v.units.has(u) && !r.units[u].explained).length, 0);
-    const left = hunks.filter((h) => !state.reviewedHunks.has(h.fingerprint)).length;
-    html += `<section class="file" data-file-section="${esc(path)}"><header><span class="path">${esc(path)}</span>
-      <span class="meta">${plural(residual, "change")}</span>
-      ${left ? `<button type="button" class="link" data-review-file="${esc(path)}">Mark all ${hunks.length > 1 ? `${left} ` : ""}reviewed</button>` : ""}
-      ${fileLinks(path)}</header>`;
-    for (const h of hunks) html += hunkHtml(h);
-    html += "</section>";
+  if (jevRolesActive()) {
+    // Under Jev's change roles: one sub-header per role, the files' sections inside it.
+    for (const [role, files] of jevRoleBuckets(byFile)) {
+      const n = [...files.values()].reduce((k, hs) => k + hs.length, 0);
+      html += `<h3 class="sub-head jev-role-head" data-jev-role="${esc(role)}">${esc(JEV_ROLE_LABELS[role] || role)}
+        <span class="meta">${plural(n, "hunk")}</span></h3>`;
+      for (const [path, hunks] of files) html += fileSectionHtml(path, hunks);
+    }
+  } else {
+    for (const [path, hunks] of byFile) html += fileSectionHtml(path, hunks);
   }
   content.innerHTML = html;
   for (const hunkId of state.answers.keys()) renderAnswers(hunkId);
+}
+
+// One file's needs-review hunks under its header (Needs review, Story).
+function fileSectionHtml(path, hunks) {
+  const r = state.report;
+  const v = state.view;
+  const residual = hunks.reduce((n, h) =>
+    n + h.unit_ids.filter((u) => v.units.has(u) && !r.units[u].explained).length, 0);
+  const left = hunks.filter((h) => !state.reviewedHunks.has(h.fingerprint)).length;
+  let html = `<section class="file" data-file-section="${esc(path)}"><header><span class="path">${esc(path)}</span>
+    <span class="meta">${plural(residual, "change")}</span>
+    ${left ? `<button type="button" class="link" data-review-file="${esc(path)}">Mark all ${hunks.length > 1 ? `${left} ` : ""}reviewed</button>` : ""}
+    ${fileLinks(path)}</header>`;
+  for (const h of hunks) html += hunkHtml(h);
+  return html + "</section>";
 }
 
 function hunkHtml(h) {
@@ -2598,7 +2677,9 @@ function renderGroup(id) {
   let html = `<div class="page-head">
       <span class="meta">${count}${hiddenHere ? ` (${hiddenHere} hidden by filters)` : ""}${
         verifiedCount ? ` · <span class="tag verified" title="${esc(VERIFIED_TITLE)}">✓ ${g.kind === "move" ? "verified" : `${verifiedCount} of ${g.visible.length} verified`}</span>` : ""}${
-        warnCount ? ` · <a href="#warnings">${plural(warnCount, "warning")}</a>` : ""}</span>
+        warnCount ? ` · <a href="#warnings">${plural(warnCount, "warning")}</a>` : ""}${
+        jevGroupBadge(g.id) ? ` · ${jevGroupBadge(g.id)}` : ""}${
+        g.kind === "substitution" ? ` · <span class="tag unique substitution">⇄ ${esc(KIND_TITLES.substitution)}</span>` : ""}</span>
       <span class="spacer"></span>
       <label class="toggle"><input type="checkbox" id="group-reviewed" ${isDone ? "checked" : ""}> Reviewed</label>
     </div>`;
@@ -3163,6 +3244,8 @@ function paletteCommands() {
     { id: "file.history", group: "View", title: "Open file history", when: () => location.hash.startsWith("#file/") && !window.History?.isOpen(),
       run: () => { const id = location.hash.split("/")[1]; if (id) location.hash = fileHref(decodeURIComponent(id), "history"); } },
     ...(window.History?.isOpen() ? History.commands() : []),
+    ...(window.Story ? Story.commands() : []),
+    ...(window.Concepts ? Concepts.commands() : []),
     { id: "view.review", group: "View", title: "Go to Needs review", keys: "g r", when: hasReport, run: go("#review") },
     { id: "view.warnings", group: "View", title: "Go to Warnings", keys: "g w", when: hasReport, run: go("#warnings") },
     { id: "view.files", group: "View", title: "Go to Files", keys: "g f", when: hasReport, run: go("#files") },
@@ -3197,6 +3280,8 @@ function paletteCommands() {
       run: () => scoreWithJev(true) },
     { id: "jev.sort", group: "Review", title: state.riskSort ? "Sort needs review by file" : "Sort needs review by risk",
       when: hasScores, run: () => setRiskSort(!state.riskSort) },
+    { id: "jev.roles", group: "Review", title: prefGet("refactor-diff:jev-roles") === "on" ? "Stop grouping needs review by Jev role" : "Group needs review by Jev role",
+      when: () => hasReport() && hasJevRoles() && !riskSortActive(), run: () => setJevRoles(prefGet("refactor-diff:jev-roles") !== "on") },
     { id: "layout.diff", group: "Layout", title: "Highlighting: diff",
       when: () => hasReport() && state.syntax, run: () => setSyntax(false) },
     { id: "layout.syntax", group: "Layout", title: "Highlighting: syntax",
@@ -3417,8 +3502,9 @@ function onKey(e) {
   if (pendingG) {
     clearTimeout(pendingG);
     pendingG = 0;
-    const go = { r: "#review", w: "#warnings", f: "#files", c: "#commits", d: "#conversation" }[e.key];
+    const go = { r: "#review", w: "#warnings", f: "#files", c: "#commits", d: "#conversation", y: "#story" }[e.key];
     if (go) { location.hash = go; e.preventDefault(); }
+    else if (e.key === "o" && Concepts.active()) { location.hash = Concepts.pageHref(); e.preventDefault(); }
     else if (e.key === "s") { scoreWithJev(); e.preventDefault(); }
     return;
   }
@@ -3931,6 +4017,7 @@ async function init() {
   window.addEventListener("hashchange", route);
   document.addEventListener("change", (e) => {
     if (e.target.matches?.("[data-risk-sort]")) setRiskSort(e.target.checked);
+    if (e.target.matches?.("[data-jev-roles]")) setJevRoles(e.target.checked);
   });
 
   let defaults = {};
@@ -3943,6 +4030,7 @@ async function init() {
     state.editor = defaults.editor || null;
     state.desktop = Boolean(cfg.desktop);
     initPrefs(cfg.prefs);
+    Concepts.init(defaults);
     loadLayout();
     loadSyntax();
     loadSingleFile();
@@ -4012,6 +4100,55 @@ function riskSortToggle() {
   return `<label class="toggle risk-sort" title="Riskiest hunks and files first"><input type="checkbox" data-risk-sort ${state.riskSort ? "checked" : ""}>Sort by risk</label>`;
 }
 
+// Jev's change_role (question set 2): how a hunk relates to the change the PR is about.
+// Collateral first: that is what a "remove X" review is really looking for.
+const JEV_ROLES = ["collateral", "core", "cascade", "cleanup", "test-fixture"];
+const JEV_ROLE_LABELS = {
+  collateral: "Collateral · changes behaviour beyond the stated change",
+  core: "Core · what the PR is about",
+  cascade: "Cascade · call sites, types and props forced by it",
+  cleanup: "Cleanup · dead code, imports and comments it left",
+  "test-fixture": "Tests and fixtures",
+  unscored: "No role from Jev",
+};
+const hasJevRoles = () => [...state.jev.byHunk.values()].some((r) => r && r.change_role);
+// Grouped by role when the list is sorted by risk, or when asked for (preference).
+const jevRolesActive = () => hasJevRoles() && (riskSortActive() || prefGet("refactor-diff:jev-roles") === "on");
+
+function jevRolesToggle() {
+  if (!hasJevRoles() || riskSortActive()) return "";
+  return `<label class="toggle risk-sort" title="Group the hunks under the role Jev gave them"><input type="checkbox" data-jev-roles ${
+    prefGet("refactor-diff:jev-roles") === "on" ? "checked" : ""}>Group by Jev role</label>`;
+}
+
+function setJevRoles(on) {
+  prefSet("refactor-diff:jev-roles", on ? "on" : "off");
+  rerender();
+}
+
+// byFile (path -> hunks, in display order) -> [[role, Map(path -> hunks)]] in JEV_ROLES order.
+function jevRoleBuckets(byFile) {
+  const out = new Map([...JEV_ROLES, "unscored"].map((role) => [role, new Map()]));
+  for (const [path, hunks] of byFile) {
+    for (const h of hunks) {
+      const role = riskOf(h.id)?.change_role;
+      const files = out.get(out.has(role) ? role : "unscored");
+      if (!files.has(path)) files.set(path, []);
+      files.get(path).push(h);
+    }
+  }
+  return [...out.entries()].filter(([, files]) => files.size);
+}
+
+// "Jev: same edit 0.93" for a pattern Jev checked (sampled first, middle and last occurrence).
+function jevGroupBadge(groupId) {
+  const c = state.jev.groups?.[groupId];
+  if (!c || typeof c.same_edit !== "number") return "";
+  const n = (c.sampled || []).length;
+  const ok = c.same_edit >= 0.8;
+  return `<span class="tag jev-same${ok ? " ok" : ""}" title="Jev compared ${plural(n, "sampled occurrence")} of this pattern: probability they are all the same mechanical edit. A hint, not a check.">Jev: same edit ${c.same_edit.toFixed(2)}</span>`;
+}
+
 // Fetch the job's state (and the scores so far); keep polling while it runs.
 async function loadJev() {
   const report = state.report;
@@ -4031,6 +4168,9 @@ function applyJevData(data) {
   state.jev.auto = Boolean(data.auto);
   state.jev.failures = data.failures || [];
   state.jev.byHunk = new Map(Object.entries(data.hunks || {}));
+  state.jev.groups = data.groups && typeof data.groups === "object" ? data.groups : {};
+  const jv = data.jev_verified_units;
+  state.jev.verifiedUnits = Array.isArray(jv) ? jv.length : Number(jv) || 0;
   clearTimeout(state.jev.timer);
   state.jev.timer = jevRunning() ? setTimeout(loadJev, 1000) : 0;
   if (wasRunning && !jevRunning() && riskSortActive()) { rerender(); return; }
@@ -4761,4 +4901,6 @@ async function showSettings() {
   dlg.showModal();
 }
 
-init();
+// After every script on the page has run (pr.js, history.js, concepts.js, story.js add to it).
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+else init();

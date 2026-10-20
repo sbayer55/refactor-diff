@@ -1,15 +1,19 @@
-//! The questions every needs-review hunk is asked. Change the wording or the criteria and
-//! bump [`QUESTION_SET_VERSION`]: cached answers are only reused for the same version.
+//! The questions every needs-review hunk is asked, and the smaller set each sampled
+//! mechanical group is asked. Change the wording or the criteria and bump
+//! [`QUESTION_SET_VERSION`] (or [`GROUP_QUESTION_SET_VERSION`]): cached answers are only
+//! reused for the same version.
 
 use serde_json::{Value, json};
 
 use super::{Question, QuestionKind, Questions};
 
 /// Part of the cache key; bump whenever the questions below change.
-pub const QUESTION_SET_VERSION: &str = "1";
+pub const QUESTION_SET_VERSION: &str = "2";
+/// Part of the group cache key; bump whenever [`group_questions`] changes.
+pub const GROUP_QUESTION_SET_VERSION: &str = "1";
 
-/// The seven yes/no concerns, in display order.
-pub const BOOLEAN_CONCERNS: [&str; 7] = [
+/// The yes/no concerns that feed `concern_max`, in display order.
+pub const BOOLEAN_CONCERNS: [&str; 8] = [
     "hardcoded_secret",
     "injection_risk",
     "touches_auth",
@@ -17,7 +21,12 @@ pub const BOOLEAN_CONCERNS: [&str; 7] = [
     "breaks_api",
     "data_migration",
     "debug_leftovers",
+    "removes_guard_or_validation",
 ];
+
+/// Asked as a boolean but kept out of [`BOOLEAN_CONCERNS`]: it nudges `risk` instead of
+/// flagging the hunk.
+pub const BEYOND_STATED_CHANGE: &str = "behavior_beyond_stated_change";
 
 /// Ordered rungs of `blast_radius`; the text before the colon is the label.
 pub const BLAST_RADIUS: [&str; 4] = [
@@ -35,7 +44,7 @@ pub const REVIEWER_EFFORT: [&str; 3] = [
 ];
 
 /// The options of `primary_concern`, with the description Jev sees.
-pub const PRIMARY_CONCERN: [(&str, &str); 10] = [
+pub const PRIMARY_CONCERN: [(&str, &str); 11] = [
     (
         "secret",
         "a credential, token or key is written into the code",
@@ -61,6 +70,10 @@ pub const PRIMARY_CONCERN: [(&str, &str); 10] = [
         "debug prints, commented-out code, TODO hacks or leftover flags",
     ),
     ("migration", "stored data or its schema changes"),
+    (
+        "guard_removed",
+        "an early-return guard, validation or permission check is removed",
+    ),
     ("logic", "behavior changes that fit none of the above"),
     ("none", "no notable risk: a mechanical or cosmetic change"),
     (
@@ -69,16 +82,50 @@ pub const PRIMARY_CONCERN: [(&str, &str); 10] = [
     ),
 ];
 
+/// The options of `change_role`: how the hunk relates to the change the PR is about.
+pub const CHANGE_ROLE: [(&str, &str); 5] = [
+    ("core", "the change the PR is about"),
+    (
+        "cascade",
+        "follow-on edits forced by the core change: call sites, types, props",
+    ),
+    (
+        "cleanup",
+        "dead code, imports or comments left behind by the core change",
+    ),
+    ("test-fixture", "tests, mocks, fixtures or stories"),
+    ("collateral", "anything else that changes behaviour"),
+];
+
 const PREAMBLE: &str = "The state describes one hunk of a code review diff. `hunk` is the \
 numbered unified diff (`-` removed, `+` added); `enclosing` is the surrounding function \
 before and after when known; `adds_tests` and `docs_only` are facts the tool computed from \
-the file; `patterns` lists repeated mechanical edits already collapsed elsewhere in the diff.";
+the file; `patterns` lists repeated mechanical edits already collapsed elsewhere in the diff; \
+`stated_change`, when present, is what the change says it does (the PR title, or the concept \
+the diff removes); `pr_body`, when present, is the start of the pull request description.";
+
+const GROUP_PREAMBLE: &str = "The state describes one repeated edit that a tool collapsed in \
+a code review diff as mechanical. `pattern` is the edit (`kind`, `label`, `old` → `new`); \
+`occurrences` are numbered unified diffs (`-` removed, `+` added) of a few sampled places \
+where it was applied; `stated_change`, when present, is what the change says it does.";
 
 fn boolean(instructions: &str, yes: &str, no: &str) -> Question {
     Question {
         kind: QuestionKind::Boolean,
         instructions: format!("{PREAMBLE} {instructions}"),
         criteria: Some(json!({"true": yes, "false": no})),
+    }
+}
+
+fn choice(instructions: &str, options: &[(&str, &str)]) -> Question {
+    let criteria: serde_json::Map<String, Value> = options
+        .iter()
+        .map(|(name, desc)| (name.to_string(), Value::String(desc.to_string())))
+        .collect();
+    Question {
+        kind: QuestionKind::Choice,
+        instructions: format!("{PREAMBLE} {instructions}"),
+        criteria: Some(Value::Object(criteria)),
     }
 }
 
@@ -152,6 +199,22 @@ pub fn questions() -> Questions {
         ),
     );
     q.insert(
+        "removes_guard_or_validation".into(),
+        boolean(
+            "Does the change remove a guard, validation or permission check?",
+            "an early return or throw guard, an input validation, a null or bounds check, or a permission or feature check is deleted or bypassed",
+            "no check is removed, or one is only moved or replaced by an equivalent",
+        ),
+    );
+    q.insert(
+        BEYOND_STATED_CHANGE.into(),
+        boolean(
+            "Does this hunk change behaviour beyond the stated change (`stated_change` in the state)? Mechanical consequences of the stated change (removing a field that the change removes, deleting code that used it) are not beyond it.",
+            "the hunk alters behaviour that the stated change does not account for",
+            "the hunk is the stated change or a mechanical consequence of it, or no change is stated and the hunk is behaviour-neutral",
+        ),
+    );
+    q.insert(
         "blast_radius".into(),
         score(
             "How much of the program can this change affect?",
@@ -165,18 +228,37 @@ pub fn questions() -> Questions {
             &REVIEWER_EFFORT,
         ),
     );
-    let criteria: serde_json::Map<String, Value> = PRIMARY_CONCERN
-        .iter()
-        .map(|(name, desc)| (name.to_string(), Value::String(desc.to_string())))
-        .collect();
     q.insert(
         "primary_concern".into(),
+        choice(
+            "What is the single most important thing a reviewer should check in this hunk?",
+            &PRIMARY_CONCERN,
+        ),
+    );
+    q.insert(
+        "change_role".into(),
+        choice(
+            "What role does this hunk play relative to the stated change (`stated_change` in the state, else the change as a whole)?",
+            &CHANGE_ROLE,
+        ),
+    );
+    q
+}
+
+/// The questions asked once per sampled mechanical group.
+pub fn group_questions() -> Questions {
+    let mut q = Questions::new();
+    q.insert(
+        "same_edit".into(),
         Question {
-            kind: QuestionKind::Choice,
+            kind: QuestionKind::Boolean,
             instructions: format!(
-                "{PREAMBLE} What is the single most important thing a reviewer should check in this hunk?"
+                "{GROUP_PREAMBLE} Are all sampled occurrences the same mechanical edit, with no occurrence changing behaviour differently?"
             ),
-            criteria: Some(Value::Object(criteria)),
+            criteria: Some(json!({
+                "true": "every occurrence applies the same edit and none of them does anything else",
+                "false": "at least one occurrence differs in kind, or changes behaviour in a way the others do not",
+            })),
         },
     );
     q
@@ -197,13 +279,21 @@ mod tests {
     #[test]
     fn question_set_shape() {
         let q = questions();
-        assert_eq!(q.len(), 10);
+        assert_eq!(q.len(), 13);
         let names: Vec<&str> = q.keys().map(String::as_str).collect();
-        assert_eq!(&names[..7], &BOOLEAN_CONCERNS[..]);
+        assert_eq!(&names[..8], &BOOLEAN_CONCERNS[..]);
         assert_eq!(
-            &names[7..],
-            &["blast_radius", "reviewer_effort", "primary_concern"]
+            &names[8..],
+            &[
+                BEYOND_STATED_CHANGE,
+                "blast_radius",
+                "reviewer_effort",
+                "primary_concern",
+                "change_role"
+            ]
         );
+        assert_eq!(q[BEYOND_STATED_CHANGE].kind, QuestionKind::Boolean);
+        assert!(!BOOLEAN_CONCERNS.contains(&BEYOND_STATED_CHANGE));
         for name in BOOLEAN_CONCERNS {
             assert_eq!(q[name].kind, QuestionKind::Boolean);
             assert!(q[name].criteria.as_ref().unwrap()["true"].is_string());
@@ -216,15 +306,36 @@ mod tests {
         );
         assert_eq!(
             v["primary_concern"]["criteria"].as_object().unwrap().len(),
-            10
+            11
         );
         assert!(v["primary_concern"]["criteria"]["insufficient_evidence"].is_string());
+        assert!(v["primary_concern"]["criteria"]["guard_removed"].is_string());
+        let roles = v["change_role"]["criteria"].as_object().unwrap();
+        assert_eq!(roles.len(), 5);
+        for (name, _) in CHANGE_ROLE {
+            assert!(roles[name].is_string(), "{name}");
+        }
+        assert!(
+            v[BEYOND_STATED_CHANGE]["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("`stated_change`")
+        );
         assert!(
             v["touches_auth"]["instructions"]
                 .as_str()
                 .unwrap()
                 .contains("`hunk`")
         );
+    }
+
+    #[test]
+    fn group_question_set_shape() {
+        let q = group_questions();
+        assert_eq!(q.len(), 1);
+        assert_eq!(q["same_edit"].kind, QuestionKind::Boolean);
+        let text = &q["same_edit"].instructions;
+        assert!(text.contains("`occurrences`") && text.contains("`pattern`"));
     }
 
     #[test]

@@ -17,6 +17,7 @@ pub mod prefs;
 pub mod review;
 pub mod settings;
 pub mod snapshots;
+pub mod xref;
 
 pub use app::{App, AppState, BuildError, ServerHandle, bind_local};
 pub use config::{

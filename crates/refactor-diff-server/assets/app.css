@@ -38,6 +38,21 @@
   --issue-info: #6cb6ff;
   --kind-args: #6cc9ea;
   --kind-import: #c8d66a;
+  --kind-substitution: #ff9ecf;
+  --kind-list: #9ec7a8;
+  --kind-guard: #ff8f6b;
+  --kind-cascade: #a3a8f0;
+  --kind-test: #d9c36a;
+  --kind-i18n: #7fd1ae;
+  --kind-fixture: #b9a28a;
+  /* Concept lens: concept vs collateral (heat bars, chips). */
+  --concept-fg: #b7a4ff;
+  --concept-bg: #262040;
+  --heat-concept: #6a5bb5;
+  --heat-collateral: #e3b341;
+  /* Jev: a third kind of annotation, apart from warnings and code issues. */
+  --jev-fg: #67d4e0;
+  --jev-bg: #13303a;
   --sx-kw: #ff7b72;
   --sx-str: #a5d6ff;
   --sx-num: #79c0ff;
@@ -102,6 +117,19 @@
     --issue-info: #0969da;
     --kind-args: #006d8f;
     --kind-import: #5c6b00;
+    --kind-substitution: #b0306f;
+    --kind-list: #3e7a4f;
+    --kind-guard: #c2410c;
+    --kind-cascade: #4f46b8;
+    --kind-test: #8a6d00;
+    --kind-i18n: #0d7a5a;
+    --kind-fixture: #7a5c3a;
+    --concept-fg: #5b3fc4;
+    --concept-bg: #ece7fd;
+    --heat-concept: #b4a6ee;
+    --heat-collateral: #c98a00;
+    --jev-fg: #0e6f7c;
+    --jev-bg: #ddf3f6;
     --sx-kw: #cf222e;
     --sx-str: #0a3069;
     --sx-num: #0550ae;
@@ -294,6 +322,23 @@ body.resizing * { cursor: col-resize !important; }
 .kind.move { color: var(--kind-move); }
 .kind.args { color: var(--kind-args); }
 .kind.import { color: var(--kind-import); }
+.kind.substitution { color: var(--kind-substitution); border-style: dashed; }
+.kind.list { color: var(--kind-list); }
+.kind.guard { color: var(--kind-guard); }
+.kind.cascade { color: var(--kind-cascade); }
+.kind.test { color: var(--kind-test); }
+.kind.i18n { color: var(--kind-i18n); }
+.kind.fixture { color: var(--kind-fixture); }
+/* Unit tags for the new unit tags: a removed guard is a refactor warning; a removed test is its own kind. */
+.tag.precondition { background: var(--warn-bg); color: var(--warn-fg); border: 1px solid var(--warn-fg); }
+.tag.test-removed { background: var(--panel-3); color: var(--kind-test); border: 1px solid var(--kind-test); }
+.tag.unique.substitution { border: 1px dashed var(--kind-substitution); }
+/* Jev: group checks and verified units. */
+.tag.jev-same { background: var(--jev-bg); color: var(--jev-fg); }
+.tag.jev-same:not(.ok) { border: 1px dashed var(--jev-fg); }
+.jev-verified { color: var(--jev-fg); }
+.jev-role-head { display: flex; gap: 10px; align-items: baseline; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+.jev-role-head[data-jev-role="collateral"] { color: var(--jev-fg); }
 .explorer .foot {
   flex: none; border-top: 1px solid var(--border); padding: 8px 10px; font-size: 11px; color: var(--muted);
   display: flex; flex-direction: column; gap: 6px;

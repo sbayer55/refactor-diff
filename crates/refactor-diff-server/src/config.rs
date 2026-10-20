@@ -88,6 +88,9 @@ pub struct Defaults {
     /// URL template for "Open in editor" links; always set when built by the CLI.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub editor: Option<String>,
+    /// Concept stem to pre-select for the concept lens (`--concept`), trimmed and lowercased.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub concept: Option<String>,
 }
 
 /// Pre-set UI filters (`--hide`, `--exclude`).
@@ -105,6 +108,9 @@ pub struct Filters {
     pub hide_file_moves: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hide_moves: Option<bool>,
+    /// Hide units the active concept fully explains (`--hide collateral-explained`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hide_concept_explained: Option<bool>,
     /// Globs of files to hide.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exclude: Option<Vec<String>>,
@@ -126,6 +132,7 @@ const CHANGE_FILTERS: &[(&str, ChangeFilter)] = &[
     ("imports", ChangeFilter::Imports),
     ("file-moves", ChangeFilter::FileMoves),
     ("moves", ChangeFilter::Moves),
+    ("collateral-explained", ChangeFilter::ConceptExplained),
 ];
 
 #[derive(Clone, Copy)]
@@ -134,6 +141,7 @@ enum ChangeFilter {
     Imports,
     FileMoves,
     Moves,
+    ConceptExplained,
 }
 
 /// A CLI flag the server can't honour; the message is what the CLI prints after
@@ -208,6 +216,7 @@ pub fn filter_defaults(
                 ChangeFilter::Imports => filters.hide_imports = on,
                 ChangeFilter::FileMoves => filters.hide_file_moves = on,
                 ChangeFilter::Moves => filters.hide_moves = on,
+                ChangeFilter::ConceptExplained => filters.hide_concept_explained = on,
             }
         }
         any = true;
@@ -228,11 +237,19 @@ pub fn defaults_from(
     hide: Option<&str>,
     exclude: &[String],
     editor: &str,
+    concept: Option<&str>,
 ) -> Result<Defaults, ConfigError> {
     let mut defaults = source_defaults(range, pr, worktree);
     defaults.filters = filter_defaults(hide, exclude)?;
     defaults.editor = Some(editor_template(editor)?);
+    defaults.concept = concept.and_then(normalize_concept);
     Ok(defaults)
+}
+
+/// A concept stem as the engine expects it: trimmed and lowercased; `None` when blank.
+pub fn normalize_concept(concept: &str) -> Option<String> {
+    let concept = concept.trim();
+    (!concept.is_empty()).then(|| concept.to_lowercase())
 }
 
 fn source_defaults(range: Option<&str>, pr: Option<u64>, worktree: Option<&str>) -> Defaults {
@@ -276,28 +293,47 @@ mod tests {
 
     #[test]
     fn range_defaults() {
-        let d = defaults_from(Some("main..feature"), None, None, None, &[], "vscode").unwrap();
+        let d =
+            defaults_from(Some("main..feature"), None, None, None, &[], "vscode", None).unwrap();
         assert_eq!(
             value(&d),
             json!({"mode": "refs", "base": "main", "head": "feature", "editor": VSCODE})
         );
-        let d = defaults_from(Some("main...feature"), None, None, None, &[], "vscode").unwrap();
+        let d = defaults_from(
+            Some("main...feature"),
+            None,
+            None,
+            None,
+            &[],
+            "vscode",
+            None,
+        )
+        .unwrap();
         assert_eq!(d.base.as_deref(), Some("main"));
         assert_eq!(d.head.as_deref(), Some("feature"));
-        let d = defaults_from(Some("main"), None, None, None, &[], "vscode").unwrap();
+        let d = defaults_from(Some("main"), None, None, None, &[], "vscode", None).unwrap();
         assert_eq!(d.head.as_deref(), Some("HEAD"));
     }
 
     #[test]
     fn pr_wins_over_worktree_and_range() {
-        let d = defaults_from(Some("a..b"), Some(7), Some("main"), None, &[], "vscode").unwrap();
+        let d = defaults_from(
+            Some("a..b"),
+            Some(7),
+            Some("main"),
+            None,
+            &[],
+            "vscode",
+            None,
+        )
+        .unwrap();
         assert_eq!(value(&d), json!({"mode": "pr", "pr": 7, "editor": VSCODE}));
-        let d = defaults_from(Some("a..b"), None, Some("main"), None, &[], "vscode").unwrap();
+        let d = defaults_from(Some("a..b"), None, Some("main"), None, &[], "vscode", None).unwrap();
         assert_eq!(
             value(&d),
             json!({"mode": "worktree", "base": "main", "editor": VSCODE})
         );
-        let d = defaults_from(None, None, None, None, &[], "vscode").unwrap();
+        let d = defaults_from(None, None, None, None, &[], "vscode", None).unwrap();
         assert_eq!(value(&d), json!({"editor": VSCODE}));
     }
 
@@ -311,6 +347,7 @@ mod tests {
             Some("tests, docs,comments,moves"),
             &exclude,
             "vscode",
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -322,6 +359,7 @@ mod tests {
                     "hideImports": false,
                     "hideFileMoves": false,
                     "hideMoves": true,
+                    "hideConceptExplained": false,
                     "exclude": ["migrations", "*_pb2.py"],
                 },
                 "editor": VSCODE,
@@ -329,6 +367,22 @@ mod tests {
         );
         assert_eq!(filter_defaults(None, &[]).unwrap(), None);
         assert_eq!(filter_defaults(Some(""), &[]).unwrap(), None);
+        let f = filter_defaults(Some("collateral-explained"), &[])
+            .unwrap()
+            .unwrap();
+        assert_eq!(f.hide_concept_explained, Some(true));
+        assert_eq!(f.hidden, Some(vec![]));
+    }
+
+    #[test]
+    fn concept_defaults_are_normalized() {
+        let d = defaults_from(None, None, None, None, &[], "vscode", Some("  Program ")).unwrap();
+        assert_eq!(value(&d), json!({"editor": VSCODE, "concept": "program"}));
+        let d = defaults_from(None, None, None, None, &[], "vscode", Some("   ")).unwrap();
+        assert_eq!(d.concept, None);
+        assert!(value(&d).get("concept").is_none());
+        assert_eq!(normalize_concept("Foo"), Some("foo".into()));
+        assert_eq!(normalize_concept(""), None);
     }
 
     #[test]
@@ -336,6 +390,10 @@ mod tests {
         assert_eq!(
             filter_defaults(Some("testz,bogus"), &[]).unwrap_err(),
             ConfigError::UnknownHide("bogus, testz".into())
+        );
+        assert_eq!(
+            filter_defaults(Some("collateral,concept-explained"), &[]).unwrap_err(),
+            ConfigError::UnknownHide("collateral, concept-explained".into())
         );
         assert_eq!(
             ConfigError::UnknownHide("bogus".into()).to_string(),

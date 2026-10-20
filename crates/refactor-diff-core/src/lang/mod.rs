@@ -1,5 +1,6 @@
 //! Language analyzers and the language-neutral types they produce.
 
+pub mod json;
 pub mod pyrepr;
 pub mod python;
 pub mod typescript;
@@ -413,6 +414,7 @@ static ANALYZERS: LazyLock<Vec<Box<dyn LanguageAnalyzer>>> = LazyLock::new(|| {
         Box::new(typescript::TypeScriptAnalyzer::typescript()),
         Box::new(typescript::TypeScriptAnalyzer::tsx()),
         Box::new(typescript::TypeScriptAnalyzer::javascript()),
+        Box::new(json::JsonAnalyzer::new()),
     ]
 });
 

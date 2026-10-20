@@ -137,6 +137,16 @@ bar** along the bottom.
 - **Warnings**: places where the refactor may be incomplete or inconsistent (see below).
 
   ![Warnings: references to a renamed function that no longer exists](docs/screenshots/warnings.png)
+- **Concept lens**: on a "remove X" change, the strongest concept (or the one picked under
+  the explorer, or `--concept`) sets apart the changes that only add or remove it. Its patterns
+  head the Patterns tab and its own page (`g o`) by role; units get **concept only** /
+  **differs beyond concept** tags, Needs review lists collateral first, the status bar counts
+  `collateral N`, each file row has a concept/collateral bar, and **Concept-only edits** hides
+  what the concept explains. The inspector's **Cross-references** lists what still refers to
+  what was removed (code issues, not warnings).
+- **Story** (`g y`): Needs review by layer — services, state, hooks, components, mocks, tests,
+  docs/config — with the most collateral first. The status bar's tests chip
+  (`−N tests · M modified · +K new`) lists the deleted test blocks.
 - **Files**: every changed file, with its status, kind and whether it was analyzed.
 - **Commits**: when the range has more than one commit, the list of commits with their
   sizes. **Analyze** one to review it against its parent on its own — a refactor PR often has
@@ -318,8 +328,9 @@ repository.
   matches are highlighted. `/` focuses the box, `Esc` clears it.
 
 To pre-set filters from the command line, use `--hide` (any of `source`, `tests`, `docs`,
-`config`, `other`, `comments`, `imports`, `file-moves`, `moves`) and `--exclude GLOB`
-(repeatable).
+`config`, `other`, `comments`, `imports`, `file-moves`, `moves`, `collateral-explained`) and
+`--exclude GLOB` (repeatable). `--concept NAME` pre-selects a concept for the concept lens
+(e.g. `program`); otherwise one is auto-detected.
 
 ### Keyboard
 
@@ -329,7 +340,7 @@ The review loop is `j` / `k` to move between hunks (or
 occurrences on a pattern page), `l` / `h` to go to the next / previous file, `x` to mark the focused one reviewed (focus moves on to the
 next unreviewed hunk), `e` to show its context and then reveal more, `o` to open it in your
 editor, `]` / `[` to step through the mechanical patterns, `g r` / `g w` / `g f` to jump to
-Needs review / Warnings / Files, `g s` to score the needs-review hunks with Jev, and `/` to
+Needs review / Warnings / Files, `g y` / `g o` for the Story / the concept's patterns, `g s` to score the needs-review hunks with Jev, and `/` to
 search. In the file viewer `n` / `p` move between
 changes, and `z` folds the unchanged blocks (again to unfold).
 

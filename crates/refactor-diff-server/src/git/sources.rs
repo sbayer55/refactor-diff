@@ -364,6 +364,53 @@ impl Git {
             })
             .collect()
     }
+
+    /// Matching lines (at `sha`, or in the working tree when `None`) as `(path, line, text)`,
+    /// with 1-based line numbers. `pattern` is an extended regex when `regex` is set, a fixed
+    /// string otherwise. Binary files are skipped; any git failure gives no matches.
+    pub fn grep_lines(
+        &self,
+        sha: Option<&str>,
+        pattern: &str,
+        regex: bool,
+        pathspec: &[&str],
+    ) -> Vec<(String, u32, String)> {
+        let mut args = vec![
+            "grep",
+            "-n",
+            "-z",
+            "-I",
+            if regex { "-E" } else { "-F" },
+            "-e",
+            pattern,
+        ];
+        if let Some(sha) = sha {
+            args.push(sha);
+        }
+        args.push("--");
+        args.extend(pathspec);
+        let Ok((code, out)) = self.status(&args) else {
+            return vec![];
+        };
+        if code != 0 {
+            return vec![];
+        }
+        let prefix = sha.map(|s| format!("{s}:"));
+        String::from_utf8_lossy(&out)
+            .lines()
+            .filter_map(|row| {
+                let mut parts = row.splitn(3, '\0');
+                let path = parts.next()?;
+                let line = parts.next()?.parse().ok()?;
+                let text = parts.next()?;
+                let path = match &prefix {
+                    Some(p) => path.strip_prefix(p.as_str()).unwrap_or(path),
+                    None => path,
+                };
+                Some((path.to_string(), line, text.to_string()))
+            })
+            .collect()
+    }
 }
 
 /// A path inside the working tree, or `None` when it is missing or escapes the repository.

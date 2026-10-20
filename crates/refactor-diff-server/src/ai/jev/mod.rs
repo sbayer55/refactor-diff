@@ -10,6 +10,7 @@
 //! Scores are a third category of annotation, kept apart from the report's refactor warnings
 //! (`report.warnings`) and from code issues: they never enter the report JSON.
 
+pub mod groups;
 pub mod job;
 pub mod questions;
 pub mod risk;
@@ -425,6 +426,15 @@ mod tests {
         assert_eq!(body["questions"]["blast_radius"]["type"], "score");
         assert_eq!(body["questions"]["touches_auth"]["type"], "boolean");
         assert_eq!(body["questions"]["primary_concern"]["type"], "choice");
+        assert_eq!(body["questions"]["change_role"]["type"], "choice");
+        assert_eq!(
+            body["questions"]["removes_guard_or_validation"]["type"],
+            "boolean"
+        );
+        assert_eq!(body["questions"].as_object().unwrap().len(), 13);
+        let body = c.body(&json!({"occurrences": []}), &questions::group_questions());
+        assert_eq!(body["questions"]["same_edit"]["type"], "boolean");
+        assert_eq!(body["questions"].as_object().unwrap().len(), 1);
     }
 
     #[test]

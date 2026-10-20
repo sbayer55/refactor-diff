@@ -92,9 +92,16 @@ Every golden above is matched exactly by the Rust crates (`cargo test`), except 
   only ever more permissive about *parsing* and never mark a different program as verified.
 - TypeScript string values: a lone-surrogate escape such as `"\ud83d"` keeps its raw text as
   the token value (Rust strings cannot hold a lone surrogate); Python produced `'\ud83d'`.
+- The TypeScript `string` type keyword is a `name` token. Its tree-sitter node kind is
+  `"string"`, like a string literal's, so Python read it as a quoted literal with value
+  `'trin'`, which leaked into pattern keys and labels. No fixture contains it.
 - `settings.json` and review files are written as UTF-8 escaped to ASCII exactly like
   `json.dumps`; the Rust writer produces the same bytes for every sample here.
 - `settings.public.json` carries a `jev` section (Jev risk scoring through Vercel AI Gateway,
   added to the Rust server after the Python package was removed). It is reported by
   `public_view` with its defaults filled in, but is not part of the stored defaults, so
   `settings.sample.json` is still byte-for-byte what the Python tool wrote.
+- `ts_rename_project.report.json`: `package.json` and `tsconfig.json` are `analyzed: true`
+  and `stats.files_analyzed` is 8 (Python: `false` and 6). The Rust port gained a JSON
+  analyzer (`lang/json/`, concept-lens workstream D) after the Python package was removed;
+  both files are unchanged in the fixture, so nothing else in the report moves.

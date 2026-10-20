@@ -328,13 +328,13 @@ fn string_with_impossible_code_point_keeps_raw_text() {
 }
 
 #[test]
-fn predefined_string_type_is_tokenized_as_a_string() {
-    // The `string` keyword's node type is also "string", so the tokenizer treats it as a
-    // quoted literal and strips its first and last characters. Pinned for parity.
+fn predefined_string_type_is_tokenized_as_a_name() {
+    // The `string` keyword's node type is also "string"; the Python tool read it as a quoted
+    // literal (value `'trin'`). A deliberate divergence, see tests/goldens/README.md.
     let an = analyze("a.ts", "let z: string;\n");
     assert_eq!(
         tokens(&an)[3],
-        tok("string", "'trin'", "string", (1, 7), (1, 13))
+        tok("name", "string", "string", (1, 7), (1, 13))
     );
 }
 
@@ -1003,4 +1003,17 @@ fn more_import_shapes() {
             ),
         ]
     );
+}
+
+#[test]
+fn the_string_type_keyword_is_a_name_not_a_literal() {
+    let an = analyze("a.ts", "let a: string = \"x\";\n");
+    let kinds: Vec<(&str, TokenKind)> = an
+        .tokens
+        .iter()
+        .filter(|t| t.kind == TokenKind::Name || t.kind == TokenKind::String)
+        .map(|t| (t.value.as_str(), t.kind))
+        .collect();
+    assert!(kinds.contains(&("string", TokenKind::Name)), "{kinds:?}");
+    assert!(kinds.iter().any(|&(_, k)| k == TokenKind::String));
 }

@@ -10,19 +10,23 @@
 //! * docs       - only comments or docstrings changed
 //! * args       - a call's or def's argument list changed shape (see [`args`])
 //! * import     - an import changed module path or gained/lost a name (see [`imports`])
+//! * list       - whole elements added to or removed from one bracketed list (see [`lists`])
+//! * guard      - an early-return `if` added or deleted as the whole unit (see [`guards`])
 //!
 //! This is a port of `refactor_diff/patterns.py`; keys, labels and highlight ranges must match
 //! it exactly because report ids and groups are derived from them.
 
 mod args;
 mod clusters;
+mod guards;
 mod imports;
+mod lists;
 mod rename;
 
 use std::collections::BTreeMap;
 
 use crate::lang::{FileAnalysis, LanguageAnalyzer, Token, TokenKind};
-use crate::model::{Line, Signature, SignatureKind, Unit};
+use crate::model::{Line, Signature, SignatureKind, Unit, UnitTag};
 use crate::seqmatch::{Opcode, SequenceMatcher, Tag};
 use crate::short_hash;
 
@@ -95,6 +99,8 @@ pub struct Classification {
     pub new_hl: Highlights,
     /// Tokens covered by "replace" signatures; lower = cleaner.
     pub generic_tokens: usize,
+    /// Tags for the unit built from this classification (see [`make_unit`]).
+    pub tags: Vec<UnitTag>,
 }
 
 impl Classification {
@@ -132,6 +138,9 @@ pub fn classify(
         return Classification::single(formatting());
     }
 
+    if let Some(guard) = guards::classify_guard(&a, &b, old_range, new_range) {
+        return guard;
+    }
     let ops: Vec<Opcode> = SequenceMatcher::new(&a_vals, &b_vals)
         .opcodes()
         .into_iter()
@@ -140,11 +149,29 @@ pub fn classify(
     if let Some(imports) = imports::import_classification(&a, &b, &ops, old_range, new_range) {
         return imports;
     }
+    // A comma dropped or added right before a closing bracket is the formatter's reflow, not
+    // an edit of its own.
+    let ops: Vec<Opcode> = ops
+        .into_iter()
+        .filter(|op| !lists::trailing_comma_op(&a, &b, op))
+        .collect();
+    if ops.is_empty() {
+        return Classification::single(formatting());
+    }
     let mut classified: Vec<Option<Signature>> = ops
         .iter()
         .map(|op| rename::classify_op(analyzer, &a, &b, op))
         .collect();
     args::classify_args(&a, &b, &ops, &mut classified, old_anchor, new_anchor);
+    // A call or def whose shape the args classifier recognized keeps its args signature
+    // (keyed on the callee); otherwise a pure list element change, or a reflow that only drops
+    // trailing commas, wins over replace/template.
+    let any_args = classified
+        .iter()
+        .any(|c| c.as_ref().is_some_and(|s| s.kind == SignatureKind::Args));
+    if !any_args && let Some(list) = lists::classify_list(analyzer, &a, &b, old_range, new_range) {
+        return list;
+    }
 
     let mut result = Classification::default();
     for cluster in clusters::clusters(&a, &b, &ops, &classified) {
@@ -207,7 +234,7 @@ pub fn make_unit(
         partner: None,
         verified: false,
         near: vec![],
-        tags: vec![],
+        tags: cls.tags,
     }
 }
 

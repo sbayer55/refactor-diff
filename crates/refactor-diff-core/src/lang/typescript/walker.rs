@@ -156,6 +156,8 @@ impl Walker<'_> {
 fn kind_of(node: Node<'_>, text: &str) -> TokenKind {
     match node.kind() {
         "comment" | "html_comment" | "hash_bang_line" => TokenKind::Comment,
+        // The `string` type keyword is an anonymous node of the same kind as a string literal.
+        "string" if !node.is_named() => TokenKind::Name,
         "string" | "template_string" | "regex" | "string_fragment" | "jsx_text" => {
             TokenKind::String
         }
