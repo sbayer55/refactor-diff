@@ -3528,6 +3528,14 @@ function hideNavPanel() {
 // ---- toast ----
 
 let toastTimer = 0;
+// `path` with a leading home directory shown as `~`.
+function tildePath(path, home) {
+  if (!home || home === "/") return path;
+  const h = home.replace(/\/+$/, "");
+  if (path === h) return "~";
+  return path.startsWith(`${h}/`) ? `~${path.slice(h.length)}` : path;
+}
+
 function toast(message, { busy = false, error = false, sticky = false } = {}) {
   const el = $("#toast");
   el.innerHTML = `${busy ? '<span class="spinner"></span> ' : ""}${esc(message)}`;
@@ -3640,6 +3648,10 @@ function trackTopbarHeight() {
     root.setProperty("--status-h", `${height(status)}px`);
   };
   const ro = new ResizeObserver(update);
+  let fitBarWidth = 0;
+  new ResizeObserver(() => {
+    if (bar.clientWidth !== fitBarWidth) { fitBarWidth = bar.clientWidth; fitTopbar(); }
+  }).observe(bar);
   ro.observe(bar);
   ro.observe(toolbar);
   let fitWidth = 0;
@@ -3719,6 +3731,10 @@ async function init() {
   loadPaneWidths();
   initPaneResizers();
   trackTopbarHeight();
+  $("#copy-repo").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(state.repo); toast("Copied the repository path."); }
+    catch { toast("Couldn't copy to the clipboard.", { error: true }); }
+  });
   narrowQuery.addEventListener("change", () => { if (state.report) rerender(); });
   window.addEventListener("hashchange", route);
   document.addEventListener("change", (e) => {
@@ -3728,7 +3744,7 @@ async function init() {
   let defaults = {};
   try {
     const cfg = await api("/api/config");
-    $("#repo").textContent = cfg.repo;
+    $("#repo-path").textContent = tildePath(cfg.repo, cfg.home);
     $("#repo").title = cfg.repo;
     defaults = cfg.defaults || {};
     state.repo = cfg.repo;
@@ -3983,6 +3999,7 @@ async function loadAiSettings() {
     const data = await api("/api/settings");
     state.ai = data.ai.active;
     state.aiContext = data.ai.context;
+    state.aiSettings = data;
   } catch {
     state.ai = null;
   }
@@ -3996,7 +4013,59 @@ function renderAiChip() {
   chip.innerHTML = ai && ai.configured
     ? `${SPARK} AI <b>${esc(providerLabel(ai))}</b>`
     : `${SPARK} AI <b>not set up</b>`;
-  chip.title = ai && ai.configured ? "AI provider · open settings" : "Set up an AI provider";
+  renderAiPop();
+  fitTopbar();
+}
+
+// The hover panel under the AI chip: the active provider's config and the Ask/Jev options.
+// Keys are never shown, only whether one is set (the server masks them anyway).
+function renderAiPop() {
+  const pop = $("#ai-pop");
+  if (!pop) return;
+  const ai = state.ai, data = state.aiSettings;
+  const row = (k, v) => `<dt>${esc(k)}</dt><dd>${v}</dd>`;
+  const val = (v) => (v === "" || v == null ? `<span class="dim">—</span>` : esc(String(v)));
+  const yes = (on) => (on ? "on" : `<span class="dim">off</span>`);
+  if (!ai) { pop.innerHTML = `<p class="dim">Couldn't load the AI settings.</p>`; return; }
+  const cfg = data?.ai?.providers?.[ai.provider] || {};
+  let rows = row("Provider", val(PROVIDER_NAMES[ai.provider] || ai.provider))
+    + row("Model", val(ai.model))
+    + row("Status", ai.configured ? "ready" : `<span class="warn">needs setup</span>`);
+  if ("host" in cfg) rows += row("Host", val(cfg.host));
+  if ("base_url" in cfg) rows += row("Base URL", cfg.base_url ? val(cfg.base_url) : `<span class="dim">default</span>`);
+  if ("num_ctx" in cfg) rows += row("Context", val(cfg.num_ctx && `${cfg.num_ctx.toLocaleString()} tokens`));
+  if ("api_key" in cfg) rows += row("API key", cfg.api_key ? "set" : `<span class="dim">not set</span>`);
+  const ctx = data?.ai?.context;
+  if (ctx) {
+    const parts = [["function", "function"], ["references", "references"], ["pr", "PR"]]
+      .filter(([k]) => ctx[k]).map(([, label]) => label);
+    rows += row("Ask sends", parts.length ? esc(parts.join(", ")) : `<span class="dim">hunk only</span>`);
+  }
+  const jev = data?.jev;
+  if (jev) {
+    rows += row("Jev risk", jev.configured
+      ? `${esc(jev.model || "")}${jev.auto ? " · auto" : ""}${jev.zero_data_retention ? " · ZDR" : ""}`
+      : `<span class="dim">not set up</span>`);
+  }
+  pop.innerHTML = `<header>${SPARK} AI assistant</header><dl>${rows}</dl>
+    <footer class="dim">Click to open settings</footer>`;
+}
+
+// When the command strip can't fit on one line, collapse the AI chip to its icon and label.
+function fitTopbar() {
+  const bar = $("#topbar");
+  if (!bar) return;
+  bar.classList.remove("ai-compact");
+  if (topbarWrapped(bar)) bar.classList.add("ai-compact");
+}
+
+function topbarWrapped(bar) {
+  const items = [...bar.children, ...bar.querySelectorAll("#source-form > *, #source-form .cmdline > *")]
+    .filter((el) => el.id !== "source-form" && el.tagName !== "DATALIST" && el.offsetParent)
+    .map((el) => el.getBoundingClientRect());
+  if (!items.length) return false;
+  const lineBottom = Math.min(...items.map((r) => r.bottom));
+  return items.some((r) => r.top >= lineBottom - 1);
 }
 
 function answersOf(hunkId) {
@@ -4490,6 +4559,7 @@ async function showSettings() {
     onSaved: (saved) => {
       state.ai = saved.ai.active;
       state.aiContext = saved.ai.context;
+      state.aiSettings = saved;
       if (saved.jev) { state.jev.configured = !!saved.jev.configured; state.jev.auto = !!saved.jev.auto; renderInspector(); }
       renderAiChip();
       toast(state.ai.configured ? `Ask will use ${providerLabel()}.` : "Saved. That provider still needs its details before Ask works.");

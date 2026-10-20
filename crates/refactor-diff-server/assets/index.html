@@ -15,8 +15,14 @@
     <div class="brand">
       <span class="mark" aria-hidden="true">⇄</span>
       <span class="name">refactor-diff</span>
-      <span class="repo" id="repo"></span>
-      <a class="chip ai-chip" id="ai-chip" href="#" title="AI provider · open settings"></a>
+      <span class="repo" id="repo"><span dir="ltr" id="repo-path"></span></span>
+      <button type="button" class="copy-btn" id="copy-repo" title="Copy the repository path" aria-label="Copy the repository path">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><rect x="3.6" y="3.6" width="7.8" height="7.8" rx="1.4"/><path d="M8.4 1.6V1.4A.8.8 0 0 0 7.6.6H1.4a.8.8 0 0 0-.8.8v6.2a.8.8 0 0 0 .8.8h.2"/></svg>
+      </button>
+      <span class="ai-info">
+        <a class="chip ai-chip" id="ai-chip" href="#" aria-describedby="ai-pop"></a>
+        <div class="ai-pop" id="ai-pop" role="tooltip"></div>
+      </span>
     </div>
     <form id="source-form" class="source-form" autocomplete="off">
       <div class="cmdline">
@@ -33,7 +39,7 @@
           <span>head</span>
           <input name="head" list="branch-list" placeholder="HEAD">
         </label>
-        <label class="field wide" data-show="pr">
+        <label class="field short" data-show="pr">
           <span>pr</span>
           <input name="pr" list="pr-list" placeholder="number" inputmode="numeric">
         </label>
