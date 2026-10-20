@@ -1,0 +1,84 @@
+/* The pull request's conversation: inline review threads, the pending review, the
+   #conversation view. Colors come from app.css's tokens, so both themes follow. */
+
+.tabs button[hidden] { display: none; }
+
+/* Threads under a diff line, in the AI answer band's style. */
+.diff tr.thread-row > td {
+  padding: 0; font-family: var(--sans); line-height: normal; white-space: normal; word-break: normal;
+}
+.gh-band {
+  width: 0; min-width: 100%; box-sizing: border-box; padding: 8px 12px; display: flex; flex-direction: column; gap: 8px;
+  background: var(--panel-2); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+}
+
+.gh-thread { border: 1px solid var(--border); border-left: 3px solid var(--kind-rename); border-radius: var(--radius); background: var(--bg); font-size: 12.5px; }
+.gh-thread.resolved { border-left-color: var(--ok-fg); }
+.gh-thread.draft { border-left-color: var(--warn-fg); border-style: dashed; border-left-style: solid; }
+.gh-thread.collapsed .gh-comments { display: none; }
+.gh-thread-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 10px; color: var(--muted); font-size: 12px; }
+.gh-thread:not(.collapsed) .gh-thread-head { border-bottom: 1px solid var(--border); }
+.gh-thread-head .spacer, .gh-meta .spacer { flex: 1; }
+.gh-thread-head .code { color: var(--text); }
+.gh-snippet { color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60ch; }
+.gh-icon { font-size: 11px; }
+
+.gh-comment { padding: 8px 10px; }
+.gh-comment + .gh-comment { border-top: 1px dashed var(--border); }
+.gh-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.gh-meta b { color: var(--text); font-weight: 600; }
+.gh-avatar { width: 18px; height: 18px; border-radius: 50%; background: var(--panel-3); flex: none; }
+.link.muted, a.link.muted { color: var(--muted); text-decoration: none; font-size: 11.5px; }
+.link.muted:hover { color: var(--accent); }
+
+/* GitHub-rendered Markdown, kept compact. */
+.gh-body { color: var(--text); line-height: 1.45; overflow-wrap: anywhere; }
+.gh-body.plain { white-space: pre-wrap; }
+.gh-body > :first-child { margin-top: 0; }
+.gh-body > :last-child { margin-bottom: 0; }
+.gh-body p, .gh-body ul, .gh-body ol, .gh-body pre, .gh-body blockquote, .gh-body table { margin: 0 0 8px; }
+.gh-body h1, .gh-body h2, .gh-body h3, .gh-body h4 { font-size: 13px; margin: 8px 0 6px; }
+.gh-body code { font: 11.5px var(--mono); background: var(--panel-2); padding: 1px 4px; border-radius: 3px; }
+.gh-body pre { background: var(--panel-2); padding: 8px; border-radius: var(--radius); overflow-x: auto; }
+.gh-body pre code { background: none; padding: 0; }
+.gh-body blockquote { border-left: 3px solid var(--border); padding-left: 10px; color: var(--muted); }
+.gh-body img { max-width: 100%; }
+.gh-body a { color: var(--kind-rename); }
+.gh-body table { border-collapse: collapse; }
+.gh-body td, .gh-body th { border: 1px solid var(--border); padding: 3px 6px; }
+.gh-body details summary { cursor: pointer; color: var(--muted); }
+
+.gh-reply { padding: 6px 10px 8px; border-top: 1px solid var(--border); }
+.gh-editor { padding: 0 0 4px; }
+.gh-comment .gh-editor, .gh-reply .gh-editor { padding: 0; }
+.gh-reply:has(.gh-editor) { padding-top: 8px; }
+.gh-editor textarea, .gh-review-form textarea, .gh-new textarea {
+  width: 100%; min-height: 64px; resize: vertical; padding: 8px; box-sizing: border-box; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--bg); color: var(--text); font: 12.5px/1.4 var(--sans);
+}
+.gh-editor textarea:focus, .gh-review-form textarea:focus, .gh-new textarea:focus { outline: 0; border-color: var(--accent); }
+
+/* The #conversation view. */
+.gh-conv { max-width: 920px; display: flex; flex-direction: column; gap: 10px; }
+.gh-conv .page-head { margin-bottom: 4px; }
+.gh-conv .page-head p { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.gh-reviewers { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--muted); }
+.gh-reviewer { display: inline-flex; align-items: center; gap: 6px; }
+.gh-reviewer b { color: var(--text); }
+.gh-h { margin: 12px 0 0; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+.gh-h .meta, .page-head h2 .meta { color: var(--muted); font-weight: normal; }
+.gh-review-form h3 { margin: 0; font-size: 13px; }
+.gh-review-form textarea { min-height: 80px; }
+.gh-radios { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12.5px; }
+.gh-radio { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.gh-radio.disabled { opacity: var(--dim); cursor: not-allowed; }
+.gh-warn { margin: 0; padding: 6px 10px; border-radius: var(--radius); background: var(--warn-bg); color: var(--warn-fg); font-size: 12px; }
+.gh-entry.review { border-left: 3px solid var(--border); }
+.gh-entry .gh-meta { margin-bottom: 0; }
+.gh-loose { display: flex; flex-direction: column; gap: 4px; }
+.gh-loose > .link.code { align-self: flex-start; font-family: var(--mono); }
+.gh-conv > .gh-thread .gh-thread-head .code { font-family: var(--mono); }
+.gh-conv .dim { color: var(--muted); margin: 0; font-size: 12px; }
+.banner.error { border-color: var(--bad-fg); color: var(--bad-fg); }
+#comment-box [data-pending]:empty { display: none; }
+#explorer-tabs button { padding-left: 8px; padding-right: 8px; }

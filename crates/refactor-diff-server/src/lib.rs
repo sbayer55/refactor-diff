@@ -12,6 +12,7 @@ pub mod history;
 pub mod http;
 pub mod nav;
 pub mod paths;
+pub mod pr_draft;
 pub mod prefs;
 pub mod review;
 pub mod settings;

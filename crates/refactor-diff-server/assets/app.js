@@ -28,7 +28,7 @@ const state = {
   commits: [], // commits between base and head (see /api/report/{id}/commits)
   parent: null, // {id, label} of the whole-range report while viewing one of its commits
   postingOk: false, // the user confirmed posting to the PR in this session
-  explorerTab: "files", // "files" | "patterns" | "warnings"
+  explorerTab: "files", // "files" | "patterns" | "warnings" | "comments"
   panes: { explorer: true, inspector: true }, // which side panes are shown (preference)
   analyzeMs: 0, // how long the last analysis took, for the status bar
   pendingScroll: null, // a selector to scroll to once the next route has rendered
@@ -589,6 +589,7 @@ function loadReport(report) {
   clearTimeout(state.jev.timer);
   state.jev = { ...emptyJev(), configured: state.jev.configured, auto: state.jev.auto };
   setReview(report.review);
+  PR.clear();
   applyFilters();
   renderStatus();
   renderFilters();
@@ -598,6 +599,7 @@ function loadReport(report) {
     route();
   }
   loadJev();
+  PR.load();
 }
 
 // A report the server already has (e.g. the whole range, after looking at one commit).
@@ -816,15 +818,31 @@ function openCommentBox(el) {
   box.className = "comment-box";
   box.innerHTML = `<textarea placeholder="Comment on this hunk…" spellcheck="true"></textarea>
     <div class="comment-actions"><span class="meta">Review comment on ${esc(where)} of PR #${prNumber()}</span>
+      <span class="meta" data-pending>${PR.pendingSummary()}</span>
       <span class="spacer"></span>
       <button type="button" class="toggle" data-comment-cancel>Cancel</button>
-      <button type="button" class="primary" data-comment-post>Post</button></div>`;
+      <button type="button" class="toggle" data-comment-post title="Post this comment on its own, right away">Post now</button>
+      <button type="button" class="primary" data-comment-add title="Keep it with your pending review, submitted later (${MOD_KEY}↩)">Add to review</button></div>`;
   el.querySelector(".hunk-bar").after(box);
   const ta = box.querySelector("textarea");
   ta.focus();
   box.querySelector("[data-comment-cancel]").addEventListener("click", () => box.remove());
   ta.addEventListener("keydown", (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") box.querySelector("[data-comment-post]").click();
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") box.querySelector("[data-comment-add]").click();
+  });
+  box.querySelector("[data-comment-add]").addEventListener("click", async () => {
+    const body = ta.value.trim();
+    if (!body) { ta.focus(); return; }
+    const btn = box.querySelector("[data-comment-add]");
+    btn.disabled = true;
+    try {
+      const draft = await PR.addToReview(h.id, body);
+      toast(`Added to your pending review (${plural(draft.comments.length, "comment")}). Submit it from the Conversation view (g d).`);
+      box.remove();
+    } catch (e) {
+      toast(e.message, { error: true });
+      btn.disabled = false;
+    }
   });
   box.querySelector("[data-comment-post]").addEventListener("click", async () => {
     const body = ta.value.trim();
@@ -836,6 +854,7 @@ function openCommentBox(el) {
       const res = await api(`/api/report/${state.report.id}/pr/review-comment`, { body, hunk_id: h.id });
       toast(`Posted: ${res.url}`);
       box.remove();
+      PR.load();
     } catch (e) {
       toast(e.message, { error: true });
       btn.disabled = false;
@@ -866,12 +885,16 @@ function renderExplorer() {
   tabs.querySelector("[data-tab=files]").innerHTML = `Files <span class="n">${v.files.length}</span>`;
   tabs.querySelector("[data-tab=patterns]").innerHTML = `Patterns <span class="n">${mech.length}</span>`;
   tabs.querySelector("[data-tab=warnings]").innerHTML = `Warnings <span class="n">${v.warnings.length}</span>`;
+  const commentsTab = tabs.querySelector("[data-tab=comments]");
+  commentsTab.hidden = !PR.active();
+  commentsTab.innerHTML = `Comments <span class="n">${PR.count()}</span>`;
 
   const here = location.hash;
   const active = (h) => (here === h ? " sel" : "");
   const list = $("#explorer-list");
   list.innerHTML = tab === "patterns" ? explorerPatterns(mech, active)
     : tab === "warnings" ? explorerWarnings(active)
+    : tab === "comments" ? PR.explorer(active)
     : explorerFiles(active);
   for (const cb of list.querySelectorAll("[data-review]")) {
     cb.addEventListener("click", (e) => {
@@ -995,6 +1018,12 @@ function onExplorerClick(e) {
   if (w) {
     e.preventDefault();
     goTo("#warnings", `#warning-${Number(w.dataset.warningIndex)}`);
+    return;
+  }
+  const t = e.target.closest("[data-thread-scroll]");
+  if (t) {
+    e.preventDefault();
+    goTo("#conversation", `#thread-${CSS.escape(t.dataset.threadScroll)}`);
   }
 }
 
@@ -1102,6 +1131,8 @@ function inspectorHunk() {
       ${near.length ? row("≈ almost", near.map(label).join("<br>"), "warn") : ""}
       ${verified ? row("verified", `${verified} of ${units.length} by AST`, "ok") : ""}
       ${hunkIsNew(h) ? row("since last time", "new") : ""}
+      ${PR.threadsForHunk(h.id).length ? row("PR threads", `${PR.threadsForHunk(h.id).filter((t) => !t.resolved).length} open of ${PR.threadsForHunk(h.id).length}`,
+        PR.threadsForHunk(h.id).some((t) => !t.resolved) ? "warn" : "ok") : ""}
       ${done ? row("status", "reviewed", "ok") : ""}
       <div class="actions">
         <button type="button" class="go" data-act="reviewed">${done ? "Unmark" : "Reviewed"} <kbd>x</kbd></button>
@@ -1272,7 +1303,8 @@ function route(opts) {
     state.currentFile = null;
     // The explorer follows the view: patterns while reading a pattern, warnings on the
     // warnings page, files everywhere else.
-    state.explorerTab = view === "group" ? "patterns" : view === "warnings" ? "warnings" : "files";
+    state.explorerTab = view === "group" ? "patterns" : view === "warnings" ? "warnings"
+      : view === "conversation" ? "comments" : "files";
   }
   lastRoute = key;
   setViewTitle(view, id, rest);
@@ -1291,6 +1323,12 @@ function route(opts) {
   if (view === "lib") {
     renderLibraryView(decodeURIComponent(id || ""), Number(rest[0]) || 0);
     renderInspector();
+    return;
+  }
+  if (view === "conversation") {
+    PR.render();
+    renderInspector();
+    if (!opts?.keepScroll && !state.pendingScroll) scrollMainTo(0);
     return;
   }
   if (view === "group") renderGroup(id);
@@ -1326,6 +1364,9 @@ function setViewTitle(view, id, rest) {
     html = `Files ${meta(v.files.length)}`;
   } else if (view === "commits") {
     html = `Commits ${meta(state.commits.length)}`;
+  } else if (view === "conversation") {
+    const pending = PR.state.draft?.comments?.length || 0;
+    html = `Conversation ${meta(`PR #${prNumber() ?? ""}${pending ? ` · ${plural(pending, "pending comment")}` : ""}`)}`;
   } else if (view === "file") {
     const mode = { diff: "full diff", old: "original", new: "new", history: "history" }[rest[0] || "diff"];
     html = `<span class="transform">${esc(decodeURIComponent(id || ""))}</span>${meta(mode)}`;
@@ -2183,7 +2224,7 @@ function watchIssues() {
   let timer = 0;
   new MutationObserver(() => {
     clearTimeout(timer);
-    timer = setTimeout(applyIssues, 30);
+    timer = setTimeout(() => { applyIssues(); PR.applyThreads(); }, 30);
   }).observe($("#content"), { childList: true, subtree: true });
 }
 
@@ -2823,7 +2864,7 @@ const KEY_HELP = [
     ["x", "", "mark the focused hunk reviewed (the pattern, on a pattern page)"],
     ["e", "", "show context for the focused hunk; again to reveal more"],
     ["o", "", "open the focused hunk in your editor"],
-    ["c", "", "comment on the focused hunk (pull requests)"],
+    ["c", "", "comment on the focused hunk: add it to your pending review, or post it now (pull requests)"],
     ["a", "", "ask the AI about the focused hunk"],
     ["g s", "", "score the needs-review hunks with Jev (rank by risk)"],
   ]],
@@ -2833,6 +2874,7 @@ const KEY_HELP = [
     ["}", "{", "next / previous commit of the range"],
     ["g r", "g w", "go to Needs review / Warnings"],
     ["g f", "g c", "go to Files / Commits"],
+    ["g d", "", "go to the pull request's conversation (threads, reviews, submit your review)"],
     ["n", "p", "next / previous change in the file viewer"],
     ["z", "", "fold unchanged blocks; again to unfold all (file viewer, expanded context)"],
     ["i", "", "show / hide inline messages (code issues, pattern tags, AI answers)"],
@@ -3080,6 +3122,17 @@ function paletteCommands() {
     { id: "summary.post", group: "Summary", title: "Post summary to the pull request",
       when: () => hasReport() && Boolean(prNumber()), run: postSummary },
 
+    { id: "pr.conversation", group: "Pull request", title: "Show the conversation", keys: "g d",
+      when: () => hasReport() && Boolean(prNumber()), run: go("#conversation") },
+    { id: "pr.submit", group: "Pull request", title: "Submit review…",
+      when: () => hasReport() && Boolean(prNumber()), run: () => PR.startReview("COMMENT") },
+    { id: "pr.approve", group: "Pull request", title: "Approve pull request…",
+      when: () => hasReport() && Boolean(prNumber()) && !PR.state.conv?.viewer_is_author, run: () => PR.startReview("APPROVE") },
+    { id: "pr.request", group: "Pull request", title: "Request changes…",
+      when: () => hasReport() && Boolean(prNumber()) && !PR.state.conv?.viewer_is_author, run: () => PR.startReview("REQUEST_CHANGES") },
+    { id: "pr.refresh", group: "Pull request", title: "Refresh pull request comments",
+      when: () => hasReport() && Boolean(prNumber()), run: () => PR.load() },
+
     { id: "help.settings", group: "Help", title: "Assistant settings", run: showSettings },
     { id: "help.keys", group: "Help", title: "Keyboard shortcuts", keys: "?", run: () => showHelp(true) },
   ];
@@ -3225,7 +3278,7 @@ function onKey(e) {
   if (pendingG) {
     clearTimeout(pendingG);
     pendingG = 0;
-    const go = { r: "#review", w: "#warnings", f: "#files", c: "#commits" }[e.key];
+    const go = { r: "#review", w: "#warnings", f: "#files", c: "#commits", d: "#conversation" }[e.key];
     if (go) { location.hash = go; e.preventDefault(); }
     else if (e.key === "s") { scoreWithJev(); e.preventDefault(); }
     return;
@@ -3678,6 +3731,7 @@ async function init() {
   $("#explorer-list").addEventListener("click", onExplorerClick);
   $("#inspector").addEventListener("click", onInspectorClick);
   $("#content").addEventListener("click", onContentClick);
+  $("#content").addEventListener("click", (e) => PR.onClick(e)); // pr.js loads after app.js
   $("#content").addEventListener("change", onContentChange);
   $("#content").addEventListener("mousedown", (e) => {
     const el = e.target.closest(".hunk, .occurrence");

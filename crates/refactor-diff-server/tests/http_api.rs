@@ -153,6 +153,8 @@ async fn unknown_report_is_404() {
         "/api/report/nope/review",
         "/api/report/nope/pr/comment",
         "/api/report/nope/pr/review-comment",
+        "/api/report/nope/pr/reply",
+        "/api/report/nope/pr/review",
         "/api/report/nope/navigate",
         "/api/report/nope/ai/menu",
         "/api/report/nope/ai/refs-count",
@@ -307,13 +309,268 @@ async fn comments_need_a_pull_request() {
         .as_str()
         .unwrap()
         .to_string();
-    for route in ["pr/comment", "pr/review-comment"] {
+    for route in [
+        "pr/comment",
+        "pr/review-comment",
+        "pr/reply",
+        "pr/resolve",
+        "pr/comment/edit",
+        "pr/comment/delete",
+        "pr/draft/comment",
+        "pr/draft/comment/delete",
+        "pr/draft/discard",
+        "pr/review",
+    ] {
         let res = server
             .post(&format!("/api/report/{id}/{route}"), json!({"body": "x"}))
             .await;
-        assert_eq!(res.status, StatusCode::BAD_REQUEST);
-        assert_eq!(res.error(), "This report isn't a pull request.");
+        assert_eq!(res.status, StatusCode::BAD_REQUEST, "{route}");
+        assert_eq!(res.error(), "This report isn't a pull request.", "{route}");
     }
+    for route in ["pr/conversation", "pr/draft"] {
+        let res = server.get(&format!("/api/report/{id}/{route}")).await;
+        assert_eq!(res.status, StatusCode::BAD_REQUEST, "{route}");
+    }
+}
+
+/// The first hunk of `path` in a report, and its first added line's number.
+fn hunk_in<'a>(report: &'a Value, path: &str) -> (&'a str, i64) {
+    let hunk = report["hunks"]
+        .as_object()
+        .unwrap()
+        .values()
+        .find(|h| h["path"] == path)
+        .unwrap();
+    let added = hunk["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["type"] == "+")
+        .unwrap();
+    (
+        hunk["id"].as_str().unwrap(),
+        added["new_no"].as_i64().unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn pr_conversation_maps_threads_to_hunks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = rename_repo(tmp.path());
+    let github = FakeGitHub::with_pr(pr_info(&repo));
+    let server = TestServer::with_github(&repo, github.clone());
+    let report = server.analyze(json!({"pr": 7})).await;
+    let id = report["id"].as_str().unwrap();
+    let (hunk_id, line) = hunk_in(&report, "api.py");
+    *github.conversation.lock().unwrap() = serde_json::from_value(json!({
+        "number": 7, "url": "u", "viewer": "me", "viewer_is_author": false, "author": "them",
+        "review_decision": null, "head_sha": "x", "comments": [], "reviews": [],
+        "pending_review": null,
+        "threads": [
+            {"id": "T1", "path": "api.py", "line": line, "original_line": line, "start_line": null,
+             "side": "RIGHT", "outdated": false, "resolved": false, "resolved_by": null,
+             "can_resolve": true, "can_unresolve": false, "can_reply": true, "comments": []},
+            {"id": "T2", "path": "api.py", "line": null, "original_line": 1, "start_line": null,
+             "side": "RIGHT", "outdated": true, "resolved": false, "resolved_by": null,
+             "can_resolve": true, "can_unresolve": false, "can_reply": true, "comments": []},
+            {"id": "T3", "path": "elsewhere.py", "line": 3, "original_line": 3, "start_line": null,
+             "side": "RIGHT", "outdated": false, "resolved": true, "resolved_by": "me",
+             "can_resolve": false, "can_unresolve": true, "can_reply": true, "comments": []}
+        ]
+    }))
+    .unwrap();
+    let res = server
+        .get(&format!("/api/report/{id}/pr/conversation"))
+        .await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.text());
+    let conv = res.json();
+    let hunks: Vec<&Value> = conv["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| &t["hunk_id"])
+        .collect();
+    assert_eq!(hunks, [&json!(hunk_id), &Value::Null, &Value::Null]);
+    assert_eq!(conv["draft"]["comments"], json!([]));
+}
+
+#[tokio::test]
+async fn thread_and_comment_actions_go_through_github() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = rename_repo(tmp.path());
+    let github = FakeGitHub::with_pr(pr_info(&repo));
+    let server = TestServer::with_github(&repo, github.clone());
+    let id = server.analyze(json!({"pr": 7})).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let post = |route: &str, body: Value| {
+        let path = format!("/api/report/{id}/pr/{route}");
+        let server = &server;
+        async move { server.post(&path, body).await }
+    };
+
+    let res = post("reply", json!({"comment_id": 21, "body": " "})).await;
+    assert_eq!(res.status, StatusCode::BAD_REQUEST);
+    let res = post("reply", json!({"comment_id": "21", "body": "done"})).await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.text());
+    assert_eq!(
+        *github.replies.lock().unwrap(),
+        vec![(7, 21, "done".to_string())]
+    );
+
+    let res = post("resolve", json!({"thread_id": "T1", "resolved": true})).await;
+    assert_eq!(res.status, StatusCode::OK);
+    post("resolve", json!({"thread_id": "T1", "resolved": false})).await;
+    assert_eq!(
+        *github.resolved.lock().unwrap(),
+        vec![("T1".to_string(), true), ("T1".to_string(), false)]
+    );
+    assert_eq!(
+        post("resolve", json!({})).await.error(),
+        "A thread is required."
+    );
+
+    let res = post(
+        "comment/edit",
+        json!({"kind": "review", "id": 5, "body": "better"}),
+    )
+    .await;
+    assert_eq!(res.status, StatusCode::OK);
+    let res = post(
+        "comment/edit",
+        json!({"kind": "nope", "id": 5, "body": "x"}),
+    )
+    .await;
+    assert_eq!(res.error(), "kind must be \"issue\" or \"review\".");
+    let res = post("comment/delete", json!({"kind": "issue", "id": 9})).await;
+    assert_eq!(res.status, StatusCode::OK);
+    assert_eq!(github.edits.lock().unwrap().len(), 1);
+    assert_eq!(github.deletes.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn pending_review_is_kept_and_submitted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("state");
+    let repo = rename_repo(tmp.path());
+    let github = FakeGitHub::with_pr(pr_info(&repo));
+    let server = TestServer::with_github_state(&repo, github.clone(), &state);
+    let report = server.analyze(json!({"pr": 7})).await;
+    let id = report["id"].as_str().unwrap();
+    let (hunk_id, _) = hunk_in(&report, "api.py");
+    let url = |route: &str| format!("/api/report/{id}/pr/{route}");
+
+    let res = server
+        .post(
+            &url("draft/comment"),
+            json!({"body": "one", "hunk_id": hunk_id}),
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.text());
+    let draft = res.json();
+    // Same anchor as a single review comment on the hunk.
+    let line = draft["comments"][0]["line"].as_i64().unwrap();
+    let single = server
+        .post(
+            &url("review-comment"),
+            json!({"body": "x", "hunk_id": hunk_id}),
+        )
+        .await
+        .json();
+    assert_eq!(single["line"], line);
+    assert_eq!(draft["comments"][0]["side"], "RIGHT");
+    assert_eq!(draft["head_sha"], report["source"]["head_sha"]);
+    server
+        .post(
+            &url("draft/comment"),
+            json!({"body": "two", "hunk_id": hunk_id}),
+        )
+        .await;
+    let res = server
+        .post(&url("draft/comment"), json!({"id": "d1", "body": "uno"}))
+        .await;
+    assert_eq!(res.json()["comments"][0]["body"], "uno");
+    let res = server
+        .post(&url("draft/comment"), json!({"id": "d9", "body": "x"}))
+        .await;
+    assert_eq!(res.status, StatusCode::NOT_FOUND);
+    let res = server
+        .post(&url("draft/comment/delete"), json!({"id": "d2"}))
+        .await;
+    assert_eq!(res.json()["comments"].as_array().unwrap().len(), 1);
+
+    // Another server on the same state still has the draft.
+    let again = TestServer::with_github_state(&repo, github.clone(), &state);
+    let id2 = again.analyze(json!({"pr": 7})).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let res = again.get(&format!("/api/report/{id2}/pr/draft")).await;
+    assert_eq!(res.json()["comments"][0]["body"], "uno");
+
+    let res = server.post(&url("review"), json!({"event": "MERGE"})).await;
+    assert_eq!(
+        res.error(),
+        "event must be COMMENT, APPROVE or REQUEST_CHANGES."
+    );
+    let res = server
+        .post(&url("review"), json!({"event": "REQUEST_CHANGES"}))
+        .await;
+    assert!(res.error().contains("needs a comment"), "{}", res.error());
+
+    github.conversation.lock().unwrap().viewer_is_author = true;
+    let res = server
+        .post(&url("review"), json!({"event": "APPROVE"}))
+        .await;
+    assert!(
+        res.error().contains("your own pull request"),
+        "{}",
+        res.error()
+    );
+    github.conversation.lock().unwrap().viewer_is_author = false;
+    github.conversation.lock().unwrap().pending_review = Some(Default::default());
+    let res = server
+        .post(&url("review"), json!({"event": "APPROVE"}))
+        .await;
+    assert!(res.error().contains("pending review"), "{}", res.error());
+    github.conversation.lock().unwrap().pending_review = None;
+    assert!(github.reviews.lock().unwrap().is_empty());
+
+    let res = server
+        .post(&url("review"), json!({"event": "APPROVE", "body": "nice"}))
+        .await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.text());
+    assert_eq!(res.json()["comments"], 1);
+    {
+        let reviews = github.reviews.lock().unwrap();
+        let (number, payload) = &reviews[0];
+        assert_eq!(*number, 7);
+        assert_eq!(payload.event, "APPROVE");
+        assert_eq!(payload.body, "nice");
+        assert_eq!(payload.commit_id, report["source"]["head_sha"]);
+        assert_eq!(payload.comments[0].body, "uno");
+        assert_eq!(payload.comments[0].line, line);
+    }
+    let res = server.get(&url("draft")).await;
+    assert_eq!(
+        res.json()["comments"],
+        json!([]),
+        "submitting clears the draft"
+    );
+
+    let res = server
+        .post(&url("review"), json!({"event": "COMMENT"}))
+        .await;
+    assert!(res.error().contains("Nothing to submit"), "{}", res.error());
+    server
+        .post(
+            &url("draft/comment"),
+            json!({"body": "z", "hunk_id": hunk_id}),
+        )
+        .await;
+    let res = server.post(&url("draft/discard"), json!({})).await;
+    assert_eq!(res.json()["comments"], json!([]));
 }
 
 #[tokio::test]

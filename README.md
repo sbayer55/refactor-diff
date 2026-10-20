@@ -150,8 +150,19 @@ bar** along the bottom.
   warnings. `GET /api/report/{id}/summary.md` serves the same text.
 - For a pull request, **Post summary to PR** shows that Markdown in an editable preview and
   posts it as a PR comment, and every hunk in Needs review has a **Comment** button (or `c`)
-  that posts an inline review comment on the hunk's first unexplained line (new side when it
-  has one). Both go through `gh`, as you, after one confirmation per session.
+  for an inline comment on the hunk's first unexplained line (new side when it has one).
+  **Add to review** keeps it in your pending review; **Post now** posts it on its own.
+- The PR's existing review threads show under the lines they are on (in Needs review, the
+  file viewer and expanded context), with **Reply**, **Resolve** / **Unresolve**, and **Edit** /
+  **Delete** on comments GitHub lets you change. Resolved threads start collapsed.
+- The explorer's **Comments** tab lists every thread (open first, outdated ones flagged) and
+  your pending comments. **Conversation** (`g d`) shows the review decision, each reviewer's
+  state, the timeline of comments and reviews, threads outside the analyzed hunks, a box for a
+  new comment, and **Finish your review**: a summary plus Comment, Approve or Request changes,
+  submitted together with your pending comments. The pending review is kept on disk
+  (`~/.config/refactor-diff/pr-drafts/`) until you submit or discard it.
+- Everything goes through `gh`, as you. Posting asks once per session; submitting a review and
+  deleting a comment ask every time.
 
 ### Ask the AI about a change
 
