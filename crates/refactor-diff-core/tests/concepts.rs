@@ -169,7 +169,25 @@ fn literal_variants_merge_into_one_pattern() {
         .collect();
     assert_eq!(fields.len(), 1, "{:#?}", c.patterns);
     let pattern = fields[0];
-    assert_eq!(pattern.group_ids.len(), 2, "p1 and prog-001 groups merge");
+    // The list classifier may already key both literals alike; either way one pattern holds
+    // the "p1" and "prog-001" occurrences.
+    let texts: Vec<String> = pattern
+        .group_ids
+        .iter()
+        .flat_map(|gid| report.group(gid).expect("group").unit_ids.clone())
+        .flat_map(|uid| {
+            report.units[&uid]
+                .old
+                .iter()
+                .map(|l| l.text.clone())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(texts.iter().any(|t| t.contains("\"p1\"")), "{texts:#?}");
+    assert!(
+        texts.iter().any(|t| t.contains("\"prog-001\"")),
+        "{texts:#?}"
+    );
     assert_eq!(pattern.role, ConceptRole::Fixture);
     assert!(pattern.norm_key.contains("<str>"));
     // Strongest pattern first: six fixture units.
