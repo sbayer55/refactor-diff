@@ -3,8 +3,11 @@
 //! The crate is pure: it takes already-loaded file contents and returns a [`Report`]. Git,
 //! HTTP and everything else live in the server crate.
 
+pub mod barrels;
+pub mod cascade;
 pub mod categories;
 pub mod classify;
+pub mod concepts;
 pub mod engine;
 pub mod export;
 pub mod fileview;
@@ -13,16 +16,19 @@ pub mod grouping;
 pub mod hash;
 pub mod hunks;
 pub mod issues;
+pub mod json_links;
 pub mod lang;
 pub mod model;
 pub mod moves;
 pub mod seqmatch;
+pub mod substitution;
+pub mod testblocks;
 pub mod text;
 pub mod verify;
 pub mod warnings;
 
 pub use categories::{Category, categorize};
-pub use engine::{HeadFiles, NoHeadFiles, analyze};
+pub use engine::{AnalyzeOptions, HeadFiles, NoHeadFiles, analyze, analyze_with};
 pub use export::{ReviewMarks, anchor_line, markdown_summary};
 pub use fileview::{FileDiff, FileRow, file_diff};
 pub use folds::{Fold, find_folds};
