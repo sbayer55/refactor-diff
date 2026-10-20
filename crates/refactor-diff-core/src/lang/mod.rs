@@ -413,6 +413,7 @@ static ANALYZERS: LazyLock<Vec<Box<dyn LanguageAnalyzer>>> = LazyLock::new(|| {
         Box::new(typescript::TypeScriptAnalyzer::typescript()),
         Box::new(typescript::TypeScriptAnalyzer::tsx()),
         Box::new(typescript::TypeScriptAnalyzer::javascript()),
+        // Workstream D: Box::new(json::JsonAnalyzer::new()),
     ]
 });
 

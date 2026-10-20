@@ -22,6 +22,7 @@ use crate::short_hash;
 use crate::text::split_lines;
 use crate::verify::verify_units;
 use crate::warnings::{find_leftovers, inconsistent_renames, near_misses, still_defined};
+use crate::{barrels, cascade, concepts, json_links, substitution, testblocks};
 
 /// What the engine needs to know about the head revision beyond the changed files: used to
 /// find references left behind by a renamed definition.
@@ -45,13 +46,31 @@ impl HeadFiles for NoHeadFiles {
     }
 }
 
+/// Optional analysis inputs beyond the diff itself.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AnalyzeOptions {
+    /// A concept stem to compute the overlay for, on top of the auto-detected ones.
+    pub concept: Option<String>,
+}
+
 /// Analyze a change set. `source` describes what was compared; `min_count` is how many times
 /// an edit must repeat to count as mechanical.
 pub fn analyze(
+    source: Source,
+    changes: Vec<FileChange>,
+    min_count: usize,
+    head: &dyn HeadFiles,
+) -> Report {
+    analyze_with(source, changes, min_count, head, &AnalyzeOptions::default())
+}
+
+/// [`analyze`] with [`AnalyzeOptions`]. The report id only changes when an option is set.
+pub fn analyze_with(
     mut source: Source,
     mut changes: Vec<FileChange>,
     min_count: usize,
     head: &dyn HeadFiles,
+    opts: &AnalyzeOptions,
 ) -> Report {
     source.min_count = min_count;
     changes.sort_by(|a, b| a.path.cmp(&b.path));
@@ -109,6 +128,12 @@ pub fn analyze(
     tag_imports(&mut units, &analyses);
     tag_moves(&mut units, &moves);
     link_file_renames(&mut units, &files);
+    // Cross-unit re-signing passes; each rewrites signatures/tags before grouping.
+    substitution::mark(&mut units, &analyses);
+    cascade::link(&mut units, &analyses);
+    testblocks::tag(&mut units, &analyses);
+    barrels::link(&mut units, &files, &analyses);
+    json_links::link(&mut units, &files, &analyses);
     let groups = build_groups(&mut units, min_count);
     verify_units(&mut units, &analyses, &groups);
     for f in &mut files {
@@ -130,11 +155,12 @@ pub fn analyze(
         .filter(|h| h.unit_ids.iter().any(|uid| !units[uid].explained))
         .map(|h| h.id.clone())
         .collect();
-    let id = short_hash!(
-        source.base_sha,
-        source.head_sha.as_deref().unwrap_or("worktree"),
-        min_count
-    );
+    let concepts = concepts::detect(&units, &groups, &files, &analyses, opts);
+    let head_id = source.head_sha.as_deref().unwrap_or("worktree");
+    let id = match &opts.concept {
+        None => short_hash!(source.base_sha, head_id, min_count),
+        Some(c) => short_hash!(source.base_sha, head_id, min_count, c),
+    };
     Report {
         id,
         source,
@@ -144,6 +170,7 @@ pub fn analyze(
         hunks,
         residual_hunk_ids: residual,
         warnings,
+        concepts,
         texts,
     }
 }
