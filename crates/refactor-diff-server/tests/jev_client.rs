@@ -76,7 +76,9 @@ async fn evaluate_posts_the_documented_request() {
     assert_eq!(body["state"]["path"], "api/auth.py");
     assert_eq!(body["state"]["hunk"], "+ x");
     let q = body["questions"].as_object().unwrap();
-    assert_eq!(q.len(), 10);
+    assert_eq!(q.len(), 13);
+    assert_eq!(q["change_role"]["type"], "choice");
+    assert_eq!(q["behavior_beyond_stated_change"]["type"], "boolean");
     assert_eq!(q["touches_auth"]["type"], "boolean");
     assert_eq!(q["blast_radius"]["type"], "score");
     assert_eq!(q["primary_concern"]["type"], "choice");
