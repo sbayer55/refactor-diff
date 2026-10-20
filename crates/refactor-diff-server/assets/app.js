@@ -687,22 +687,18 @@ function showError(msg) {
 
 // ---------- status bar ----------
 
-// The status bar: the report's numbers in one line at the bottom of the window.
+// The status bar: the report's numbers in one line at the bottom of the window. The stats
+// share a group: hovering it shows all of them, right-clicking picks which stay in the bar.
 function renderStatus() {
   const v = state.view;
   const { stats } = v;
   const el = $("#status");
   el.hidden = false;
-  const ms = state.analyzeMs;
-  const took = ms ? `analyzed in ${ms >= 1000 ? (ms / 1000).toFixed(1) + "s" : Math.round(ms) + "ms"}` : "report loaded";
-  const left = stats.hunks - stats.hunks_done;
+  const pinned = pinnedStats();
+  const items = STATUS_STATS.filter((s) => pinned.has(s.id)).map((s) => s.html(v)).join("");
   el.innerHTML = `
-    <span><span class="dot"></span>${took}</span>
-    <span>${stats.collapsed_pct}% collapsed</span>
-    ${stats.verified_units ? `<span class="ok" title="${esc(VERIFIED_TITLE)}">${stats.verified_units} ✓ verified</span>` : ""}
-    <span class="${stats.hunks && !left ? "ok" : ""}">${stats.hunks_done}/${stats.hunks} hunks</span>
-    <span>${plural(stats.residual_units, "change")} to review</span>
-    <span class="${v.warnings.length ? "warn" : ""}">${plural(v.warnings.length, "warning")}</span>
+    <span class="stats" id="status-stats" tabindex="0" aria-describedby="stats-pop"
+      aria-haspopup="menu"><span class="stats-label">stats</span>${items}</span>
     ${jevStatusHtml()}
     <span class="spacer"></span>
     <span>${plural(stats.mechanical_groups, "pattern")} · ${stats.files_analyzed}/${stats.files_changed} files</span>
@@ -710,6 +706,134 @@ function renderStatus() {
     <button type="button" class="link" id="status-help"><kbd>?</kbd> help</button>`;
   $("#status-help").addEventListener("click", () => showHelp(true));
   $("#status-jev")?.addEventListener("click", () => scoreWithJev());
+  const group = $("#status-stats");
+  group.addEventListener("mouseenter", () => showStatsPop(group));
+  group.addEventListener("mouseleave", hideStatsPop);
+  group.addEventListener("focus", () => showStatsPop(group));
+  group.addEventListener("blur", hideStatsPop);
+  group.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    const r = group.getBoundingClientRect();
+    // The context-menu key fires with no pointer position; open above the group then.
+    openStatsMenu(e.clientX || r.left, e.clientY || r.top);
+  });
+  if (!$("#stats-pop").hidden) renderStatsPop();
+}
+
+function analyzeTook() {
+  const ms = state.analyzeMs;
+  return ms ? `analyzed in ${ms >= 1000 ? (ms / 1000).toFixed(1) + "s" : Math.round(ms) + "ms"}` : "report loaded";
+}
+
+// The stats the status bar can show inline, in bar order. `optional` ones render nothing
+// when there's nothing to say (no verified units).
+const STATUS_STATS = [
+  { id: "time", label: "Analysis time", html: () => `<span><span class="dot"></span>${analyzeTook()}</span>` },
+  { id: "collapsed", label: "Lines collapsed", html: (v) => `<span>${v.stats.collapsed_pct}% collapsed</span>` },
+  { id: "verified", label: "Verified units", html: (v) => v.stats.verified_units
+    ? `<span class="ok">${v.stats.verified_units} ✓ verified</span>` : "" },
+  { id: "hunks", label: "Hunks reviewed", html: (v) => {
+    const s = v.stats;
+    return `<span class="${s.hunks && s.hunks === s.hunks_done ? "ok" : ""}">${s.hunks_done}/${s.hunks} hunks</span>`;
+  } },
+  { id: "changes", label: "Changes to review", html: (v) => `<span>${plural(v.stats.residual_units, "change")} to review</span>` },
+  { id: "warnings", label: "Warnings", html: (v) =>
+    `<span class="${v.warnings.length ? "warn" : ""}">${plural(v.warnings.length, "warning")}</span>` },
+];
+const STATS_PREF = "refactor-diff:status-stats";
+
+function pinnedStats() {
+  try {
+    const saved = JSON.parse(prefGet(STATS_PREF));
+    if (Array.isArray(saved)) return new Set(saved);
+  } catch {}
+  return new Set(STATUS_STATS.map((s) => s.id));
+}
+
+function setStatPinned(id, on) {
+  const pinned = pinnedStats();
+  if (on) pinned.add(id); else pinned.delete(id);
+  prefSet(STATS_PREF, JSON.stringify(STATUS_STATS.map((s) => s.id).filter((x) => pinned.has(x))));
+  renderStatus();
+}
+
+// The floating panel over the stats group: every number, pinned or not, with context.
+function renderStatsPop() {
+  const v = state.view, s = v.stats, r = state.report;
+  const pct = (a, b) => (b ? Math.round((100 * a) / b) : 0);
+  const row = (k, val) => `<dt>${esc(k)}</dt><dd>${val}</dd>`;
+  const dim = (t) => `<span class="dim">${t}</span>`;
+  const left = s.hunks - s.hunks_done;
+  const allWarnings = r.warnings.length;
+  $("#stats-pop").innerHTML = `<header>Stats</header><dl>
+    ${row("Analysis", esc(analyzeTook()) + (r.source.label ? ` ${dim(`· ${esc(r.source.label)}`)}` : ""))}
+    ${row("Collapsed", `${s.collapsed_pct}% ${dim(`· ${s.units - s.residual_units} of ${plural(s.units, "changed line")} explained by patterns`)}`)}
+    ${row("Verified", s.verified_units ? `<span class="ok">${s.verified_units}</span> ${dim("units checked by the analyzers")}` : dim("none"))}
+    ${row("Hunks", `${s.hunks_done} / ${s.hunks} reviewed ${dim(`· ${left} left`)}<div class="meter"><div style="width:${pct(s.hunks_done, s.hunks)}%"></div></div>`)}
+    ${row("To review", `${plural(s.residual_units, "change")} ${dim("not covered by a pattern")}`)}
+    ${row("Warnings", `<span class="${v.warnings.length ? "warn" : ""}">${v.warnings.length}</span>${
+      allWarnings !== v.warnings.length ? ` ${dim(`· ${allWarnings} in the report`)}` : ""}`)}
+    ${row("Patterns", `${s.mechanical_groups} mechanical ${dim(`· ${v.groups.length} total · ${plural(s.moves, "move")}`)}`)}
+    ${row("Files", `${s.files_analyzed} / ${s.files_changed} analyzed`)}
+    ${v.hiddenUnits ? row("Filtered out", `${plural(v.hiddenUnits, "change")} ${dim("hidden by filters")}`) : ""}
+  </dl><footer class="dim">Right-click to choose which stats stay in the bar</footer>`;
+}
+
+function showStatsPop(group) {
+  if (!$("#stats-menu").hidden) return;
+  const pop = $("#stats-pop");
+  renderStatsPop();
+  pop.hidden = false;
+  const r = group.getBoundingClientRect();
+  pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 8))}px`;
+  pop.style.bottom = `${window.innerHeight - r.top + 6}px`;
+}
+
+function hideStatsPop() {
+  $("#stats-pop").hidden = true;
+}
+
+function openStatsMenu(x, y) {
+  hideStatsPop();
+  const menu = $("#stats-menu");
+  const pinned = pinnedStats();
+  menu.innerHTML = `<div class="stats-menu-head">Show in status bar</div>` + STATUS_STATS.map((s) =>
+    `<button type="button" role="menuitemcheckbox" data-stat="${s.id}" aria-checked="${pinned.has(s.id)}">
+      <span class="check" aria-hidden="true">${pinned.has(s.id) ? "✓" : ""}</span>${esc(s.label)}</button>`).join("");
+  menu.hidden = false;
+  menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - menu.offsetWidth - 8))}px`;
+  menu.style.top = `${Math.max(8, y - menu.offsetHeight - 4)}px`;
+  menu.querySelector("[data-stat]").focus();
+}
+
+function closeStatsMenu() {
+  const menu = $("#stats-menu");
+  if (menu.hidden) return;
+  menu.hidden = true;
+  $("#status-stats")?.focus({ preventScroll: true });
+}
+
+function initStatsMenu() {
+  const menu = $("#stats-menu");
+  menu.addEventListener("click", (e) => {
+    const item = e.target.closest("[data-stat]");
+    if (!item) return;
+    const on = item.getAttribute("aria-checked") !== "true";
+    item.setAttribute("aria-checked", on);
+    item.querySelector(".check").textContent = on ? "✓" : "";
+    setStatPinned(item.dataset.stat, on);
+  });
+  menu.addEventListener("keydown", (e) => {
+    const items = [...menu.querySelectorAll("[data-stat]")];
+    const i = items.indexOf(document.activeElement);
+    if (e.key === "Escape" || e.key === "Tab") { e.preventDefault(); e.stopPropagation(); closeStatsMenu(); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); items[(i + 1) % items.length].focus(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+  });
+  document.addEventListener("mousedown", (e) => {
+    if (!menu.hidden && !menu.contains(e.target)) menu.hidden = true;
+  });
+  window.addEventListener("blur", () => { menu.hidden = true; });
 }
 
 // ---------- outputs: Markdown summary and PR comments ----------
@@ -3744,6 +3868,7 @@ async function init() {
   loadPaneWidths();
   initPaneResizers();
   trackTopbarHeight();
+  initStatsMenu();
   $("#copy-repo").addEventListener("click", async () => {
     try { await navigator.clipboard.writeText(state.repo); toast("Copied the repository path."); }
     catch { toast("Couldn't copy to the clipboard.", { error: true }); }

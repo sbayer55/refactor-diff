@@ -649,6 +649,31 @@ table.files td .meta { color: var(--muted); font-size: 11px; }
 .status .dot { width: 6px; height: 6px; border-radius: 3px; background: var(--ok-fg); display: inline-block; margin-right: 5px; }
 .status .link { font: 11px var(--mono); color: var(--muted); }
 .status .link:hover { color: var(--accent); }
+.status .stats { display: inline-flex; align-items: center; gap: 14px; align-self: stretch; padding: 0 8px; margin-left: -8px; cursor: default; outline: 0; }
+.status .stats:hover, .status .stats:focus-visible { background: var(--panel-2); color: var(--text); }
+.status .stats-label { color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; font-size: 10px; }
+.stats-pop, .stats-menu {
+  position: fixed; z-index: 30; background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: var(--shadow); font: 12px var(--sans); color: var(--text);
+}
+.stats-pop[hidden], .stats-menu[hidden] { display: none; }
+.stats-pop { width: max-content; max-width: min(460px, calc(100vw - 16px)); padding: 10px 12px; pointer-events: none; }
+.stats-pop header { margin-bottom: 8px; font-weight: 600; }
+.stats-pop dl { display: grid; grid-template-columns: max-content 1fr; gap: 5px 14px; margin: 0; }
+.stats-pop dt { color: var(--muted); }
+.stats-pop dd { margin: 0; font: 11.5px var(--mono); }
+.stats-pop .dim { color: var(--muted); }
+.stats-pop .ok { color: var(--ok-fg); } .stats-pop .warn { color: var(--warn-fg); }
+.stats-pop .meter { margin-top: 4px; }
+.stats-pop footer { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border); font-size: 11px; }
+.stats-menu { display: flex; flex-direction: column; min-width: 200px; padding: 4px; }
+.stats-menu-head { padding: 4px 8px 6px; color: var(--muted); font-size: 11px; }
+.stats-menu button {
+  display: flex; align-items: center; gap: 8px; padding: 5px 8px; border: 0; border-radius: 3px;
+  background: none; color: var(--text); font: 12px var(--sans); text-align: left; cursor: pointer;
+}
+.stats-menu button:hover, .stats-menu button:focus-visible { background: var(--panel-2); outline: 0; }
+.stats-menu .check { width: 12px; color: var(--accent); font-weight: 700; }
 
 /* ---- code navigation ---- */
 body.nav-armed [data-l] { cursor: pointer; }
