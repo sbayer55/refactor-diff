@@ -17,6 +17,11 @@ use crate::seqmatch::Opcode;
 /// unordered set. Here `added` is kept sorted by `(alias, module, name)`, so the candidate
 /// with the smallest module (for a module change) or name (for a rename) wins, and ties in
 /// the removed order are broken by name too.
+///
+/// A one-sided unit that changes only part of a multi-line statement (deleting `b,` from
+/// `import {\n a,\n b,\n} from "m"`) overlaps the whole statement; only the bindings it
+/// actually spells out count as removed or added, so untouched members (`a`) and members
+/// changed by another unit of the same statement are left alone.
 pub(super) fn import_classification(
     a: &Side<'_>,
     b: &Side<'_>,
@@ -38,6 +43,14 @@ pub(super) fn import_classification(
         .copied()
         .filter(|x| !old_b.contains(x))
         .collect();
+    // One-sided units only: a two-sided edit of one line (say the `from a` of a multi-line
+    // `from a import (...)`) can change every binding of the statement.
+    if new_range.is_none() && spills_over(&old_sites, old_range) {
+        removed.retain(|x| spells_out(a, x));
+    }
+    if old_range.is_none() && spills_over(&new_sites, new_range) {
+        added.retain(|x| spells_out(b, x));
+    }
     if removed.is_empty() && added.is_empty() {
         return None;
     }
@@ -206,6 +219,22 @@ fn import_sites<'a>(side: &Side<'a>, rng: LineRange) -> Option<Vec<&'a ImportSit
         }
     }
     Some(sites)
+}
+
+/// Whether a statement in `sites` reaches outside `rng`: the unit changes only part of it.
+fn spills_over(sites: &[&ImportSite], rng: LineRange) -> bool {
+    let Some((first, last)) = rng else {
+        return false;
+    };
+    sites.iter().any(|s| s.start < first || s.end > last)
+}
+
+/// Whether the side's own tokens name `binding` (its imported or its local name).
+fn spells_out(side: &Side<'_>, binding: &Binding) -> bool {
+    side.tokens().iter().any(|t| {
+        t.kind == TokenKind::Name
+            && (t.value == binding.alias || binding.name.as_deref() == Some(t.value.as_str()))
+    })
 }
 
 /// The display form of a binding: its own `text`, or Python import syntax.

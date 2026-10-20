@@ -5,7 +5,7 @@ use std::collections::{BTreeSet, HashSet};
 use indexmap::IndexMap;
 
 use crate::hash::short_hash;
-use crate::model::{Group, Unit};
+use crate::model::{Group, Signature, Unit};
 
 /// One group per signature key. A group is *mechanical* when it repeats at least `min_count`
 /// times (formatting always is); a unit is *explained* when every signature it carries belongs
@@ -23,6 +23,27 @@ pub fn build_groups(units: &mut IndexMap<String, Unit>, min_count: usize) -> Vec
     for (key, members) in &by_key {
         let (first_u, first_s) = members[0];
         let first = &units[first_u].signatures[first_s];
+        // The most common (old, new) among the members speaks for the group; ties go to the
+        // first seen.
+        let mut variants: IndexMap<(&str, &str), (usize, &Signature)> = IndexMap::new();
+        for &(ui, si) in members {
+            let sig = &units[ui].signatures[si];
+            variants
+                .entry((sig.old.as_str(), sig.new.as_str()))
+                .or_insert((0, sig))
+                .0 += 1;
+        }
+        let mut rep = first;
+        let mut best = 0;
+        for &(count, sig) in variants.values() {
+            if count > best {
+                (best, rep) = (count, sig);
+            }
+        }
+        let mut label = rep.label();
+        if variants.len() > 1 {
+            label = format!("{label} (+{} variants)", variants.len() - 1);
+        }
         let mut unit_ids: Vec<String> = Vec::new();
         let mut seen = HashSet::new();
         let mut files = BTreeSet::new();
@@ -46,10 +67,10 @@ pub fn build_groups(units: &mut IndexMap<String, Unit>, min_count: usize) -> Vec
         groups.push(Group {
             id: short_hash([key]),
             key: key.to_string(),
-            kind: first.kind,
-            label: first.label(),
-            old: first.old.clone(),
-            new: first.new.clone(),
+            kind: rep.kind,
+            label,
+            old: rep.old.clone(),
+            new: rep.new.clone(),
             unit_ids,
             files: files.into_iter().collect(),
             details: details.into_iter().collect(),
