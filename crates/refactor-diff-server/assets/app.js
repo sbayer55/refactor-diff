@@ -915,8 +915,16 @@ function explorerFiles(active) {
     if (!state.reviewedHunks.has(h.fingerprint)) e.left++;
     residual.set(h.path, e);
   }
+  // Files whose hunks are all reviewed can be hidden, leaving only what is still to read.
+  const hideReviewed = prefGet("refactor-diff:hide-reviewed") === "on";
+  const isReviewed = (f) => { const res = residual.get(f.path); return Boolean(res) && !res.left && v.fileVisible(f.path); };
+  const nReviewed = r.files.filter(isReviewed).length;
+  html += `<div class="hd"><span>${hideReviewed && nReviewed ? `${nReviewed} reviewed hidden` : "files"}</span>
+    <button type="button" class="link" data-hide-reviewed aria-pressed="${hideReviewed}"
+      title="${hideReviewed ? "Show" : "Hide"} files whose hunks are all reviewed">${hideReviewed ? "Show" : "Hide"} reviewed</button></div>`;
   let dir = null;
   for (const f of r.files) {
+    if (hideReviewed && isReviewed(f)) continue;
     const i = f.path.lastIndexOf("/");
     const d = i >= 0 ? f.path.slice(0, i + 1) : "";
     if (d !== dir) { dir = d; html += `<div class="dir">${esc(d || "./")}</div>`; }
@@ -985,6 +993,11 @@ function markExplorerFile() {
 }
 
 function onExplorerClick(e) {
+  if (e.target.closest("[data-hide-reviewed]")) {
+    prefSet("refactor-diff:hide-reviewed", prefGet("refactor-diff:hide-reviewed") === "on" ? "off" : "on");
+    renderExplorer();
+    return;
+  }
   const file = e.target.closest("[data-scroll-file]");
   if (file) {
     e.preventDefault();
