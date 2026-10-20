@@ -103,6 +103,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/api/report/{report_id}/issues",
             get(routes::files::get_issues),
         )
+        .route("/api/report/{report_id}/xref", get(routes::xref::get_xref))
         .route(
             "/api/report/{report_id}/folds",
             get(routes::files::get_folds),

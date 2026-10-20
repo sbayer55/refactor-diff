@@ -11,6 +11,7 @@ pub mod pr;
 pub mod review;
 pub mod settings;
 pub mod summary;
+pub mod xref;
 
 use refactor_diff_core::Report;
 use serde_json::Value;
