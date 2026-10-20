@@ -1,6 +1,7 @@
 //! `POST /api/report/{id}/jev/score` and `GET /api/report/{id}/jev`: risk scores for the
-//! needs-review hunks, computed by Jev through Vercel AI Gateway. Separate from the report
-//! JSON (pinned by goldens), from the refactor warnings and from code issues.
+//! needs-review hunks and same-edit checks for the larger mechanical groups, computed by Jev
+//! through Vercel AI Gateway. Separate from the report JSON (pinned by goldens), from the
+//! refactor warnings and from code issues.
 
 use std::sync::Arc;
 
@@ -8,8 +9,8 @@ use axum::Json;
 use axum::extract::{Path, State};
 use serde_json::{Value, json};
 
-use crate::ai::jev::job;
-use crate::ai::jev::questions::QUESTION_SET_VERSION;
+use crate::ai::jev::questions::{GROUP_QUESTION_SET_VERSION, QUESTION_SET_VERSION};
+use crate::ai::jev::{groups, job};
 use crate::app::{AppState, run_blocking};
 use crate::http::error::ApiError;
 use crate::http::extract::{ApiJson, truthy};
@@ -23,12 +24,12 @@ pub async fn score(
 ) -> Result<Json<Value>, ApiError> {
     let report = state.report(&report_id)?;
     let force = truthy(&body["force"]);
-    let job = job::start(state.clone(), report, force)?;
-    Ok(Json(decorate(&state, job.snapshot())))
+    let job = job::start(state.clone(), report.clone(), force)?;
+    Ok(Json(decorate(&state, job.snapshot(&report))))
 }
 
 /// The job's status and the scores so far; with no job, the cached scores for the report's
-/// needs-review hunks.
+/// needs-review hunks and groups.
 pub async fn get(
     State(state): State<Arc<AppState>>,
     Path(report_id): Path<String>,
@@ -41,10 +42,11 @@ pub async fn get(
         .get(&report.id)
         .cloned();
     let snapshot = match job {
-        Some(job) => job.snapshot(),
+        Some(job) => job.snapshot(&report),
         None => {
             let st = state.clone();
-            let cached = run_blocking(move || st.jev_store.load()).await?;
+            let (cached, cached_groups) =
+                run_blocking(move || (st.jev_store.load(), st.jev_store.load_groups())).await?;
             let hunks: serde_json::Map<String, Value> = report
                 .residual_hunk_ids
                 .iter()
@@ -56,7 +58,14 @@ pub async fn get(
                     Some((id.clone(), serde_json::to_value(r).ok()?))
                 })
                 .collect();
-            json!({"status": {"state": "idle"}, "hunks": hunks, "failures": []})
+            let checks = groups::from_cache(&report, &cached_groups);
+            json!({
+                "status": {"state": "idle"},
+                "hunks": hunks,
+                "groups": groups::snapshot(&checks),
+                "jev_verified_units": groups::verified_units(&report, &checks),
+                "failures": [],
+            })
         }
     };
     Ok(Json(decorate(&state, snapshot)))
@@ -67,5 +76,6 @@ fn decorate(state: &AppState, mut snapshot: Value) -> Value {
     snapshot["configured"] = Value::Bool(jev.configured());
     snapshot["auto"] = Value::Bool(jev.auto);
     snapshot["question_set"] = Value::String(QUESTION_SET_VERSION.into());
+    snapshot["group_question_set"] = Value::String(GROUP_QUESTION_SET_VERSION.into());
     snapshot
 }
