@@ -317,7 +317,9 @@ function applyFilters() {
   const units = new Set(Object.values(r.units).filter(unitVisible).map((u) => u.id));
   const groups = r.groups
     .map((g) => ({ ...g, visible: g.unit_ids.filter((id) => units.has(id)) }))
-    .filter((g) => g.visible.length > 0);
+    .filter((g) => g.visible.length > 0)
+    // Most matches first, recounted under the current filters (stable, so ties keep report order).
+    .sort((a, b) => b.visible.length - a.visible.length);
   const residualHunks = r.residual_hunk_ids.filter((hid) =>
     r.hunks[hid].unit_ids.some((id) => units.has(id) && !r.units[id].explained));
   const warnings = [];
