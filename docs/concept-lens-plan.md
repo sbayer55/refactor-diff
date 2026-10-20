@@ -25,7 +25,7 @@ review down to that collateral.
 | `list` | elements added to or removed from one bracketed list, plus the formatter reflow | by count |
 | `guard` | an early `return`/`throw` guard removed or added | never |
 | `cascade` | an import or local dropped because its last use was dropped | always |
-| `test` | a whole `it`/`test`/`describe` block deleted or added | by count |
+| `test` | a whole `it`/`test`/`describe` block deleted (additions stay for review) | by count |
 | `i18n` | an i18n key plus the `t("key")` calls that used it | by count |
 | `fixture` | the same JSON/object field path dropped across records | always |
 
