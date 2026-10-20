@@ -101,3 +101,7 @@ Every golden above is matched exactly by the Rust crates (`cargo test`), except 
   added to the Rust server after the Python package was removed). It is reported by
   `public_view` with its defaults filled in, but is not part of the stored defaults, so
   `settings.sample.json` is still byte-for-byte what the Python tool wrote.
+- `ts_rename_project.report.json`: `package.json` and `tsconfig.json` are `analyzed: true`
+  and `stats.files_analyzed` is 8 (Python: `false` and 6). The Rust port gained a JSON
+  analyzer (`lang/json/`, concept-lens workstream D) after the Python package was removed;
+  both files are unchanged in the fixture, so nothing else in the report moves.

@@ -54,7 +54,7 @@
     },
     {
       "additions": 0,
-      "analyzed": false,
+      "analyzed": true,
       "category": "config",
       "deletions": 0,
       "old_path": null,
@@ -80,7 +80,7 @@
     },
     {
       "additions": 0,
-      "analyzed": false,
+      "analyzed": true,
       "category": "config",
       "deletions": 0,
       "old_path": null,
@@ -882,7 +882,7 @@
   "stats": {
     "collapsed_pct": 94,
     "explained_units": 17,
-    "files_analyzed": 6,
+    "files_analyzed": 8,
     "files_changed": 8,
     "mechanical_groups": 3,
     "moves": 0,
