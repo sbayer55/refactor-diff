@@ -203,23 +203,22 @@ async fn reports_what_the_removal_left_behind() {
 }
 
 #[tokio::test]
-async fn without_a_concept_skips_dangling_names() {
+async fn without_a_concept_param_the_detected_concept_is_used() {
     let tmp = tempfile::tempdir().unwrap();
     let (repo, base) = xref_repo(tmp.path());
     let server = TestServer::new(&repo);
-    let id = analyzed(&server, &base).await["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let report = analyzed(&server, &base).await;
+    assert_eq!(report["concepts"][0]["stem"], "program");
+    let id = report["id"].as_str().unwrap();
     let data = server.get(&format!("/api/report/{id}/xref")).await.json();
-    assert_eq!(data["concept"], Value::Null);
+    assert_eq!(data["concept"], "program");
     let codes: Vec<&str> = data["checks"]
         .as_array()
         .unwrap()
         .iter()
         .map(|c| c["code"].as_str().unwrap())
         .collect();
-    assert!(!codes.contains(&"xref-dangling"), "{codes:?}");
+    assert!(codes.contains(&"xref-dangling"), "{codes:?}");
     assert!(codes.contains(&"xref-storage-shape"), "{codes:?}");
 }
 
