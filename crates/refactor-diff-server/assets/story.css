@@ -1,0 +1,25 @@
+/* Story view (story.js) and the tests summary in the status bar. */
+
+.story-toc { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: 12px; }
+.story-toc .n { color: var(--faint); font-family: var(--mono); font-size: 11px; }
+.sub-head.story-layer {
+  display: flex; align-items: baseline; gap: 10px; margin-top: 22px; padding-bottom: 4px;
+  border-bottom: 1px solid var(--border); color: var(--text);
+}
+.sub-head.story-layer .meta, .jev-role-head .meta { text-transform: none; letter-spacing: 0; color: var(--muted); font-family: var(--sans); }
+
+/* ---- tests summary ---- */
+.status .tests-chip .tests-removed { color: var(--kind-test); }
+.tests-pop {
+  position: fixed; z-index: 30; width: min(460px, calc(100vw - 16px)); max-height: min(60vh, 520px); overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow);
+  padding: 10px 12px; font: 12px var(--sans); color: var(--text); display: flex; flex-direction: column; gap: 2px;
+}
+.tests-pop header { font-weight: 600; margin-bottom: 6px; }
+.tests-pop .dim { color: var(--muted); font-weight: normal; }
+.tests-pop footer { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border); font-size: 11px; }
+.tests-row { display: flex; gap: 10px; align-items: baseline; padding: 2px 4px; border-radius: 3px; color: var(--text); }
+.tests-row:hover { background: var(--panel-2); }
+.tests-row .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tests-row .t::before { content: "− "; color: var(--kind-test); }
+.tests-row .where { font: 11px var(--mono); color: var(--muted); flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -1,0 +1,89 @@
+/* Concept lens (concepts.js): picker, Patterns-tab concept row, #concept page, unit tags,
+   heat bars, status count and the inspector's cross-references. Colors come from app.css
+   variables: --concept-* / --heat-* for the lens, --issue-* only for cross-references. */
+
+/* ---- explorer foot: picker ---- */
+.concept-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.filter-chip.concept-chip[aria-pressed="false"] { text-decoration: none; color: var(--muted); }
+.filter-chip.concept-chip[aria-pressed="true"] { background: var(--concept-bg); color: var(--concept-fg); border-color: var(--concept-fg); }
+.concept-picker input {
+  flex: 1 1 70px; min-width: 70px; font: 11px var(--mono); color: var(--text);
+  background: var(--bg); border: 1px solid var(--border); border-radius: 3px; padding: 2px 5px;
+}
+.concept-picker input:focus { outline: none; border-color: var(--concept-fg); }
+
+/* ---- explorer: concept row and its patterns ---- */
+.kind.concept { color: var(--concept-fg); }
+.node.concept-node { background: var(--concept-bg); }
+.node.concept-node:hover { background: var(--panel-3); }
+.node.concept-node .label b { color: var(--concept-fg); font-weight: 600; }
+.node .caret {
+  flex: none; width: 14px; text-align: center; color: var(--muted); cursor: pointer; border-radius: 2px; line-height: 16px;
+}
+.node .caret:hover, .node .caret:focus-visible { color: var(--text); background: var(--panel-3); outline: none; }
+.tree .dir.concept-role { padding-left: 22px; text-transform: lowercase; }
+.tree .dir.concept-role .n, .variants { color: var(--faint); }
+.node.concept-pattern { padding-left: 30px; }
+.variants { font: 10px var(--mono); flex: none; }
+
+/* ---- #concept/<stem> ---- */
+.concept-facts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.concept-facts .spacer { flex: 1; }
+.concept-facts .chip.collateral { background: var(--warn-bg); color: var(--warn-fg); }
+.concept-patterns { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); }
+.concept-pattern-row {
+  display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-top: 1px solid var(--border); min-width: 0;
+}
+.concept-pattern-row:first-child { border-top: 0; }
+.concept-pattern-row.dim { opacity: 0.55; }
+.concept-pattern-row .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 12px; }
+.concept-pattern-row .label:hover { color: var(--accent); }
+.concept-pattern-row .count { color: var(--muted); font: 11.5px var(--mono); font-variant-numeric: tabular-nums; flex: none; }
+.concept-pattern-row .count .dim { color: var(--faint); }
+.concept-pattern-row .more-groups { font-size: 11px; color: var(--muted); display: inline-flex; gap: 4px; flex: none; }
+.concept-files { display: flex; flex-direction: column; gap: 2px; }
+.concept-file { display: flex; align-items: center; gap: 10px; padding: 3px 6px; border-radius: 3px; color: var(--text); font: 12px var(--mono); }
+.concept-file:hover { background: var(--panel-2); }
+.concept-file .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.concept-file .count { color: var(--muted); font-size: 11px; flex: none; }
+.concept-file .heat { width: 60px; }
+
+/* ---- heat: concept vs collateral share of a file's changed lines ---- */
+.heat {
+  flex: none; display: inline-block; width: 26px; height: 4px; border-radius: 2px; overflow: hidden;
+  background: var(--heat-collateral); align-self: center;
+}
+.heat > i { display: block; height: 100%; background: var(--heat-concept); }
+
+/* ---- unit tags ---- */
+.tag.concept.touched { background: var(--warn-bg); color: var(--warn-fg); }
+.tag.concept.only { background: var(--concept-bg); color: var(--concept-fg); }
+
+/* ---- status bar ---- */
+.status .concept-status { color: var(--concept-fg); }
+.status .concept-status[aria-pressed="true"] { text-decoration: underline; text-underline-offset: 3px; }
+
+/* ---- inspector: cross-references (code issues: --issue-* only) ---- */
+.card.xref { gap: 2px; padding: 4px 6px; }
+.xref-group summary {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px; cursor: pointer; padding: 3px 4px;
+  font-size: 12px; border-radius: 3px; list-style: none;
+}
+.xref-group summary::-webkit-details-marker { display: none; }
+.xref-group summary::before { content: "▸"; color: var(--faint); width: 10px; flex: none; }
+.xref-group[open] summary::before { content: "▾"; }
+.xref-group summary .code { flex: 1; min-width: 0; color: var(--text); }
+.xref-group summary:hover { background: var(--panel-2); }
+.xref-n { font: 11px var(--mono); color: var(--muted); }
+.xref-n .issue-warning, .xref-row.warning .sev { color: var(--issue-warning); }
+.xref-row.error .sev { color: var(--issue-error); }
+.xref-row.info .sev { color: var(--issue-info); }
+.xref-row {
+  display: grid; grid-template-columns: 14px auto minmax(0, 1fr); gap: 6px; align-items: baseline;
+  padding: 2px 4px 2px 14px; font-size: 11.5px; color: var(--text); border-radius: 3px;
+}
+.xref-row:hover { background: var(--panel-2); }
+.xref-row .where { font-family: var(--mono); color: var(--muted); white-space: nowrap; max-width: 16ch; overflow: hidden; text-overflow: ellipsis; }
+.xref-row .msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xref-more { padding: 2px 4px 4px 34px; font-size: 11px; color: var(--muted); }
+.xref-total { color: var(--issue-info); }
